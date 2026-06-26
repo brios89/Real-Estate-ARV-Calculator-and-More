@@ -1,9 +1,12 @@
-import React, { useState, useMemo } from "react";
-import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2 } from "lucide-react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown } from "lucide-react";
 
-// Where the proxy lives. Same-origin by default on Vercel ("/api/comp").
-// If you host the UI separately, set this to "https://your-project.vercel.app/api/comp".
+// Where the proxies live. Same-origin by default on Vercel.
 const COMP_API = "/api/comp";
+const AUTOCOMPLETE_API = "/api/autocomplete";
+
+// Build a Google Maps search link for any address string
+const gmaps = (addr) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
 
 // ---------- helpers ----------
 const num = (v) => {
@@ -31,10 +34,32 @@ const balanceAt = (principal, annualRatePct, years, atYear) => {
 };
 
 // ---------- module-scope inputs (stable refs = no focus loss) ----------
-const Field = ({ label, hint, children }) => (
+const InfoDot = ({ text }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex">
+      <button type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        className="text-slate-300 hover:text-emerald-600" aria-label="more info">
+        <Info className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <span className="absolute left-1/2 top-5 z-30 w-52 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-white shadow-lg">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+};
+
+const Field = ({ label, hint, info, children }) => (
   <label className="block">
     <div className="flex items-baseline justify-between gap-2">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+        {label}{info && <InfoDot text={info} />}
+      </span>
       {hint && <span className="text-[10px] text-slate-400">{hint}</span>}
     </div>
     <div className="mt-1">{children}</div>
@@ -45,6 +70,77 @@ const TextInput = ({ value, onChange, placeholder }) => (
   <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
 );
+
+// Address typeahead: shows real address suggestions as you type (debounced).
+const AddressAutocomplete = ({ value, onChange, onPick, placeholder }) => {
+  const [sugs, setSugs] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(-1);
+  const boxRef = useRef(null);
+  const timer = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const fetchSugs = (q) => {
+    if (timer.current) clearTimeout(timer.current);
+    if (!q || q.trim().length < 4) { setSugs([]); setOpen(false); return; }
+    timer.current = setTimeout(async () => {
+      try {
+        const r = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(q)}`);
+        if (!r.ok) { setSugs([]); return; }
+        const data = await r.json();
+        setSugs(data.suggestions || []);
+        setOpen((data.suggestions || []).length > 0);
+        setHi(-1);
+      } catch { setSugs([]); }
+    }, 250);
+  };
+
+  const handleChange = (v) => { onChange(v); fetchSugs(v); };
+  const pick = (s) => { onChange(s); onPick && onPick(s); setOpen(false); setSugs([]); };
+
+  const onKey = (e) => {
+    if (!open || !sugs.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, sugs.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === "Enter" && hi >= 0) { e.preventDefault(); pick(sugs[hi]); }
+    else if (e.key === "Escape") setOpen(false);
+  };
+
+  return (
+    <div ref={boxRef} className="relative">
+      <input
+        type="text" value={value} placeholder={placeholder}
+        onChange={(e) => handleChange(e.target.value)}
+        onFocus={() => sugs.length && setOpen(true)}
+        onKeyDown={onKey}
+        autoComplete="off"
+        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+      />
+      {open && sugs.length > 0 && (
+        <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+          {sugs.map((s, i) => (
+            <li key={i}>
+              <button
+                type="button"
+                onMouseEnter={() => setHi(i)}
+                onClick={() => pick(s)}
+                className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm ${i === hi ? "bg-emerald-50 text-emerald-800" : "text-slate-700 hover:bg-slate-50"}`}
+              >
+                <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                <span>{s}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 const MoneyInput = ({ value, onChange, placeholder }) => (
   <div className="flex items-center rounded-lg border border-slate-200 bg-white transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
@@ -102,9 +198,9 @@ export default function App() {
   const [address, setAddress] = useState("");
   const [sqft, setSqft] = useState("");
   const [comps, setComps] = useState([
-    { sqft: "", price: "" },
-    { sqft: "", price: "" },
-    { sqft: "", price: "" },
+    { sqft: "", price: "", address: "" },
+    { sqft: "", price: "", address: "" },
+    { sqft: "", price: "", address: "" },
   ]);
   const [arvOverride, setArvOverride] = useState("");
   const [compLoading, setCompLoading] = useState(false);
@@ -118,12 +214,16 @@ export default function App() {
       const r = await fetch(`${COMP_API}?address=${encodeURIComponent(a)}`);
       const data = await r.json();
       if (!r.ok) { setCompMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); return; }
-      // Fill subject sqft if RentCast knows it and the field is empty
-      if (data.subject?.sqft && !num(sqft)) setSqft(String(data.subject.sqft));
-      // Fill the comp grid (price + sqft), pad to at least 3 rows
-      const incoming = (data.comps || []).map((c) => ({ sqft: String(c.sqft), price: String(c.price) }));
+      // Always refresh subject sqft for the new address (fixes stale-sqft glitch)
+      if (data.subject?.sqft) setSqft(String(data.subject.sqft));
+      // Fill the comp grid (address + sqft + price), pad to at least 3 rows
+      const incoming = (data.comps || []).map((c) => ({
+        sqft: String(c.sqft),
+        price: String(c.price),
+        address: c.address || "",
+      }));
       if (incoming.length) {
-        while (incoming.length < 3) incoming.push({ sqft: "", price: "" });
+        while (incoming.length < 3) incoming.push({ sqft: "", price: "", address: "" });
         setComps(incoming);
       }
       // Drop RentCast's own AVM into the override box as a reference ARV
@@ -228,7 +328,7 @@ export default function App() {
 
   const setComp = (i, key, val) =>
     setComps((cs) => cs.map((c, idx) => (idx === i ? { ...c, [key]: val } : c)));
-  const addComp = () => setComps((cs) => (cs.length < 6 ? [...cs, { sqft: "", price: "" }] : cs));
+  const addComp = () => setComps((cs) => (cs.length < 6 ? [...cs, { sqft: "", price: "", address: "" }] : cs));
   const rmComp = (i) => setComps((cs) => (cs.length > 1 ? cs.filter((_, idx) => idx !== i) : cs));
 
   const tabs = [
@@ -244,13 +344,13 @@ export default function App() {
       {/* header */}
       <div className="bg-slate-900 px-5 py-5">
         <div className="mx-auto max-w-5xl">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500">
-              <Home className="h-4 w-4 text-white" />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center rounded-lg bg-white px-2 py-1.5 shadow-sm">
+              <img src="/logo.png" alt="Your Local Home Buyer" className="h-9 w-auto object-contain" />
             </div>
             <div>
-              <div className="text-sm font-bold tracking-tight text-white">YLHB Deal Desk</div>
-              <div className="text-[11px] text-slate-400">Your Local Home Buyer · Acquisitions</div>
+              <div className="text-sm font-bold tracking-tight text-white">YLHB RE Calculator</div>
+              <div className="text-[11px] text-slate-400">Acquisitions</div>
             </div>
           </div>
         </div>
@@ -262,8 +362,8 @@ export default function App() {
           <SectionTitle>Property &amp; ARV</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="sm:col-span-2">
-              <Field label="Subject address">
-                <TextInput value={address} onChange={setAddress} placeholder="1225 S 6th St, Louisville, KY" />
+              <Field label="Subject address" hint="start typing — pick the exact match">
+                <AddressAutocomplete value={address} onChange={setAddress} placeholder="1225 S 6th St, Louisville, KY" />
               </Field>
             </div>
             <Field label="Subject sq ft">
@@ -293,18 +393,42 @@ export default function App() {
               {comps.map((c, i) => {
                 const ppsf = num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0;
                 return (
-                  <div key={i} className="flex items-center gap-2">
-                    <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
-                    <div className="flex-1">
-                      <PlainInput value={c.sqft} onChange={(v) => setComp(i, "sqft", v)} placeholder="sq ft" suffix="sf" />
+                  <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+                    {/* address row */}
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
+                      <div className="flex flex-1 items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={c.address}
+                          onChange={(e) => setComp(i, "address", e.target.value)}
+                          placeholder="comp address (optional)"
+                          className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100"
+                        />
+                        {c.address ? (
+                          <a href={gmaps(c.address)} target="_blank" rel="noopener noreferrer"
+                            title="Open in Google Maps"
+                            className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
+                            <MapPin className="h-3 w-3" /> Map <ExternalLink className="h-2.5 w-2.5" />
+                          </a>
+                        ) : (
+                          <span className="shrink-0 px-2 py-1 text-[11px] text-slate-300">no map</span>
+                        )}
+                      </div>
+                      <button onClick={() => rmComp(i)} className="text-slate-300 hover:text-rose-500" aria-label="remove comp">×</button>
                     </div>
-                    <div className="flex-1">
-                      <MoneyInput value={c.price} onChange={(v) => setComp(i, "price", v)} placeholder="sold price" />
+                    {/* numbers row */}
+                    <div className="mt-1.5 flex items-center gap-2 pl-7">
+                      <div className="flex-1">
+                        <PlainInput value={c.sqft} onChange={(v) => setComp(i, "sqft", v)} placeholder="sq ft" suffix="sf" />
+                      </div>
+                      <div className="flex-1">
+                        <MoneyInput value={c.price} onChange={(v) => setComp(i, "price", v)} placeholder="sold price" />
+                      </div>
+                      <span className="w-20 text-right font-mono text-xs tabular-nums text-slate-500">
+                        {ppsf ? `$${ppsf.toFixed(0)}/sf` : "—"}
+                      </span>
                     </div>
-                    <span className="w-20 text-right font-mono text-xs tabular-nums text-slate-500">
-                      {ppsf ? `$${ppsf.toFixed(0)}/sf` : "—"}
-                    </span>
-                    <button onClick={() => rmComp(i)} className="text-slate-300 hover:text-rose-500" aria-label="remove comp">×</button>
                   </div>
                 );
               })}
@@ -408,13 +532,13 @@ export default function App() {
             <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ arv, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ arv, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
-            <SellerFinanceTab {...{ arv, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
+            <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
             <NovationTab {...{ novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor }} />
@@ -449,21 +573,44 @@ function CashTab(props) {
     }
   }
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SectionTitle>Cost inputs</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Your wholesale fee"><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
-          <Field label="Selling costs" hint="% of ARV"><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
-          <Field label="Holding costs"><MoneyInput value={holding} onChange={setHolding} /></Field>
-          <Field label="Desired flip profit"><MoneyInput value={desiredProfit} onChange={setDesiredProfit} /></Field>
-          <div className="sm:col-span-2">
+    <div className="space-y-4">
+      {/* INPUTS: two boxes side by side */}
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* Your wholesale numbers */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SectionTitle>Your wholesale numbers</SectionTitle>
+          <div className="space-y-3">
+            <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
             <Field label="Seller asking price" hint="optional — grades the deal"><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
           </div>
         </div>
 
-        {/* both-band MAO table */}
-        <div className="mt-4 overflow-x-auto">
+        {/* The flipper's numbers */}
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 shadow-sm">
+          <div className="flex items-start gap-2">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">The flipper's numbers — your end buyer</div>
+              <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                What the investor who buys this from you needs to profit on the flip. Feeds the <b className="font-semibold text-slate-600">Itemized max offer</b> — the most you can pay and still leave them a deal worth doing.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 space-y-3">
+            <Field label="Selling costs" hint="% of ARV" info="Cost to SELL the fixed-up house: agent commissions, title, closing. Roughly 8–10% of ARV."><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
+            <Field label="Holding costs" info="Cost to OWN it during rehab and sale: loan interest, taxes, insurance, utilities. ~$3k–$8k on a typical flip."><MoneyInput value={holding} onChange={setHolding} /></Field>
+            <Field label="Desired flip profit" info="Profit the flipper wants to clear after all costs — the cushion that makes them say yes. Commonly $25k–$40k+."><MoneyInput value={desiredProfit} onChange={setDesiredProfit} /></Field>
+          </div>
+        </div>
+      </div>
+
+      {/* VERDICT */}
+      <Verdict status={status} headline={headline} detail={detail} />
+
+      {/* RESULTS: MAO table + stat cards */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm overflow-x-auto">
+          <SectionTitle>Max Allowable Offer — both bands</SectionTitle>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-[11px] uppercase tracking-wide text-slate-400">
@@ -485,14 +632,11 @@ function CashTab(props) {
             </tbody>
           </table>
         </div>
-      </div>
 
-      <div className="space-y-3">
-        <Verdict status={status} headline={headline} detail={detail} />
         <div className="grid gap-3 sm:grid-cols-2">
           <Stat label={`${activePct}% Rule MAO`} value={usd(activeRuleMao)} tone={activeRuleMao > 0 ? "default" : "bad"} big sub="ARV × band − repairs" />
           <Stat label="Investor MAO" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
-          <Stat label="Itemized max offer" value={usd(itemizedMao)} sub="ARV − repairs − costs − profit − fee" />
+          <Stat label="Itemized max offer" value={usd(itemizedMao)} sub="leaves the flipper their profit" />
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
         </div>
       </div>
@@ -507,9 +651,107 @@ const CRow = ({ label, a, b, muted }) => (
   </tr>
 );
 
+// ---------- shared: "what if we wholesaled this" panel ----------
+function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel }) {
+  const band = arv >= 200000 ? num(overPct) : num(underPct);
+  const cashMao = arv * (band / 100) - repairs;          // what a cash buyer would pay
+  const yourOffer = cashMao - num(wholesaleFee);          // your max wholesale offer, keeping your fee
+  const spread = dealCost > 0 ? cashMao - dealCost : 0;   // assignment fee if you locked at this basis
+
+  let tone = "default", note = "Enter this deal's price/basis to compare a wholesale exit.";
+  if (arv <= 0) { note = "Set the ARV up top to compare a wholesale exit."; }
+  else if (dealCost > 0) {
+    if (spread >= 10000) { tone = "good"; note = `Wholesale-able — you could assign for ~${usd(spread)} instead of holding. Compare that quick cash to the long-term cash flow.`; }
+    else if (spread > 0) { tone = "warn"; note = `Thin wholesale spread (~${usd(spread)}). The creative hold likely wins unless you need the quick cash.`; }
+    else { tone = "bad"; note = `No wholesale spread at this basis — this one only makes sense as a creative hold, not a flip.`; }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <RefreshCw className="h-4 w-4 text-slate-400" />
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">If you wholesaled this instead</h3>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Stat label="Cash buyer MAO" value={usd(cashMao)} sub={`ARV × ${band}% − repairs`} />
+        <Stat label={costLabel} value={dealCost > 0 ? usd(dealCost) : "—"} sub="this deal's basis" />
+        <Stat label="Assignment spread" value={dealCost > 0 ? usd(spread) : "—"} tone={tone === "default" ? "default" : tone} sub="cash MAO − your basis" />
+      </div>
+      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
+        {note} <span className="text-slate-400">Your max wholesale offer (after a {usd(num(wholesaleFee))} fee): {usd(yourOffer)}.</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------- shared: rate-savings explorer ----------
+function RateSavings({ loanAmount, defaultRate = 4, defaultTerm = 30 }) {
+  const [rate, setRate] = useState(defaultRate);
+  const [term, setTerm] = useState(defaultTerm);
+  const [mkt, setMkt] = useState(7.5);
+  const P = loanAmount;
+  const payDeal = pmt(P, rate, term);
+  const payMkt = pmt(P, mkt, term);
+  const intDeal = Math.max(0, payDeal * term * 12 - P);
+  const intMkt = Math.max(0, payMkt * term * 12 - P);
+  const lifeSavings = Math.max(0, intMkt - intDeal);
+  const moSavings = Math.max(0, payMkt - payDeal);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <TrendingDown className="h-4 w-4 text-emerald-500" />
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Rate savings — what your low rate is worth</h3>
+      </div>
+      {P > 0 ? (
+        <div className="grid gap-5 md:grid-cols-2">
+          {/* sliders */}
+          <div className="space-y-4">
+            <div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Your interest rate</span>
+                <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{rate.toFixed(2)}%</span>
+              </div>
+              <input type="range" min={0} max={12} step={0.125} value={rate} onChange={(e) => setRate(parseFloat(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+            </div>
+            <div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Remaining loan term</span>
+                <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{term} yrs</span>
+              </div>
+              <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => setTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+            </div>
+            <div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market rate — compare to</span>
+                <span className="font-mono text-sm font-bold tabular-nums text-slate-500">{mkt.toFixed(2)}%</span>
+              </div>
+              <input type="range" min={0} max={14} step={0.125} value={mkt} onChange={(e) => setMkt(parseFloat(e.target.value))} className="mt-1 w-full accent-slate-400" />
+            </div>
+            <div className="text-[11px] text-slate-400">Loan amount: <span className="font-mono text-slate-600">{usd(P)}</span> — pulled from this deal.</div>
+          </div>
+          {/* savings */}
+          <div className="space-y-3">
+            <Stat label="Lifetime interest savings" value={usd(lifeSavings)} tone="good" big sub={`vs ${mkt.toFixed(2)}% market over ${term} yrs`} />
+            <div className="grid grid-cols-2 gap-3">
+              <Stat label="Your payment" value={usd(payDeal)} sub={`P&I @ ${rate.toFixed(2)}%`} />
+              <Stat label="Monthly savings" value={usd(moSavings)} tone={moSavings > 0 ? "good" : "default"} sub="vs market pmt" />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+          Enter the loan amount in this deal above, and the sliders will show what the low rate saves you over the life of the loan.
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ---------- SUB-TO ----------
 function SubToTab(props) {
-  const { arv, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
   const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent);
   const reserves = rent * (num(stReservePct) / 100);
   const cashIn = cashSeller + arrears + closing;
@@ -523,35 +765,40 @@ function SubToTab(props) {
     else { status = "no"; headline = "NEGATIVE — pass or restructure"; detail = `${usd(cashFlow)}/mo after reserves. Lower entry, raise rent, or walk.`; }
   }
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SectionTitle>Subject-to inputs</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Existing loan balance"><MoneyInput value={stBal} onChange={setStBal} /></Field>
-          <Field label="PITI (monthly)" hint="inherited payment"><MoneyInput value={stPiti} onChange={setStPiti} /></Field>
-          <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
-          <Field label="Cash to seller" hint="equity"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /></Field>
-          <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
-          <Field label="Market rent (monthly)"><MoneyInput value={stRent} onChange={setStRent} /></Field>
-          <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SectionTitle>Subject-to inputs</SectionTitle>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Existing loan balance"><MoneyInput value={stBal} onChange={setStBal} /></Field>
+            <Field label="PITI (monthly)" hint="inherited payment"><MoneyInput value={stPiti} onChange={setStPiti} /></Field>
+            <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
+            <Field label="Cash to seller" hint="equity"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /></Field>
+            <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
+            <Field label="Market rent (monthly)"><MoneyInput value={stRent} onChange={setStRent} /></Field>
+            <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
+          </div>
+        </div>
+        <div className="space-y-3">
+          <Verdict status={status} headline={headline} detail={detail} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − PITI − ${usd(reserves)} reserves`} />
+            <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub="ARV − loan − entry" />
+            <Stat label="Total cash in" value={usd(cashIn)} sub="seller + arrears + closing" />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="annual" />
+          </div>
         </div>
       </div>
-      <div className="space-y-3">
-        <Verdict status={status} headline={headline} detail={detail} />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − PITI − ${usd(reserves)} reserves`} />
-          <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub="ARV − loan − entry" />
-          <Stat label="Total cash in" value={usd(cashIn)} sub="seller + arrears + closing" />
-          <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="annual" />
-        </div>
-      </div>
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
+        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" />
+      <RateSavings loanAmount={bal} defaultRate={4} defaultTerm={30} />
     </div>
   );
 }
 
 // ---------- HYBRID ----------
 function HybridTab(props) {
-  const { arv, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
   const price = num(hyPrice), down = num(hyDown), bal = num(hyBal), piti = num(hyPiti), rent = num(hyRent), closing = num(hyClosing);
   const note = Math.max(0, price - bal - down);
   const notePay = pmt(note, num(hyRate), num(hyTerm));
@@ -568,39 +815,44 @@ function HybridTab(props) {
     else { status = "no"; headline = "NEGATIVE — restructure"; detail = `${usd(cashFlow)}/mo. Lower price, bigger sub-to portion, or longer/0% note.`; }
   }
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SectionTitle>Hybrid (sub-to + seller note)</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Purchase price"><MoneyInput value={hyPrice} onChange={setHyPrice} /></Field>
-          <Field label="Down payment"><MoneyInput value={hyDown} onChange={setHyDown} /></Field>
-          <Field label="Existing loan balance" hint="taken sub-to"><MoneyInput value={hyBal} onChange={setHyBal} /></Field>
-          <Field label="Sub-to PITI (monthly)"><MoneyInput value={hyPiti} onChange={setHyPiti} /></Field>
-          <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
-          <Field label="Seller note term"><PlainInput value={hyTerm} onChange={setHyTerm} suffix="yrs" /></Field>
-          <Field label="Closing costs"><MoneyInput value={hyClosing} onChange={setHyClosing} /></Field>
-          <Field label="Market rent (monthly)"><MoneyInput value={hyRent} onChange={setHyRent} /></Field>
-          <Field label="Reserves" hint="% of rent"><PlainInput value={hyReservePct} onChange={setHyReservePct} suffix="%" /></Field>
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SectionTitle>Hybrid (sub-to + seller note)</SectionTitle>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Purchase price"><MoneyInput value={hyPrice} onChange={setHyPrice} /></Field>
+            <Field label="Down payment"><MoneyInput value={hyDown} onChange={setHyDown} /></Field>
+            <Field label="Existing loan balance" hint="taken sub-to"><MoneyInput value={hyBal} onChange={setHyBal} /></Field>
+            <Field label="Sub-to PITI (monthly)"><MoneyInput value={hyPiti} onChange={setHyPiti} /></Field>
+            <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
+            <Field label="Seller note term"><PlainInput value={hyTerm} onChange={setHyTerm} suffix="yrs" /></Field>
+            <Field label="Closing costs"><MoneyInput value={hyClosing} onChange={setHyClosing} /></Field>
+            <Field label="Market rent (monthly)"><MoneyInput value={hyRent} onChange={setHyRent} /></Field>
+            <Field label="Reserves" hint="% of rent"><PlainInput value={hyReservePct} onChange={setHyReservePct} suffix="%" /></Field>
+          </div>
+        </div>
+        <div className="space-y-3">
+          <Verdict status={status} headline={headline} detail={detail} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − ${usd(totalMonthly)} debt − reserves`} />
+            <Stat label="Seller note amount" value={usd(note)} sub="price − loan − down" />
+            <Stat label="Note payment" value={usd(notePay)} sub={`${num(hyRate)}% / ${num(hyTerm)}yr`} />
+            <Stat label="Total monthly debt" value={usd(totalMonthly)} sub="PITI + note" />
+            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub="ARV − price" />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={`${usd(cashIn)} in`} />
+          </div>
         </div>
       </div>
-      <div className="space-y-3">
-        <Verdict status={status} headline={headline} detail={detail} />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − ${usd(totalMonthly)} debt − reserves`} />
-          <Stat label="Seller note amount" value={usd(note)} sub="price − loan − down" />
-          <Stat label="Note payment" value={usd(notePay)} sub={`${num(hyRate)}% / ${num(hyTerm)}yr`} />
-          <Stat label="Total monthly debt" value={usd(totalMonthly)} sub="PITI + note" />
-          <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub="ARV − price" />
-          <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={`${usd(cashIn)} in`} />
-        </div>
-      </div>
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
+        dealCost={price} costLabel="Hybrid purchase price" />
+      <RateSavings loanAmount={bal} defaultRate={4} defaultTerm={30} />
     </div>
   );
 }
 
 // ---------- SELLER FINANCE ----------
 function SellerFinanceTab(props) {
-  const { arv, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
   const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns), rent = num(sfRent);
   const loan = Math.max(0, price - down);
   const pi = pmt(loan, num(sfRate), num(sfAmort));
@@ -619,31 +871,36 @@ function SellerFinanceTab(props) {
     else { status = "no"; headline = "NEGATIVE — renegotiate terms"; detail = `${usd(cashFlow)}/mo. Price for their number only if the terms carry the cash flow.`; }
   }
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SectionTitle>Seller financing inputs</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Purchase price"><MoneyInput value={sfPrice} onChange={setSfPrice} /></Field>
-          <Field label="Down payment"><MoneyInput value={sfDown} onChange={setSfDown} /></Field>
-          <Field label="Interest rate" hint="0% ok"><PlainInput value={sfRate} onChange={setSfRate} suffix="%" /></Field>
-          <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
-          <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
-          <Field label="Taxes + insurance" hint="monthly"><MoneyInput value={sfTaxIns} onChange={setSfTaxIns} /></Field>
-          <Field label="Market rent (monthly)"><MoneyInput value={sfRent} onChange={setSfRent} /></Field>
-          <Field label="Reserves" hint="% of rent"><PlainInput value={sfReservePct} onChange={setSfReservePct} suffix="%" /></Field>
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SectionTitle>Seller financing inputs</SectionTitle>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Purchase price"><MoneyInput value={sfPrice} onChange={setSfPrice} /></Field>
+            <Field label="Down payment"><MoneyInput value={sfDown} onChange={setSfDown} /></Field>
+            <Field label="Interest rate" hint="0% ok"><PlainInput value={sfRate} onChange={setSfRate} suffix="%" /></Field>
+            <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
+            <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
+            <Field label="Taxes + insurance" hint="monthly"><MoneyInput value={sfTaxIns} onChange={setSfTaxIns} /></Field>
+            <Field label="Market rent (monthly)"><MoneyInput value={sfRent} onChange={setSfRent} /></Field>
+            <Field label="Reserves" hint="% of rent"><PlainInput value={sfReservePct} onChange={setSfReservePct} suffix="%" /></Field>
+          </div>
+        </div>
+        <div className="space-y-3">
+          <Verdict status={status} headline={headline} detail={detail} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − ${usd(totalMonthly)} − reserves`} />
+            <Stat label="Principal & interest" value={usd(pi)} big sub={`${usd(loan)} @ ${num(sfRate)}%`} />
+            <Stat label="Balloon balance" value={balloonYrs ? usd(balloonBal) : "None"} tone={balloonYrs ? "warn" : "good"} sub={balloonYrs ? `due year ${balloonYrs}` : "fully amortizing"} />
+            <Stat label="Total interest" value={usd(Math.max(0, totalInterest))} sub={num(sfRate) === 0 ? "0% — principal only" : "life of loan"} />
+            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub="ARV − price" />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="on down pmt" />
+          </div>
         </div>
       </div>
-      <div className="space-y-3">
-        <Verdict status={status} headline={headline} detail={detail} />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − ${usd(totalMonthly)} − reserves`} />
-          <Stat label="Principal & interest" value={usd(pi)} big sub={`${usd(loan)} @ ${num(sfRate)}%`} />
-          <Stat label="Balloon balance" value={balloonYrs ? usd(balloonBal) : "None"} tone={balloonYrs ? "warn" : "good"} sub={balloonYrs ? `due year ${balloonYrs}` : "fully amortizing"} />
-          <Stat label="Total interest" value={usd(Math.max(0, totalInterest))} sub={num(sfRate) === 0 ? "0% — principal only" : "life of loan"} />
-          <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub="ARV − price" />
-          <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="on down pmt" />
-        </div>
-      </div>
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
+        dealCost={price} costLabel="Seller-finance price" />
+      <RateSavings loanAmount={loan} defaultRate={num(sfRate) || 4} defaultTerm={num(sfAmort) || 30} />
     </div>
   );
 }
