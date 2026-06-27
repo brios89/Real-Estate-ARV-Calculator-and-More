@@ -112,9 +112,19 @@ function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClo
   const appreciation5 = arv > 0 ? arv * (Math.pow(1.03, 5) - 1) : 0;
   const cumCF5 = cashFlow * 60;
   const startEquity = Math.max(0, equity);
+  // 1–30 year return curve: equity captured + loan paydown + cumulative cash flow + 3%/yr appreciation
+  const curveSeries = [];
+  for (let y = 1; y <= 30; y++) {
+    const paydown = loanAmt > 0 ? loanAmt - balanceAt(loanAmt, rate, term, y) : 0;
+    const appr = arv > 0 ? arv * (Math.pow(1.03, y) - 1) : 0;
+    const cumCF = cashFlow * 12 * y;
+    curveSeries.push({ year: y, total: startEquity + paydown + appr + cumCF });
+  }
+  const milestones = [1, 5, 10, 15, 20, 25, 30].map((y) => curveSeries[y - 1]).filter(Boolean);
   return {
     returns: { cashToClose, monthlyCF: cashFlow, annualCF: cashFlow * 12, coc },
     projection: { startEquity, paydown5, appreciation5, cumCF5, total5: startEquity + paydown5 + appreciation5 + cumCF5, apprRate: 3 },
+    curve: { series: curveSeries, milestones, cashToClose },
     exits: [
       "Hold as a cash-flowing mid-term or long-term rental",
       "BRRRR — season, refinance, and recycle your capital",
@@ -1110,7 +1120,36 @@ async function generateDualDeck(data) {
     s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
   }
 
-  // Slide 7 — CTA
+  // Slide 7 — How the returns grow (1–30 yr chart)
+  const CV = data.brrrr.curve;
+  if (CV && CV.series && CV.series.length && CV.series[CV.series.length - 1].total > 0) {
+    s = pptx.addSlide(); header(s, "How the returns grow — year 1 to 30");
+    const labels = CV.series.map((p) => String(p.year));
+    const values = CV.series.map((p) => Math.round(p.total));
+    s.addChart(pptx.ChartType.line, [{ name: "Total return ($)", labels, values }], {
+      x: 0.6, y: 1.4, w: 12.1, h: 3.55, showLegend: false, showTitle: false,
+      lineSize: 3, lineSmooth: true, color: DECK.FOREST, chartColors: [DECK.FOREST],
+      catAxisTitle: "Years held", showCatAxisTitle: true, catAxisTitleColor: "5A6B5E", catAxisTitleFontSize: 11,
+      valAxisTitle: "Total return ($)", showValAxisTitle: true, valAxisTitleColor: "5A6B5E", valAxisTitleFontSize: 11,
+      catAxisLabelFontSize: 9, valAxisLabelFontSize: 9, valAxisLabelColor: "5A6B5E", catAxisLabelColor: "5A6B5E",
+    });
+    const ms = CV.milestones;
+    const headRow = [{ text: "Years held", options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, align: "left", fontSize: 12 } },
+      ...ms.map((m) => ({ text: String(m.year), options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, align: "center", fontSize: 12 } }))];
+    const totalRow = [{ text: "Total return", options: { bold: true, color: DECK.INK, align: "left", fontSize: 12 } },
+      ...ms.map((m) => ({ text: usd(m.total), options: { color: DECK.INK, align: "center", fontSize: 12 } }))];
+    const rows = [headRow, totalRow];
+    if (CV.cashToClose > 0) {
+      rows.push([{ text: "Return on cash in", options: { bold: true, color: DECK.INK, align: "left", fontSize: 12 } },
+        ...ms.map((m) => ({ text: (m.total / CV.cashToClose).toFixed(1) + "x", options: { bold: true, color: DECK.ORANGE, align: "center", fontSize: 12 } }))]);
+    }
+    const colRest = (12.1 - 2.7) / ms.length;
+    s.addTable(rows, { x: 0.6, y: 5.15, w: 12.1, colW: [2.7, ...ms.map(() => colRest)], rowH: 0.46, valign: "middle", border: { type: "solid", color: DECK.LINE, pt: 0.5 } });
+    s.addText("Total return = equity captured + loan paydown + cash flow + appreciation at 3%/yr. Appreciation is an assumption, not a guarantee.", { x: 0.6, y: 6.95, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
+  }
+
+  // Slide 8 — CTA
   s = pptx.addSlide();
   s.background = { color: DECK.FOREST };
   addLogo(s, 5.45, 0.7, 2.45);
@@ -1491,6 +1530,13 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
   const trueCF = rnt - pitia - reserves;                      // your real monthly cash flow
   const annualCF = trueCF * 12;
   const coc = cashLeftIn > 0 ? (annualCF / cashLeftIn) * 100 : null; // null = all capital recovered
+  // ---- ROI metrics ----
+  const noiAnnual = (rnt - taxInsEff - num(hoa) - reserves) * 12;        // operating income, before debt service
+  const capRate = arv > 0 ? (noiAnnual / arv) * 100 : 0;                 // unlevered yield on the asset
+  const equityCaptured = arv - allIn;                                    // instant equity from buying right + rehab
+  const paydown1 = refiLoan > 0 ? refiLoan - balanceAt(refiLoan, num(rate), num(term), 1) : 0; // year-1 principal
+  const totalReturn1 = annualCF + paydown1;                             // year-1 cash flow + loan paydown
+  const totalRoi = cashLeftIn > 0 ? (totalReturn1 / cashLeftIn) * 100 : null; // null = all capital recovered
 
   let dTone = "default", dNote = "Qualifies at standard terms.";
   if (dscr <= 0) { dTone = "default"; dNote = "Enter rent + PITIA to score the refi."; }
@@ -1559,6 +1605,23 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
         <Stat label="Cash-on-cash" value={coc === null ? "∞ (all cash out)" : annualCF !== 0 && cashLeftIn > 0 ? coc.toFixed(1) + "%" : "—"} tone={coc === null || (coc && coc > 8) ? "good" : "default"} sub={coc === null ? "no capital left in" : "annual CF ÷ cash left in"} />
       </div>
 
+      {/* ROI / Returns */}
+      <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <TrendingDown className="h-4 w-4 rotate-180 text-emerald-500" />
+          <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-700/80">ROI / Returns</h4>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="Cap rate" value={arv > 0 && rnt > 0 ? capRate.toFixed(1) + "%" : "—"} tone={capRate >= 7 ? "good" : capRate > 0 ? "default" : "default"} sub="NOI ÷ ARV (unlevered)" />
+          <Stat label="Equity captured" value={arv > 0 && allIn > 0 ? usd(equityCaptured) : "—"} tone={equityCaptured > 0 ? "good" : allIn > 0 ? "bad" : "default"} sub="ARV − all-in" />
+          <Stat label="Total ROI (yr 1)" value={totalRoi === null ? "∞ (all cash out)" : (cashLeftIn > 0 && totalReturn1 !== 0 ? totalRoi.toFixed(1) + "%" : "—")} tone={totalRoi === null || (totalRoi && totalRoi > 12) ? "good" : "default"} sub="cash flow + paydown ÷ cash in" />
+          <Stat label="Annual cash flow" value={pitia > 0 && rnt > 0 ? usd(annualCF) : "—"} tone={annualCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`${usd(trueCF)}/mo × 12`} />
+        </div>
+        <div className="mt-2 text-[10px] text-slate-400">
+          Cap rate is the unlevered yield (NOI ÷ ARV). Total ROI (yr 1) adds your first-year loan paydown to cash flow{equityCaptured > 0 ? <>, on top of the <b className="text-emerald-700">{usd(equityCaptured)}</b> of equity you captured up front</> : null} — your real return on the cash left in the deal.
+        </div>
+      </div>
+
       <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${dTone === "good" ? "bg-emerald-50 text-emerald-700" : dTone === "bad" ? "bg-rose-50 text-rose-700" : dTone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
         <b>DSCR {dscr > 0 ? dscr.toFixed(2) : "—"}:</b> {dNote}
       </div>
@@ -1605,7 +1668,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
                     "Refinance, rent, and hold for long-term wealth",
                   ],
                   note: dNote,
-                  projection: buildDealExtras({ loanAmt: refiLoan, rate: num(rate), term: num(term), arv, equity: arv - allIn, cashFlow: trueCF, cashToClose: Math.max(0, cashLeftIn), coc: coc || 0 }).projection,
+                  ...(() => { const ex = buildDealExtras({ loanAmt: refiLoan, rate: num(rate), term: num(term), arv, equity: arv - allIn, cashFlow: trueCF, cashToClose: Math.max(0, cashLeftIn), coc: coc || 0 }); return { projection: ex.projection, curve: ex.curve }; })(),
                 },
               });
             }}
