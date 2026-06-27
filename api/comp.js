@@ -21,10 +21,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Provide an address, e.g. /api/comp?address=123 Main St, Louisville, KY" });
   }
 
-  // Optional tuning passthroughs (all have sensible defaults on RentCast's side)
-  const compCount = req.query.compCount || "10";   // up to 25
-  const maxRadius = req.query.maxRadius || "";       // miles, optional
-  const daysOld = req.query.daysOld || "";           // recency cap, optional
+  // Tuning. Defaults dial the comps in the way we want:
+  //  - daysOld=365  → only comps listed/sold within the last 12 months
+  //  - compCount=25 → pull a deep pool so we can filter to ±250 sqft and still have 6 good ones
+  const compCount = req.query.compCount || "25";
+  const maxRadius = req.query.maxRadius || "";
+  const daysOld = req.query.daysOld || "365";
+  const sqftBand = Number(req.query.sqftBand || 250);   // ± sq ft vs subject
+  const keepCount = Number(req.query.keepCount || 6);    // how many comps to keep for ARV
 
   const params = new URLSearchParams({ address, compCount });
   if (maxRadius) params.set("maxRadius", maxRadius);
@@ -52,12 +56,17 @@ export default async function handler(req, res) {
 
     const data = await r.json();
     const subj = data.subjectProperty || {};
+    const subjSqft = Number(subj.squareFootage) || 0;
 
-    // Trim comps to just what the calculator needs. Keep RentCast's correlation order
-    // (most similar first). Only keep comps that have both price and square footage.
+    // Build the comp list, dialed in the way the user asked:
+    //  1) must have a price and square footage
+    //  2) within ±sqftBand (default 250) of the subject's square footage, when we know the subject sqft
+    //  3) keep RentCast's correlation order (most similar first)
+    //  4) keep only the top `keepCount` (default 6) for the ARV calc
     const comps = (data.comparables || [])
       .filter((c) => Number(c.price) > 0 && Number(c.squareFootage) > 0)
-      .slice(0, 8)
+      .filter((c) => (subjSqft > 0 ? Math.abs(Number(c.squareFootage) - subjSqft) <= sqftBand : true))
+      .slice(0, keepCount)
       .map((c) => ({
         address: c.formattedAddress || c.addressLine1 || "",
         price: Math.round(Number(c.price)),
@@ -65,8 +74,14 @@ export default async function handler(req, res) {
         beds: c.bedrooms ?? null,
         baths: c.bathrooms ?? null,
         yearBuilt: c.yearBuilt ?? null,
+        propertyType: c.propertyType ?? null,
         distance: c.distance ?? null,
         daysOnMarket: c.daysOnMarket ?? null,
+        daysOld: c.daysOld ?? null,
+        listedDate: c.listedDate ?? null,     // when it hit the market
+        removedDate: c.removedDate ?? null,   // when it went off market (best proxy for "sold")
+        lastSeenDate: c.lastSeenDate ?? null,
+        status: c.status ?? null,
         correlation: c.correlation ?? null,
         ppsf: Math.round(Number(c.price) / Number(c.squareFootage)),
       }));
@@ -82,7 +97,10 @@ export default async function handler(req, res) {
         baths: subj.bathrooms ?? null,
         yearBuilt: subj.yearBuilt ?? null,
         propertyType: subj.propertyType ?? null,
+        lastSaleDate: subj.lastSaleDate ?? null,     // real recorded sale
+        lastSalePrice: subj.lastSalePrice ?? null,
       },
+      meta: { sqftBand, keepCount, daysOld, subjectSqft: subjSqft || null },
       comps,
     });
   } catch (err) {

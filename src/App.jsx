@@ -1,12 +1,72 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown } from "lucide-react";
+import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
 const COMP_API = "/api/comp";
 const AUTOCOMPLETE_API = "/api/autocomplete";
 
-// Build a Google Maps search link for any address string
-const gmaps = (addr) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`;
+// Google web search link for any address string
+const gsearch = (addr) => `https://www.google.com/search?q=${encodeURIComponent(addr)}`;
+
+// Format property details into a readable line: "Single Family · 1 Bed · 1 Bath · Built 1920"
+const propLine = (info) => {
+  if (!info) return "";
+  const parts = [];
+  if (info.propertyType) parts.push(info.propertyType);
+  if (info.beds != null && info.beds !== "") parts.push(`${info.beds} Bed${Number(info.beds) === 1 ? "" : "s"}`);
+  if (info.baths != null && info.baths !== "") parts.push(`${info.baths} Bath${Number(info.baths) === 1 ? "" : "s"}`);
+  if (info.yearBuilt) parts.push(`Built ${info.yearBuilt}`);
+  return parts.join(" · ");
+};
+
+// Junk-comp check (flag-only): compare a comp to the subject and return reasons it may be a weak comp.
+// Tolerances: >1 bed, >1 bath, >15 yrs build age, >250 sq ft, or >0.5 mi away.
+const compFlags = (c, subj, subjSqft) => {
+  const flags = [];
+  if (!c) return flags;
+  const nOr = (v) => (v == null || v === "" ? null : Number(v));
+  const cb = nOr(c.beds), sb = nOr(subj?.beds);
+  if (cb != null && sb != null && Math.abs(cb - sb) > 1) flags.push(`${Math.abs(cb - sb)} bd off`);
+  const cba = nOr(c.baths), sba = nOr(subj?.baths);
+  if (cba != null && sba != null && Math.abs(cba - sba) > 1) flags.push(`${Math.abs(cba - sba)} ba off`);
+  const cy = nOr(c.yearBuilt), sy = nOr(subj?.yearBuilt);
+  if (cy && sy && Math.abs(cy - sy) > 15) flags.push(`built ${Math.abs(cy - sy)} yrs apart`);
+  const cs = nOr(c.sqft), ss = subjSqft;
+  if (cs && ss && Math.abs(cs - ss) > 250) flags.push(`${Math.abs(cs - ss).toLocaleString()} sf off`);
+  const cd = nOr(c.distance);
+  if (cd != null && cd > 0.5) flags.push(`${cd.toFixed(1)} mi away`);
+  return flags;
+};
+const shortDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+};
+// Full date like "11/18/2024"
+const fullDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleDateString("en-US");
+};
+// Subject's true last-sale line
+const lastSoldLine = (info) => {
+  if (!info || !info.lastSalePrice) return "";
+  const when = fullDate(info.lastSaleDate);
+  return `Last sold ${usd(info.lastSalePrice)}${when ? ` on ${when}` : ""}`;
+};
+// Comp listing line: "Listed $209k May '25 · off market Sep '25"
+const listingLine = (c) => {
+  if (!c) return "";
+  const bits = [];
+  const listed = shortDate(c.listedDate);
+  const off = shortDate(c.removedDate || c.lastSeenDate);
+  if (listed) bits.push(`listed ${listed}`);
+  if (off && c.status && c.status.toLowerCase() !== "active") bits.push(`off market ${off}`);
+  else if (off && !listed) bits.push(`seen ${off}`);
+  return bits.join(" · ");
+};
 
 // ---------- helpers ----------
 const num = (v) => {
@@ -203,6 +263,8 @@ export default function App() {
     { sqft: "", price: "", address: "" },
   ]);
   const [arvOverride, setArvOverride] = useState("");
+  const [rentcastArv, setRentcastArv] = useState(null); // RentCast's own AVM, kept as a reference only
+  const [subjectInfo, setSubjectInfo] = useState(null);
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
 
@@ -216,20 +278,40 @@ export default function App() {
       if (!r.ok) { setCompMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); return; }
       // Always refresh subject sqft for the new address (fixes stale-sqft glitch)
       if (data.subject?.sqft) setSqft(String(data.subject.sqft));
-      // Fill the comp grid (address + sqft + price), pad to at least 3 rows
+      // Capture subject property details
+      if (data.subject) setSubjectInfo({
+        propertyType: data.subject.propertyType,
+        beds: data.subject.beds,
+        baths: data.subject.baths,
+        yearBuilt: data.subject.yearBuilt,
+        lastSaleDate: data.subject.lastSaleDate,
+        lastSalePrice: data.subject.lastSalePrice,
+      });
+      // Fill the comp grid (address + sqft + price + details), pad to at least 3 rows
       const incoming = (data.comps || []).map((c) => ({
         sqft: String(c.sqft),
         price: String(c.price),
         address: c.address || "",
+        propertyType: c.propertyType,
+        beds: c.beds,
+        baths: c.baths,
+        yearBuilt: c.yearBuilt,
+        distance: c.distance,
+        listedDate: c.listedDate,
+        removedDate: c.removedDate,
+        lastSeenDate: c.lastSeenDate,
+        status: c.status,
       }));
       if (incoming.length) {
         while (incoming.length < 3) incoming.push({ sqft: "", price: "", address: "" });
         setComps(incoming);
       }
-      // Drop RentCast's own AVM into the override box as a reference ARV
-      if (data.arv) setArvOverride(String(data.arv));
+      // Keep RentCast's own AVM as a REFERENCE only — do NOT shove it into the override,
+      // or the comps would stop driving the ARV (removing comps would do nothing).
+      setRentcastArv(data.arv || null);
+      setArvOverride("");   // let the comps drive the ARV live
       const n = (data.comps || []).length;
-      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast ARV ${usd(data.arv)}` : ""}. Review and trim outliers before trusting it.` });
+      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps below — trim outliers and it recalculates.` });
     } catch (e) {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
@@ -365,6 +447,23 @@ export default function App() {
               <Field label="Subject address" hint="start typing — pick the exact match">
                 <AddressAutocomplete value={address} onChange={setAddress} placeholder="1225 S 6th St, Louisville, KY" />
               </Field>
+              {(propLine(subjectInfo) || lastSoldLine(subjectInfo) || address) && (
+                <div className="mt-1.5 space-y-0.5">
+                  {(propLine(subjectInfo) || lastSoldLine(subjectInfo)) && (
+                    <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+                      {propLine(subjectInfo) && <span>{propLine(subjectInfo)}</span>}
+                      {propLine(subjectInfo) && lastSoldLine(subjectInfo) && <span className="text-slate-300">•</span>}
+                      {lastSoldLine(subjectInfo) && <span className="font-medium text-slate-600">{lastSoldLine(subjectInfo)}</span>}
+                    </div>
+                  )}
+                  {address && (
+                    <a href={gsearch(address)} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 hover:underline">
+                      <Search className="h-3 w-3" /> Google this property <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
             <Field label="Subject sq ft">
               <PlainInput value={sqft} onChange={setSqft} placeholder="1500" suffix="sf" />
@@ -375,7 +474,7 @@ export default function App() {
           <div className="mt-4">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Sold comps (Jamil method: avg $/sf × subject sf)
+                Sold comps (YLHB method: avg $/sf × subject sf)
               </span>
               <div className="flex items-center gap-2">
                 <button onClick={autoComp} disabled={compLoading}
@@ -389,11 +488,15 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <div className="mt-1 text-[10px] text-slate-400">
+              Auto-comp pulls the 6 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject.
+            </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
                 const ppsf = num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0;
+                const flags = compFlags(c, subjectInfo, num(sqft));
                 return (
-                  <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+                  <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : "border-slate-200 bg-slate-50/50"}`}>
                     {/* address row */}
                     <div className="flex items-center gap-2">
                       <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
@@ -406,17 +509,35 @@ export default function App() {
                           className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100"
                         />
                         {c.address ? (
-                          <a href={gmaps(c.address)} target="_blank" rel="noopener noreferrer"
-                            title="Open in Google Maps"
+                          <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer"
+                            title="Google this property"
                             className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
-                            <MapPin className="h-3 w-3" /> Map <ExternalLink className="h-2.5 w-2.5" />
+                            <Search className="h-3 w-3" /> Google <ExternalLink className="h-2.5 w-2.5" />
                           </a>
                         ) : (
-                          <span className="shrink-0 px-2 py-1 text-[11px] text-slate-300">no map</span>
+                          <span className="shrink-0 px-2 py-1 text-[11px] text-slate-300">no link</span>
                         )}
                       </div>
                       <button onClick={() => rmComp(i)} className="text-slate-300 hover:text-rose-500" aria-label="remove comp">×</button>
                     </div>
+                    {/* property details + listing dates line */}
+                    {(propLine(c) || listingLine(c)) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 pl-7 text-[11px] text-slate-500">
+                        {propLine(c) && <span>{propLine(c)}</span>}
+                        {propLine(c) && listingLine(c) && <span className="text-slate-300">•</span>}
+                        {listingLine(c) && <span className="text-slate-400">{listingLine(c)}</span>}
+                      </div>
+                    )}
+                    {/* junk-comp flags vs subject */}
+                    {flags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
+                        {flags.map((f, k) => (
+                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {/* numbers row */}
                     <div className="mt-1.5 flex items-center gap-2 pl-7">
                       <div className="flex-1">
@@ -442,13 +563,30 @@ export default function App() {
               <Field label="Or enter ARV directly" hint="overrides comps">
                 <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
               </Field>
+              {rentcastArv > 0 && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                  <span>RentCast AVM (reference): <b className="text-slate-700">{usd(rentcastArv)}</b></span>
+                  {num(arvOverride) !== rentcastArv && (
+                    <button onClick={() => setArvOverride(String(rentcastArv))}
+                      className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600 hover:bg-emerald-50">
+                      use as ARV
+                    </button>
+                  )}
+                  {num(arvOverride) > 0 && (
+                    <button onClick={() => setArvOverride("")}
+                      className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
+                      back to comps
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
           {/* ARV result */}
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} />
-            <Stat label="After-Repair Value" value={usd(arv)} tone="default" big />
+            <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length} comps`} />
+            <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={num(arvOverride) > 0 ? "manual override" : "avg $/sf × subject sf"} />
             <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
         </div>
@@ -546,7 +684,7 @@ export default function App() {
         </div>
 
         <div className="mt-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-slate-400">
-          Formulas use standard Pace Morby / Jamil Damji methodology (ARV = avg $/sf × sq ft; MAO = ARV × band % − repairs).
+          Formulas use standard YLHB methodology (ARV = avg $/sf × sq ft; MAO = ARV × band % − repairs).
           Bands default to 75% under $200k / 80% over, matching your sheet. Estimates only — verify comps and underwriting before offers. Not legal or financial advice.
         </div>
       </div>
@@ -653,17 +791,30 @@ const CRow = ({ label, a, b, muted }) => (
 
 // ---------- shared: "what if we wholesaled this" panel ----------
 function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel }) {
+  const [feeInput, setFeeInput] = useState("");
   const band = arv >= 200000 ? num(overPct) : num(underPct);
   const cashMao = arv * (band / 100) - repairs;          // what a cash buyer would pay
-  const yourOffer = cashMao - num(wholesaleFee);          // your max wholesale offer, keeping your fee
-  const spread = dealCost > 0 ? cashMao - dealCost : 0;   // assignment fee if you locked at this basis
+  const fee = num(feeInput);                             // the assignment fee you want to earn
+  const maxContract = cashMao - fee;                     // most you can contract at to keep that fee
+  const availableSpread = dealCost > 0 ? cashMao - dealCost : 0; // fee you'd actually clear at the deal's basis
+  const works = fee > 0 && maxContract >= dealCost;      // can you offer at/above the deal's basis and still hit your fee?
 
-  let tone = "default", note = "Enter this deal's price/basis to compare a wholesale exit.";
+  let tone = "default", note = "Enter the wholesale fee you want to earn, and this shows the most you could contract at.";
   if (arv <= 0) { note = "Set the ARV up top to compare a wholesale exit."; }
-  else if (dealCost > 0) {
-    if (spread >= 10000) { tone = "good"; note = `Wholesale-able — you could assign for ~${usd(spread)} instead of holding. Compare that quick cash to the long-term cash flow.`; }
-    else if (spread > 0) { tone = "warn"; note = `Thin wholesale spread (~${usd(spread)}). The creative hold likely wins unless you need the quick cash.`; }
-    else { tone = "bad"; note = `No wholesale spread at this basis — this one only makes sense as a creative hold, not a flip.`; }
+  else if (fee > 0) {
+    if (dealCost <= 0) {
+      tone = "good";
+      note = `To earn your ${usd(fee)} fee, contract at up to ${usd(maxContract)} and assign at the ${usd(cashMao)} cash buyer MAO.`;
+    } else if (maxContract >= dealCost) {
+      tone = "good";
+      note = `You can clear your ${usd(fee)} fee — offer the seller up to ${usd(maxContract)}. That's at or above this deal's ${usd(dealCost)} basis, so the wholesale works.`;
+    } else if (availableSpread > 0) {
+      tone = "warn";
+      note = `To earn ${usd(fee)} you'd have to contract at ${usd(maxContract)} — below this deal's ${usd(dealCost)} basis. The most you'd realistically clear here is ~${usd(availableSpread)}.`;
+    } else {
+      tone = "bad";
+      note = `No wholesale room — the cash buyer MAO (${usd(cashMao)}) is at or below this deal's ${usd(dealCost)} basis. Keep it creative.`;
+    }
   }
 
   return (
@@ -672,13 +823,22 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
         <RefreshCw className="h-4 w-4 text-slate-400" />
         <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">If you wholesaled this instead</h3>
       </div>
+      <div className="mb-3">
+        <Field
+          label="Your wholesale fee"
+          hint="the assignment fee you want to earn"
+          info="Type the fee you want to make wholesaling this. The panel works backward to show the most you could put the property under contract for (Cash buyer MAO − your fee), and whether that beats this deal's basis."
+        >
+          <MoneyInput value={feeInput} onChange={setFeeInput} placeholder={num(wholesaleFee) > 0 ? String(Math.round(num(wholesaleFee))) : "e.g. 10000"} />
+        </Field>
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Cash buyer MAO" value={usd(cashMao)} sub={`ARV × ${band}% − repairs`} />
+        <Stat label="Max contract price" value={fee > 0 ? usd(maxContract) : "—"} tone={fee > 0 && dealCost > 0 ? (works ? "good" : "bad") : "default"} sub="Cash MAO − your fee" />
         <Stat label={costLabel} value={dealCost > 0 ? usd(dealCost) : "—"} sub="this deal's basis" />
-        <Stat label="Assignment spread" value={dealCost > 0 ? usd(spread) : "—"} tone={tone === "default" ? "default" : tone} sub="cash MAO − your basis" />
       </div>
       <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
-        {note} <span className="text-slate-400">Your max wholesale offer (after a {usd(num(wholesaleFee))} fee): {usd(yourOffer)}.</span>
+        {note}
       </div>
     </div>
   );
