@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle } from "lucide-react";
+import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
 const COMP_API = "/api/comp";
@@ -358,8 +358,7 @@ export default function App() {
     }
   }
 
-  // Pull the rent estimate — only fired when the Rental tab is opened (lazy-load),
-  // so address pulls that never touch the Rental tab stay at 1 RentCast credit.
+  // Pull the rent estimate on demand (from the BRRRR/DSCR "Generate" button). One RentCast credit per pull.
   async function fetchRent(addr) {
     const a = (addr || "").trim();
     if (!a) { setRentMsg({ type: "err", text: "Enter an address up top first, then reopen this tab." }); return; }
@@ -383,13 +382,7 @@ export default function App() {
     }
   }
 
-  // Lazy-load: when the Rental tab opens for a fresh address, pull rent once.
-  useEffect(() => {
-    if (tab === "rental" && address.trim() && rentFetchedFor !== address.trim() && !rentLoading) {
-      fetchRent(address);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, address]);
+  // Rent is pulled on demand from the BRRRR/DSCR panel's "Generate" button (uses a RentCast credit).
 
   // rehab + MAO %
   const [rehabLevel, setRehabLevel] = useState("moderate");
@@ -493,7 +486,6 @@ export default function App() {
     { id: "hybrid", label: "Hybrid", Icon: Layers },
     { id: "sf", label: "Seller Finance", Icon: Banknote },
     { id: "nov", label: "Novation", Icon: RefreshCw },
-    { id: "rental", label: "Rental", Icon: Home },
   ];
 
   const validCompCount = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length;
@@ -677,13 +669,6 @@ export default function App() {
             <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={num(arvOverride) > 0 ? "manual override" : "avg $/sf × subject sf"} />
             <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
-          {effRent > 0 && (
-            <button onClick={() => setTab("rental")}
-              className="mt-3 flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-left text-[11px] text-slate-500 hover:border-emerald-300 hover:bg-emerald-50/40">
-              <span><Home className="mr-1 inline h-3 w-3 text-emerald-500" /> Est. rent <b className="text-slate-700">{usd(effRent)}/mo</b> · 1% max price <b className="text-slate-700">{usd(onePctMax)}</b></span>
-              <span className="font-semibold text-emerald-600">Rental tab →</span>
-            </button>
-          )}
         </div>
 
         {/* CONTROLS: rehab + MAO bands */}
@@ -762,7 +747,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault: effRent, deckCommon }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -775,9 +760,6 @@ export default function App() {
           )}
           {tab === "nov" && (
             <NovationTab {...{ novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor }} />
-          )}
-          {tab === "rental" && (
-            <RentalTab {...{ rentEst, rentLow, rentHigh, rentOverride, setRentOverride, rentLoading, rentMsg, effRent, address, fetchRent }} />
           )}
         </div>
 
@@ -800,7 +782,7 @@ function InstructionsButton() {
     ["Read the verdict", "Green means it pencils, amber means it's tight, red means walk. Hover the ⓘ icons for what any field means."],
     ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this contract' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
     ["See the rate's worth", "The Rate Savings and amortization sliders show what a below-market loan saves over time and how the payment shifts from interest to principal."],
-    ["Check it as a rental", "The Rental tab auto-pulls estimated rent and runs the 1% rule — drag the slider to see the max price that pencils."],
+    ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Hit Generate next to Monthly rent to pull a RentCast estimate — only do that once the deal's under contract, since it uses a credit."],
     ["Send it to buyers", "Hit 'Download buyer deck' on any creative tab to generate a branded YLHB PowerPoint for your buyers list. Fill the required fields and it builds the slides."],
     ["Learn as you go", "Every tab has a plain-English explainer at the bottom, plus free Pace Morby videos on that structure."],
   ];
@@ -1360,7 +1342,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault, deckCommon } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -1446,6 +1428,7 @@ function CashTab(props) {
       </div>
       <BrrrrPanel
         arv={arv} repairs={repairs} rentDefault={rentDefault} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
+        onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
         flipDeck={{
           profit: num(desiredProfit),
           buyAt: itemizedMao,
@@ -1478,7 +1461,7 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, flipDeck }) {
+function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
   const [purchase, setPurchase] = useState("");
   const [rehab, setRehab] = useState("");
   const [rent, setRent] = useState("");
@@ -1528,7 +1511,19 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Purchase price" hint="your buy price" info="What you'd actually buy it for. Defaults to your Investor MAO above."><MoneyInput value={purchase} onChange={setPurchase} placeholder={num(purchaseDefault) > 0 ? String(Math.round(num(purchaseDefault))) : "e.g. 140000"} /></Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
-        <Field label="Monthly rent" info="Market rent once it's fixed and leased. Grab it from the Rental tab if you've pulled it."><MoneyInput value={rent} onChange={setRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "e.g. 1800"} /></Field>
+        <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
+          <div className="flex items-center gap-2">
+            <div className="flex-1"><MoneyInput value={rent} onChange={setRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "e.g. 1800"} /></div>
+            <button type="button" onClick={onGenerateRent} disabled={rentLoading || !hasAddress}
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+              title={hasAddress ? "Pull a RentCast rent estimate for this address" : "Add an address up top first"}>
+              {rentLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Generate
+            </button>
+          </div>
+          <div className="mt-1 text-[10px] font-bold text-rose-600">⚠ Only generate once the deal is under contract — each pull uses a RentCast credit.</div>
+          {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
+          {num(rentDefault) > 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">RentCast estimate ${Math.round(num(rentDefault)).toLocaleString()}/mo loaded — shown above; type to override.</div>}
+        </Field>
         <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator."><MoneyInput value={taxIns} onChange={setTaxIns} placeholder="e.g. 300" /></Field>
         <Field label="HOA" hint="monthly, if any" info="Monthly HOA / association dues, if the property has them. Also part of PITIA."><MoneyInput value={hoa} onChange={setHoa} /></Field>
         <Field label="Reserves" hint="% of rent" info="Vacancy + maintenance + management set-aside. NOT part of the lender's DSCR, but real money — used here for your true cash flow."><PlainInput value={reservePct} onChange={setReservePct} suffix="%" /></Field>
@@ -2098,84 +2093,6 @@ function NovationTab(props) {
         </div>
       </div>
       <TabEducation id="nov" />
-    </div>
-  );
-}
-// ---------- RENTAL ----------
-function RentalTab({ rentEst, rentLow, rentHigh, rentOverride, setRentOverride, rentLoading, rentMsg, effRent, address, fetchRent }) {
-  const [targetPct, setTargetPct] = useState(1);   // the rule % you want to hit (1% default)
-  const [price, setPrice] = useState("");          // a contract price to grade
-
-  const maxPrice = effRent > 0 && targetPct > 0 ? effRent / (targetPct / 100) : 0; // price that hits the target %
-  const p = num(price);
-  const actualPct = p > 0 && effRent > 0 ? (effRent / p) * 100 : 0;
-  const passes = actualPct >= targetPct;
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Estimated rent */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>Estimated rent</SectionTitle>
-          {rentLoading ? (
-            <div className="flex items-center gap-2 py-4 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> Pulling rent for this address…</div>
-          ) : effRent > 0 ? (
-            <div className="mt-1 grid grid-cols-2 gap-3">
-              <Stat label="Monthly rent" value={usd(effRent)} tone="good" big sub={num(rentOverride) > 0 ? "your override" : "RentCast estimate"} />
-              <Stat label="Estimate range" value={rentLow && rentHigh ? `${usd(rentLow)}–${usd(rentHigh)}` : "—"} sub="RentCast low–high" />
-            </div>
-          ) : (
-            <div className="py-3 text-sm text-slate-400">{address.trim() ? "No estimate yet — enter rent below." : "Auto-comp an address up top first, then come back."}</div>
-          )}
-          <div className="mt-3">
-            <Field label="Override rent (monthly)" hint="wins over the estimate">
-              <MoneyInput value={rentOverride} onChange={setRentOverride} placeholder={rentEst ? String(rentEst) : "your number"} />
-            </Field>
-          </div>
-          {rentMsg && (
-            <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${rentMsg.type === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>{rentMsg.text}</div>
-          )}
-        </div>
-
-        {/* 1% rule → max price */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>The 1% rule — what to buy it for</SectionTitle>
-          <div className="mt-1">
-            <div className="flex items-baseline justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Target rule</span>
-              <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{targetPct.toFixed(2)}%</span>
-            </div>
-            <input type="range" min={0.5} max={1.5} step={0.05} value={targetPct} onChange={(e) => setTargetPct(parseFloat(e.target.value))} className="mt-1 w-full accent-emerald-600" />
-            <div className="flex justify-between text-[10px] text-slate-400"><span>0.50%</span><span>1.00%</span><span>1.50%</span></div>
-          </div>
-          <div className="mt-3">
-            <Stat label="Max purchase price" value={effRent > 0 ? usd(maxPrice) : "—"} tone={effRent > 0 ? "good" : "default"} big sub={`to hit ${targetPct.toFixed(2)}% on ${usd(effRent)}/mo`} />
-          </div>
-          <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-            {effRent > 0
-              ? <>Buy at or under <b className="text-slate-700">{usd(maxPrice)}</b> and this rents at the <b>{targetPct.toFixed(2)}%</b> rule. Slide the target to see how the max price moves.</>
-              : <>Set a rent above to see the max purchase price.</>}
-          </div>
-        </div>
-      </div>
-
-      {/* Grade a contract price */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SectionTitle>Grade a contract price</SectionTitle>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Your contract price" info="Type what you'd put it under contract for. The right side shows the rent-to-price ratio and whether it clears your target rule.">
-            <MoneyInput value={price} onChange={setPrice} placeholder={maxPrice > 0 ? String(Math.round(maxPrice)) : "your price"} />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Stat label="Rent-to-price" value={p > 0 && effRent > 0 ? `${actualPct.toFixed(2)}%` : "—"} tone={p > 0 ? (passes ? "good" : "bad") : "default"} sub={`target ${targetPct.toFixed(2)}%`} />
-            <Stat label="Verdict" value={p > 0 && effRent > 0 ? (passes ? "Passes" : "Below") : "—"} tone={p > 0 ? (passes ? "good" : "bad") : "default"} sub={p > 0 && effRent > 0 ? (passes ? `clears ${targetPct.toFixed(2)}%` : `under by ${(targetPct - actualPct).toFixed(2)}%`) : "enter a price"} />
-          </div>
-        </div>
-        <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-400">
-          Heads-up: the 1% rule is a fast screen, not the whole story. It ignores taxes, insurance, vacancy, and management. Use it to filter, then underwrite the cash flow before you commit.
-        </div>
-      </div>
-      <TabEducation id="rental" />
     </div>
   );
 }
