@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play } from "lucide-react";
+import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
 const COMP_API = "/api/comp";
@@ -93,6 +93,35 @@ const balanceAt = (principal, annualRatePct, years, atYear) => {
   if (r === 0) return Math.max(0, principal - M * k);
   return Math.max(0, principal * Math.pow(1 + r, k) - (M * (Math.pow(1 + r, k) - 1)) / r);
 };
+// Present value (today's dollars) of the monthly payment savings a below-market loan throws off,
+// discounted at the market rate over the remaining term. This is what a cheap assumed loan is "worth"
+// — it grows as the deal rate drops below market.
+const pvSavings = (loan, ratePct, mktPct, years) => {
+  const n = years * 12;
+  if (loan <= 0 || n <= 0) return 0;
+  const mo = pmt(loan, mktPct, years) - pmt(loan, ratePct, years); // monthly savings vs market
+  if (mo <= 0) return 0;
+  const r = mktPct / 100 / 12; // discount at the market monthly rate
+  if (r === 0) return mo * n;
+  return (mo * (1 - Math.pow(1 + r, -n))) / r;
+};
+
+// Returns snapshot + 5-year wealth projection for the buyer deck (shared across creative tabs).
+function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClose, coc }) {
+  const paydown5 = loanAmt > 0 ? loanAmt - balanceAt(loanAmt, rate, term, 5) : 0;
+  const appreciation5 = arv > 0 ? arv * (Math.pow(1.03, 5) - 1) : 0;
+  const cumCF5 = cashFlow * 60;
+  const startEquity = Math.max(0, equity);
+  return {
+    returns: { cashToClose, monthlyCF: cashFlow, annualCF: cashFlow * 12, coc },
+    projection: { startEquity, paydown5, appreciation5, cumCF5, total5: startEquity + paydown5 + appreciation5 + cumCF5, apprRate: 3 },
+    exits: [
+      "Hold as a cash-flowing mid-term or long-term rental",
+      "BRRRR — season, refinance, and recycle your capital",
+      "Resell on terms to your own buyer for a markup",
+    ],
+  };
+}
 
 // ---------- module-scope inputs (stable refs = no focus loss) ----------
 const InfoDot = ({ text }) => {
@@ -455,7 +484,7 @@ export default function App() {
 
   const setComp = (i, key, val) =>
     setComps((cs) => cs.map((c, idx) => (idx === i ? { ...c, [key]: val } : c)));
-  const addComp = () => setComps((cs) => (cs.length < 6 ? [...cs, { sqft: "", price: "", address: "" }] : cs));
+  const addComp = () => setComps((cs) => (cs.length < 8 ? [...cs, { sqft: "", price: "", address: "" }] : cs));
   const rmComp = (i) => setComps((cs) => (cs.length > 1 ? cs.filter((_, idx) => idx !== i) : cs));
 
   const tabs = [
@@ -467,19 +496,32 @@ export default function App() {
     { id: "rental", label: "Rental", Icon: Home },
   ];
 
+  const validCompCount = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length;
+  const deckCommon = {
+    address, arv,
+    subjectLine: propLine(subjectInfo),
+    rent: effRent,
+    askingDefault: num(askingPrice),
+    compCount: num(arvOverride) > 0 ? 0 : validCompCount,
+    avgPpsf: num(arvOverride) > 0 ? 0 : avgPsf,
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
       {/* header */}
       <div className="bg-slate-900 px-5 py-5">
         <div className="mx-auto max-w-5xl">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center rounded-lg bg-white px-2 py-1.5 shadow-sm">
-              <img src="/logo.png" alt="Your Local Home Buyer" className="h-9 w-auto object-contain" />
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center rounded-lg bg-white px-2 py-1.5 shadow-sm">
+                <img src="/logo.png" alt="Your Local Home Buyer" className="h-9 w-auto object-contain" />
+              </div>
+              <div>
+                <div className="text-sm font-bold tracking-tight text-white">YLHB RE Calculator</div>
+                <div className="text-[11px] text-slate-400">Acquisitions</div>
+              </div>
             </div>
-            <div>
-              <div className="text-sm font-bold tracking-tight text-white">YLHB RE Calculator</div>
-              <div className="text-[11px] text-slate-400">Acquisitions</div>
-            </div>
+            <InstructionsButton />
           </div>
         </div>
       </div>
@@ -535,7 +577,7 @@ export default function App() {
               </div>
             </div>
             <div className="mt-1 text-[10px] text-slate-400">
-              Auto-comp pulls the 6 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject.
+              Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject.
             </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
@@ -723,13 +765,13 @@ export default function App() {
             <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
-            <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
+            <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
             <NovationTab {...{ novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor }} />
@@ -745,6 +787,369 @@ export default function App() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------- shared: how-to-use instructions ----------
+function InstructionsButton() {
+  const [open, setOpen] = useState(false);
+  const steps = [
+    ["Pull the property", "Type the address up top and hit Auto-comp. It pulls the ARV, sold comps, property details, and the subject's last sale — all from the address."],
+    ["Tighten the comps", "Auto-comp keeps the 8 most-similar sold comps (last 12 months, ±250 sq ft). Comps that are off on beds, baths, age, size, or distance get an amber flag — delete the weak ones and the ARV recalculates live."],
+    ["Pick your structure", "Use the tabs to run the deal as Cash/MAO, Sub-To, Hybrid, Seller Finance, Novation, or Rental. Each gives you a verdict and the key numbers."],
+    ["Read the verdict", "Green means it pencils, amber means it's tight, red means walk. Hover the ⓘ icons for what any field means."],
+    ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this contract' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
+    ["See the rate's worth", "The Rate Savings and amortization sliders show what a below-market loan saves over time and how the payment shifts from interest to principal."],
+    ["Check it as a rental", "The Rental tab auto-pulls estimated rent and runs the 1% rule — drag the slider to see the max price that pencils."],
+    ["Send it to buyers", "Hit 'Download buyer deck' on any creative tab to generate a branded YLHB PowerPoint for your buyers list. Fill the required fields and it builds the slides."],
+    ["Learn as you go", "Every tab has a plain-English explainer at the bottom, plus free Pace Morby videos on that structure."],
+  ];
+  return (
+    <>
+      <button onClick={() => setOpen(true)}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-[12px] font-semibold text-slate-200 hover:bg-slate-700">
+        <HelpCircle className="h-4 w-4 text-emerald-400" /> How to use
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setOpen(false)}>
+          <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-800">How to use the YLHB RE Calculator</h2>
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mb-4 text-[13px] text-slate-500">Address in → deal out. Here's the flow, start to finish.</p>
+            <ol className="space-y-3">
+              {steps.map((s, i) => (
+                <li key={i} className="flex gap-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[12px] font-bold text-emerald-700">{i + 1}</span>
+                  <div>
+                    <div className="text-[13px] font-bold text-slate-800">{s[0]}</div>
+                    <div className="text-[13px] leading-relaxed text-slate-600">{s[1]}</div>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <div className="mt-5 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+              Tip: numbers are estimates to get you to a fast yes/no. Always verify ARV, rent, condition, and loan terms before you commit a dollar.
+            </div>
+            <button onClick={() => setOpen(false)} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700">Got it</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ---------- shared: buyer deck (.pptx) ----------
+const YLHB = {
+  email: "deals@yourlocalhomebuyerteam.com",
+  phone: "(502) 305-8554",
+  phoneRaw: "+15023058554",
+  site: "www.yourlocalhomebuyerteam.com",
+  siteUrl: "https://www.yourlocalhomebuyerteam.com",
+};
+const DECK = { FOREST: "1E4D2B", SAGE: "9CAF88", ORANGE: "E8833A", INK: "1A2E22", PAPER: "F5F7F4", WHITE: "FFFFFF", LINE: "DDE3DC" };
+
+// Load PptxGenJS from CDN on first use (avoids bundling a heavy lib; keeps the Vercel build simple).
+let _pptxPromise = null;
+function loadPptx() {
+  if (typeof window !== "undefined" && window.PptxGenJS) return Promise.resolve(window.PptxGenJS);
+  if (_pptxPromise) return _pptxPromise;
+  _pptxPromise = new Promise((resolve, reject) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js";
+    sc.async = true;
+    sc.onload = () => (window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error("PowerPoint library loaded but unavailable.")));
+    sc.onerror = () => reject(new Error("Could not load the PowerPoint library (check your connection)."));
+    document.head.appendChild(sc);
+  });
+  return _pptxPromise;
+}
+
+async function getLogoData() {
+  try {
+    const res = await fetch("/logo.png");
+    const blob = await res.blob();
+    return await new Promise((resolve) => {
+      const r = new FileReader();
+      r.onloadend = () => resolve(String(r.result).replace(/^data:/, "")); // pptxgenjs wants "image/png;base64,..."
+      r.onerror = () => resolve(null);
+      r.readAsDataURL(blob);
+    });
+  } catch { return null; }
+}
+
+async function generateBuyerDeck(data) {
+  const PptxGenJS = await loadPptx();
+  const logo = await getLogoData();
+  const pptx = new PptxGenJS();
+  pptx.defineLayout({ name: "W", width: 13.333, height: 7.5 });
+  pptx.layout = "W";
+  pptx.author = "Your Local Home Buyer";
+  pptx.company = "Your Local Home Buyer";
+  const addLogo = (s, x, y, w) => { if (logo) s.addImage({ data: logo, x, y, w, h: w * 0.59 }); };
+
+  // Slide 1 — cover (photo if provided, else branded title card)
+  let s = pptx.addSlide();
+  if (data.photo) {
+    s.background = { color: DECK.INK };
+    try { s.addImage({ data: data.photo, x: 0, y: 0, w: 13.333, h: 5.1, sizing: { type: "cover", w: 13.333, h: 5.1 } }); } catch { /* bad image — skip */ }
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 5.1, w: 13.333, h: 2.4, fill: { color: DECK.FOREST } });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.35, w: 13.333, h: 0.15, fill: { color: DECK.ORANGE } });
+    addLogo(s, 11.1, 5.32, 1.6);
+    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 5.3, w: 10, h: 0.4, fontSize: 14, color: DECK.SAGE, bold: true, charSpacing: 3 });
+    s.addText(data.address || "Property address", { x: 0.6, y: 5.7, w: 10.3, h: 0.9, fontSize: 30, color: DECK.WHITE, bold: true });
+    if (data.headline) s.addText(data.headline, { x: 0.6, y: 6.7, w: 11, h: 0.5, fontSize: 16, color: DECK.SAGE });
+  } else {
+    s.background = { color: DECK.FOREST };
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.7, w: 13.333, h: 0.8, fill: { color: DECK.ORANGE } });
+    addLogo(s, 0.6, 0.5, 2.3);
+    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 2.5, w: 12.1, h: 0.5, fontSize: 16, color: DECK.SAGE, bold: true, charSpacing: 3 });
+    s.addText(data.address || "Property address", { x: 0.6, y: 3.0, w: 12.1, h: 1.2, fontSize: 38, color: DECK.WHITE, bold: true });
+    if (data.headline) s.addText(data.headline, { x: 0.6, y: 4.35, w: 12.1, h: 0.6, fontSize: 18, color: DECK.SAGE });
+  }
+
+  const header = (slide, title) => {
+    slide.background = { color: DECK.PAPER };
+    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 1.1, fill: { color: DECK.FOREST } });
+    slide.addText(title, { x: 0.6, y: 0.28, w: 10.4, h: 0.6, fontSize: 26, color: DECK.WHITE, bold: true });
+    addLogo(slide, 11.3, 0.2, 1.45);
+  };
+  const kv = (rows) => rows.map((r) => [{ text: r[0], options: { bold: true, color: DECK.FOREST } }, { text: r[1], options: { align: "right", color: DECK.INK } }]);
+  const tableOpts = { fontSize: 15, color: DECK.INK, rowH: 0.6, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } };
+
+  // Slide 2 — property
+  s = pptx.addSlide(); header(s, "The Property");
+  const propRows = [["Address", data.address || "—"]];
+  if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
+  propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
+  propRows.push(["Asking price", data.asking ? usd(data.asking) : "—"]);
+  propRows.push(["Contract price", data.contractPrice ? usd(data.contractPrice) : "—"]);
+  propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
+  s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts });
+  const b = data.basis || {};
+  if (b.compCount > 0 || b.avgPpsf > 0) {
+    const basisParts = [];
+    if (b.compCount > 0) basisParts.push(`ARV backed by ${b.compCount} recent sold comp${b.compCount > 1 ? "s" : ""}${b.avgPpsf > 0 ? ` averaging ${usd(b.avgPpsf)}/sq ft` : ""}`);
+    if (b.rent > 0) basisParts.push(`rent is a current market estimate for the area`);
+    s.addText(basisParts.join(".  ") + ".", { x: 0.6, y: 6.4, w: 12.1, h: 0.4, fontSize: 12, color: DECK.FOREST, italic: true });
+  }
+  s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
+
+  // Slide 3 — the deal
+  s = pptx.addSlide(); header(s, `The Deal — ${data.dealType}`);
+  const dRows = (data.dealRows && data.dealRows.length ? data.dealRows : [["—", "—"]]);
+  s.addTable(kv(dRows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
+  s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
+  s.addText([
+    { text: (data.totalLabel || "TOTAL DEAL VALUE").toUpperCase() + "\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } },
+    { text: data.totalValue || "—", options: { fontSize: 32, color: DECK.WHITE, bold: true } },
+  ], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
+  if (data.verdict) s.addText(data.verdict, { x: 8.9, y: 4.05, w: 3.8, h: 2.4, fontSize: 12, color: DECK.INK, align: "center" });
+
+  // Slide 4 — why this deal
+  const highlights = (data.highlights || []).filter(Boolean);
+  if (highlights.length) {
+    s = pptx.addSlide(); header(s, "Why this deal");
+    const items = highlights.slice(0, 6).map((h) => ({ text: h, options: { bullet: { code: "2713", indent: 18 }, color: DECK.INK, fontSize: 18, paraSpaceAfter: 14 } }));
+    s.addText(items, { x: 0.9, y: 1.6, w: 11.5, h: 4.6, valign: "top" });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+  }
+
+  // Slide — returns snapshot
+  const R = data.returns;
+  if (R && (R.monthlyCF || R.cashToClose || R.annualCF)) {
+    s = pptx.addSlide(); header(s, "The Returns");
+    const card = (x, label, value, accent) => {
+      s.addShape(pptx.ShapeType.roundRect, { x, y: 1.6, w: 2.85, h: 1.9, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
+      s.addText([
+        { text: label.toUpperCase() + "\n", options: { fontSize: 11, color: "6B7A6F", bold: true } },
+        { text: value, options: { fontSize: 26, color: accent || DECK.FOREST, bold: true } },
+      ], { x, y: 1.85, w: 2.85, h: 1.4, align: "center", valign: "middle" });
+    };
+    card(0.6, "Cash to close", R.cashToClose ? usd(R.cashToClose) : "—", DECK.INK);
+    card(3.65, "Monthly cash flow", R.monthlyCF ? usd(R.monthlyCF) : "—", DECK.FOREST);
+    card(6.7, "Annual cash flow", R.annualCF ? usd(R.annualCF) : "—", DECK.FOREST);
+    card(9.75, "Cash-on-cash", R.coc ? R.coc.toFixed(1) + "%" : "—", DECK.ORANGE);
+    if (data.exits && data.exits.length) {
+      s.addText("Exit strategies", { x: 0.6, y: 3.9, w: 12, h: 0.4, fontSize: 15, color: DECK.FOREST, bold: true });
+      const ex = data.exits.slice(0, 4).map((e) => ({ text: e, options: { bullet: { code: "2022", indent: 16 }, color: DECK.INK, fontSize: 15, paraSpaceAfter: 8 } }));
+      s.addText(ex, { x: 0.7, y: 4.4, w: 12, h: 2, valign: "top" });
+    }
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+  }
+
+  // Slide — 5-year wealth projection
+  const P5 = data.projection;
+  if (P5 && P5.total5 > 0) {
+    s = pptx.addSlide(); header(s, "5-Year Wealth Snapshot");
+    const projRows = [
+      ["Equity today (below ARV)", usd(P5.startEquity)],
+      ["Loan paydown (5 yrs)", usd(P5.paydown5)],
+      [`Appreciation (5 yrs @ ${P5.apprRate}%/yr)`, usd(P5.appreciation5)],
+      ["Cumulative cash flow (5 yrs)", usd(P5.cumCF5)],
+    ];
+    s.addTable(kv(projRows), { x: 0.6, y: 1.6, w: 7.9, colW: [5.4, 2.5], ...tableOpts, rowH: 0.7 });
+    s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.6, w: 3.8, h: 2.8, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
+    s.addText([
+      { text: "TOTAL 5-YEAR VALUE\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } },
+      { text: usd(P5.total5), options: { fontSize: 30, color: DECK.WHITE, bold: true } },
+    ], { x: 8.9, y: 2.2, w: 3.8, h: 1.6, align: "center", valign: "middle" });
+    s.addText("Equity build + paydown + modest appreciation + cash flow. Appreciation is an assumption, not a guarantee.", { x: 0.6, y: 6.6, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
+  }
+
+  // Slide — CTA / contact
+  s = pptx.addSlide();
+  s.background = { color: DECK.FOREST };
+  addLogo(s, 5.45, 0.7, 2.45);
+  s.addText("Want this deal? Let's talk.", { x: 0.6, y: 2.35, w: 12.1, h: 0.8, fontSize: 34, color: DECK.WHITE, bold: true, align: "center" });
+
+  const c = data.contact || {};
+  let cy = 3.35;
+  if (c.name) { s.addText(c.name, { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 20, color: DECK.SAGE, bold: true, align: "center" }); cy += 0.55; }
+
+  s.addText([
+    { text: "✉  ", options: { color: DECK.SAGE } },
+    { text: YLHB.email, options: { color: DECK.WHITE, hyperlink: { url: `mailto:${YLHB.email}` } } },
+  ], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
+  cy += 0.5;
+  s.addText([
+    { text: "✆  ", options: { color: DECK.SAGE } },
+    { text: c.phone || YLHB.phone, options: { color: DECK.WHITE, hyperlink: { url: `tel:${YLHB.phoneRaw}` } } },
+  ], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
+  cy += 0.5;
+  s.addText([
+    { text: "⌂  ", options: { color: DECK.SAGE } },
+    { text: YLHB.site, options: { color: DECK.WHITE, bold: true, hyperlink: { url: YLHB.siteUrl } } },
+  ], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
+
+  s.addText("We work a short buyers list and move quickly — reach out to lock this one up.", { x: 0.6, y: cy + 0.7, w: 12.1, h: 0.5, fontSize: 14, color: DECK.SAGE, align: "center", italic: true });
+  s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}.pptx` });
+}
+
+function BuyerDeckButton({ deal, common }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
+  const [f, setF] = useState({
+    address: common.address || "",
+    contractPrice: common.contractDefault ? String(Math.round(common.contractDefault)) : "",
+    asking: common.askingDefault ? String(Math.round(common.askingDefault)) : "",
+    rent: common.rent ? String(Math.round(common.rent)) : "",
+    name: "", phone: "", email: "",
+  });
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target?.value ?? e }));
+  const missing = ["address", "contractPrice", "asking", "rent"].filter((k) => !String(f[k]).trim());
+
+  function onPhoto(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("Please choose an image file (JPG or PNG)."); return; }
+    const r = new FileReader();
+    r.onload = () => setPhoto(String(r.result));
+    r.readAsDataURL(file);
+  }
+
+  async function go() {
+    if (missing.length) return;
+    setBusy(true);
+    try {
+      await generateBuyerDeck({
+        dealType: deal.type,
+        address: f.address,
+        subjectLine: common.subjectLine,
+        arv: common.arv,
+        asking: num(f.asking),
+        contractPrice: num(f.contractPrice),
+        rent: num(f.rent),
+        photo,
+        headline: deal.headline,
+        dealRows: deal.rows,
+        totalLabel: deal.totalLabel,
+        totalValue: deal.totalValue,
+        verdict: deal.verdict,
+        highlights: deal.highlights,
+        returns: deal.returns,
+        projection: deal.projection,
+        basis: { compCount: common.compCount, avgPpsf: common.avgPpsf, rent: num(f.rent) },
+        exits: deal.exits,
+        contact: { name: f.name, phone: f.phone, email: f.email },
+      });
+      setOpen(false);
+    } catch (e) {
+      alert("Couldn't generate the deck: " + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const req = (k, label, money) => (
+    <div>
+      <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label} <span className="text-rose-500">*</span></label>
+      <div className={`mt-1 flex items-center rounded-lg border bg-white px-3 py-2 ${!String(f[k]).trim() ? "border-rose-300" : "border-slate-200"}`}>
+        {money && <span className="mr-1 text-slate-400">$</span>}
+        <input value={f[k]} onChange={set(k)} className="w-full text-sm outline-none" placeholder={label} />
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)}
+        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
+        <FileDown className="h-4 w-4" /> Download buyer deck (.pptx) — {deal.type}
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setOpen(false)}>
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-1 flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-800">Buyer deck — {deal.type}</h3>
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mb-4 text-[12px] text-slate-500">Confirm the details for the slides. Fields marked <span className="text-rose-500">*</span> are required.</p>
+            <div className="space-y-3">
+              {req("address", "Property address")}
+              <div className="grid grid-cols-2 gap-3">
+                {req("contractPrice", "Contract price", true)}
+                {req("asking", "Asking price", true)}
+              </div>
+              {req("rent", "Monthly rent", true)}
+              <div className="border-t border-slate-100 pt-3">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Property photo for the cover (optional)</div>
+                {photo ? (
+                  <div className="flex items-center gap-3">
+                    <img src={photo} alt="cover" className="h-16 w-24 rounded-md object-cover" />
+                    <button onClick={() => setPhoto(null)} className="text-[12px] font-semibold text-rose-500 hover:underline">Remove</button>
+                  </div>
+                ) : (
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-3 text-[12px] font-semibold text-slate-500 hover:bg-slate-50">
+                    <FileDown className="h-4 w-4" /> Choose a photo (JPG/PNG)
+                    <input type="file" accept="image/*" onChange={onPhoto} className="hidden" />
+                  </label>
+                )}
+                <div className="mt-1 text-[10px] text-slate-400">No photo? The cover falls back to a clean branded YLHB title card with the address.</div>
+              </div>
+              <div className="border-t border-slate-100 pt-3">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Contact for the CTA slide (optional)</div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <input value={f.name} onChange={set("name")} placeholder="Name" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                  <input value={f.phone} onChange={set("phone")} placeholder="Phone" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                  <input value={f.email} onChange={set("email")} placeholder="Email" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
+                </div>
+              </div>
+            </div>
+            {missing.length > 0 && <div className="mt-3 text-[11px] text-rose-500">Fill in: {missing.map((m) => ({ address: "address", contractPrice: "contract price", asking: "asking price", rent: "monthly rent" }[m])).join(", ")}.</div>}
+            <button onClick={go} disabled={busy || missing.length > 0}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
+              {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Building deck…</> : <><FileDown className="h-4 w-4" /> Generate PowerPoint</>}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -929,66 +1334,73 @@ const CRow = ({ label, a, b, muted }) => (
   </tr>
 );
 
-// ---------- shared: "what if we wholesaled this" panel ----------
-function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel }) {
+// ---------- shared: "wholesale this creative contract" panel ----------
+function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel, financingValue = 0 }) {
   const [feeInput, setFeeInput] = useState("");
-  const band = arv >= 200000 ? num(overPct) : num(underPct);
-  const cashMao = arv * (band / 100) - repairs;          // what a cash buyer would pay
-  const fee = num(feeInput);                             // the assignment fee you want to earn
-  const maxContract = cashMao - fee;                     // most you can contract at to keep that fee
-  const availableSpread = dealCost > 0 ? cashMao - dealCost : 0; // fee you'd actually clear at the deal's basis
-  const works = fee > 0 && maxContract >= dealCost;      // can you offer at/above the deal's basis and still hit your fee?
+  const fee = num(feeInput);                                   // assignment fee you want to charge the next buyer
+  const haveDeal = arv > 0 && dealCost > 0;
+  const equity = haveDeal ? arv - repairs - dealCost : 0;      // hard spread you created by locking it up creative
+  const finVal = Math.max(0, financingValue || 0);             // soft value of the below-market loan (PV)
+  const totalValue = equity + finVal;                          // what the deal is really worth to a creative buyer
+  const buyerKeeps = totalValue - fee;                         // value the assignee inherits after paying your fee
+  const CUSHION = 5000;                                        // a little value we want to leave the buyer
 
-  let tone = "default", note = "Enter the wholesale fee you want to earn, and this shows the most you could contract at.";
-  if (arv <= 0) { note = "Set the ARV up top to compare a wholesale exit."; }
-  else if (fee > 0) {
-    if (dealCost <= 0) {
-      tone = "good";
-      note = `To earn your ${usd(fee)} fee, contract at up to ${usd(maxContract)} and assign at the ${usd(cashMao)} cash buyer MAO.`;
-    } else if (maxContract >= dealCost) {
-      tone = "good";
-      note = `You can clear your ${usd(fee)} fee — offer the seller up to ${usd(maxContract)}. That's at or above this deal's ${usd(dealCost)} basis, so the wholesale works.`;
-    } else if (availableSpread > 0) {
-      tone = "warn";
-      note = `To earn ${usd(fee)} you'd have to contract at ${usd(maxContract)} — below this deal's ${usd(dealCost)} basis. The most you'd realistically clear here is ~${usd(availableSpread)}.`;
-    } else {
-      tone = "bad";
-      note = `No wholesale room — the cash buyer MAO (${usd(cashMao)}) is at or below this deal's ${usd(dealCost)} basis. Keep it creative.`;
-    }
+  let tone = "default", note = "Lock in the deal numbers above, then enter the assignment fee you'd charge to hand this creative contract to another investor.";
+  if (arv <= 0) { note = "Set the ARV up top to see what this creative deal could assign for."; }
+  else if (!haveDeal) { note = "Fill in this deal's price/basis above to see the value you've created and what it could assign for."; }
+  else if (totalValue <= 0) {
+    tone = "warn";
+    note = `Not much to assign here — there's no equity and the rate isn't below market, so there's little value to carve a fee from. The deal would have to sell on cash flow alone.`;
+  } else if (fee <= 0) {
+    tone = "default";
+    note = `You've created ${usd(totalValue)} of total value: ${usd(equity)} equity + ${usd(finVal)} from the below-market financing. Enter the fee you'd charge to assign it and you'll see what's left for the buyer.`;
+  } else if (buyerKeeps >= CUSHION) {
+    tone = "good";
+    note = `Assignable — ${usd(totalValue)} of total value (${usd(equity)} equity + ${usd(finVal)} from the cheap loan). Charge your ${usd(fee)} fee and the next investor still inherits ${usd(buyerKeeps)} in value plus the cash flow. The lower the rate, the more room you have here.`;
+  } else if (buyerKeeps > 0) {
+    tone = "warn";
+    note = `Tight — your ${usd(fee)} fee leaves the buyer only ${usd(buyerKeeps)} of value. They may still take it for the terms and cash flow, but don't get greedy or it won't move.`;
+  } else {
+    tone = "bad";
+    note = `Your ${usd(fee)} fee is more than the ${usd(totalValue)} of total value in the deal. A buyer would be paying you for a deal with no cushion left — trim the fee to leave them room.`;
   }
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-1 flex items-center gap-2">
         <RefreshCw className="h-4 w-4 text-slate-400" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">If you wholesaled this instead</h3>
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">If you wholesaled this creative contract</h3>
       </div>
+      <p className="mb-3 text-[11px] text-slate-400">Assign this deal to another investor for a fee — they inherit the terms, you collect the spread. Value = equity + what the below-market loan is worth.</p>
       <div className="mb-3">
         <Field
-          label="Your wholesale fee"
-          hint="the assignment fee you want to earn"
-          info="Type the fee you want to make wholesaling this. The panel works backward to show the most you could put the property under contract for (Cash buyer MAO − your fee), and whether that beats this deal's basis."
+          label="Your assignment fee"
+          hint="the fee to hand off this contract"
+          info="What you'd charge another investor to take over this creative contract. It comes out of the total value you created — equity PLUS the present value of the below-market rate. The lower the rate, the more financing value, the bigger the fee the deal can carry."
         >
           <MoneyInput value={feeInput} onChange={setFeeInput} placeholder={num(wholesaleFee) > 0 ? String(Math.round(num(wholesaleFee))) : "e.g. 10000"} />
         </Field>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Cash buyer MAO" value={usd(cashMao)} sub={`ARV × ${band}% − repairs`} />
-        <Stat label="Max contract price" value={fee > 0 ? usd(maxContract) : "—"} tone={fee > 0 && dealCost > 0 ? (works ? "good" : "bad") : "default"} sub="Cash MAO − your fee" />
-        <Stat label={costLabel} value={dealCost > 0 ? usd(dealCost) : "—"} sub="this deal's basis" />
+        <Stat label="Equity in the deal" value={haveDeal ? usd(equity) : "—"} tone={haveDeal ? (equity > 0 ? "good" : "warn") : "default"} sub="ARV − repairs − basis" />
+        <Stat label="Financing value" value={haveDeal ? usd(finVal) : "—"} tone={finVal > 0 ? "good" : "default"} sub="PV of the low rate" />
+        <Stat label="Total deal value" value={haveDeal ? usd(totalValue) : "—"} tone={totalValue > 0 ? "good" : "default"} big sub="equity + financing" />
       </div>
+      {haveDeal && fee > 0 && (
+        <div className="mt-3">
+          <Stat label="Buyer keeps after your fee" value={usd(buyerKeeps)} tone={buyerKeeps >= CUSHION ? "good" : buyerKeeps > 0 ? "warn" : "bad"} sub="total value − your fee" />
+        </div>
+      )}
       <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
         {note}
       </div>
+      <div className="mt-2 text-[10px] text-slate-400">Financing value is "soft" — realized over time as lower payments/higher cash flow, not cash in hand like equity. Adjust the rate sliders in Rate Savings below to see it move.</div>
     </div>
   );
 }
 
 // ---------- shared: rate-savings explorer ----------
-function RateSavings({ loanAmount, defaultRate = 4, defaultTerm = 30 }) {
-  const [rate, setRate] = useState(defaultRate);
-  const [term, setTerm] = useState(defaultTerm);
-  const [mkt, setMkt] = useState(7.5);
+function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) {
   const P = loanAmount;
   const payDeal = pmt(P, rate, term);
   const payMkt = pmt(P, mkt, term);
@@ -996,6 +1408,7 @@ function RateSavings({ loanAmount, defaultRate = 4, defaultTerm = 30 }) {
   const intMkt = Math.max(0, payMkt * term * 12 - P);
   const lifeSavings = Math.max(0, intMkt - intDeal);
   const moSavings = Math.max(0, payMkt - payDeal);
+  const finValue = pvSavings(P, rate, mkt, term); // worth of the cheap loan today
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1032,10 +1445,13 @@ function RateSavings({ loanAmount, defaultRate = 4, defaultTerm = 30 }) {
           </div>
           {/* savings */}
           <div className="space-y-3">
-            <Stat label="Lifetime interest savings" value={usd(lifeSavings)} tone="good" big sub={`vs ${mkt.toFixed(2)}% market over ${term} yrs`} />
+            <Stat label="Financing value today" value={usd(finValue)} tone="good" big sub={`PV of the rate edge vs ${mkt.toFixed(2)}% market`} />
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Your payment" value={usd(payDeal)} sub={`P&I @ ${rate.toFixed(2)}%`} />
               <Stat label="Monthly savings" value={usd(moSavings)} tone={moSavings > 0 ? "good" : "default"} sub="vs market pmt" />
+              <Stat label="Lifetime interest saved" value={usd(lifeSavings)} sub={`over ${term} yrs`} />
+            </div>
+            <div className="rounded-lg bg-emerald-50/60 px-3 py-2 text-[11px] text-emerald-700">
+              That <b>{usd(finValue)}</b> is what this below-market loan is worth in today's dollars — it feeds the deal value in the wholesale panel above.
             </div>
           </div>
         </div>
@@ -1049,15 +1465,84 @@ function RateSavings({ loanAmount, defaultRate = 4, defaultTerm = 30 }) {
 }
 
 
+// ---------- shared: amortization breakdown (interest-heavy early → principal-heavy later) ----------
+function AmortBreakdown({ loanAmount, rate, term }) {
+  const [year, setYear] = useState(1);
+  const P = loanAmount;
+  const m = rate / 100 / 12;
+  const M = pmt(P, rate, term);
+  const yr = Math.min(Math.max(1, year), term);
+  const startBal = balanceAt(P, rate, term, yr - 1);   // balance at the start of year `yr`
+  const interest = m > 0 ? startBal * m : 0;            // first month of that year
+  const principal = Math.max(0, M - interest);
+  const pctPrin = M > 0 ? (principal / M) * 100 : 0;
+  const pctInt = M > 0 ? (interest / M) * 100 : 0;
+  const endBal = balanceAt(P, rate, term, yr);
+
+  // year principal first overtakes interest
+  let crossover = 0;
+  for (let y = 1; y <= term; y++) {
+    const b = balanceAt(P, rate, term, y - 1);
+    const i = m > 0 ? b * m : 0;
+    if (M - i > i) { crossover = y; break; }
+  }
+
+  if (P <= 0) return null;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-1 flex items-center gap-2">
+        <Layers className="h-4 w-4 text-slate-400" />
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Where the payment goes — interest vs principal</h3>
+      </div>
+      <p className="mb-3 text-[11px] text-slate-400">Early on, a mortgage is almost all interest. Slide through the years to see the payment shift toward principal as the loan matures.</p>
+
+      <div className="grid gap-5 md:grid-cols-2">
+        <div>
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Year of the loan</span>
+            <span className="font-mono text-lg font-bold tabular-nums text-slate-900">Yr {yr} <span className="text-slate-400">/ {term}</span></span>
+          </div>
+          <input type="range" min={1} max={term} step={1} value={yr} onChange={(e) => setYear(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+          <div className="mt-4 text-[11px] text-slate-400">Monthly payment <span className="font-mono text-slate-700">{usd(M)}</span> · balance now <span className="font-mono text-slate-700">{usd(startBal)}</span></div>
+          {/* split bar */}
+          <div className="mt-2 flex h-5 w-full overflow-hidden rounded-md">
+            <div className="flex items-center justify-center bg-emerald-500 text-[9px] font-bold text-white" style={{ width: `${Math.max(4, pctPrin)}%` }}>{pctPrin >= 12 ? "PRINCIPAL" : ""}</div>
+            <div className="flex items-center justify-center bg-slate-300 text-[9px] font-bold text-slate-600" style={{ width: `${Math.max(4, pctInt)}%` }}>{pctInt >= 12 ? "INTEREST" : ""}</div>
+          </div>
+        </div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Stat label="To principal" value={usd(principal)} tone="good" sub={`${pctPrin.toFixed(0)}% of payment`} />
+            <Stat label="To interest" value={usd(interest)} sub={`${pctInt.toFixed(0)}% of payment`} />
+          </div>
+          <Stat label="Balance after year" value={usd(endBal)} sub={`paid down ${usd(startBal - endBal)} this year`} />
+        </div>
+      </div>
+      <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+        {rate === 0
+          ? <>At 0% every dollar hits principal — the whole payment pays down the loan from day one.</>
+          : crossover > 0
+            ? <>At year <b>{yr}</b>, <b>{pctPrin.toFixed(0)}%</b> of the payment goes to principal. Principal first overtakes interest around <b>year {crossover}</b> of this {term}-year loan — that's why a low rate (or carrying a loan you assumed years ago) is so powerful.</>
+            : <>Most of this payment is still interest at year {yr}.</>}
+      </div>
+    </div>
+  );
+}
+
 // ---------- SUB-TO ----------
 function SubToTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
   const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent);
   const reserves = rent * (num(stReservePct) / 100);
   const cashIn = cashSeller + arrears + closing;
   const cashFlow = rent - piti - reserves;
   const equity = arv - (bal + cashSeller + arrears);
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  // shared rate-savings inputs (feed both Rate Savings + the creative-wholesale value)
+  const [rsRate, setRsRate] = useState(4);
+  const [rsTerm, setRsTerm] = useState(30);
+  const [rsMkt, setRsMkt] = useState(7.5);
+  const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
   let status = "maybe", headline = "Enter rent & PITI to grade", detail = "";
   if (rent > 0 && piti > 0) {
     if (cashFlow >= 200 && equity > 0) { status = "go"; headline = "STRONG sub-to"; detail = `${usd(cashFlow)}/mo cash flow and ${usd(equity)} captured equity over the loan.`; }
@@ -1090,8 +1575,35 @@ function SubToTab(props) {
         </div>
       </div>
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
-        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" />
-      <RateSavings loanAmount={bal} defaultRate={4} defaultTerm={30} />
+        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} />
+      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} />
+      <AmortBreakdown loanAmount={bal} rate={rsRate} term={rsTerm} />
+      <BuyerDeckButton
+        common={{ ...deckCommon, contractDefault: bal + cashSeller + arrears }}
+        deal={{
+          type: "Subject-To",
+          headline: `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
+          highlights: [
+            cashFlow > 0 ? `${usd(cashFlow)}/mo in positive cash flow from day one` : null,
+            equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
+            finValue > 0 ? `${usd(finValue)} of value from the assumed below-market loan` : null,
+            "Take over the seller's existing financing — no new bank loan or qualifying",
+            rent > 0 ? `Rents for about ${usd(rent)}/mo` : null,
+          ],
+          rows: [
+            ["Existing loan balance", usd(bal)],
+            ["Inherited payment (PITI)", usd(piti) + "/mo"],
+            ["Cash to seller", usd(cashSeller)],
+            ["Monthly cash flow", usd(cashFlow)],
+            ["Equity captured", usd(equity)],
+            ["Financing value (low rate)", usd(finValue)],
+          ],
+          totalLabel: "Total deal value",
+          totalValue: usd(Math.max(0, equity) + finValue),
+          verdict: detail,
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: cashIn, coc }),
+        }}
+      />
       <TabEducation id="subto" />
     </div>
   );
@@ -1099,7 +1611,7 @@ function SubToTab(props) {
 
 // ---------- HYBRID ----------
 function HybridTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
   const price = num(hyPrice), down = num(hyDown), bal = num(hyBal), piti = num(hyPiti), rent = num(hyRent), closing = num(hyClosing);
   const note = Math.max(0, price - bal - down);
   const notePay = pmt(note, num(hyRate), num(hyTerm));
@@ -1109,6 +1621,10 @@ function HybridTab(props) {
   const cashIn = down + closing;
   const equity = arv - price;
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const [rsRate, setRsRate] = useState(4);
+  const [rsTerm, setRsTerm] = useState(30);
+  const [rsMkt, setRsMkt] = useState(7.5);
+  const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
   let status = "maybe", headline = "Enter price, loan & rent to grade", detail = "";
   if (price > 0 && rent > 0) {
     if (cashFlow >= 200 && equity >= 0) { status = "go"; headline = "STRONG hybrid"; detail = `Sub-to keeps the low-rate ${usd(bal)} loan clean; ${usd(note)} seller note on top. ${usd(cashFlow)}/mo.`; }
@@ -1145,8 +1661,35 @@ function HybridTab(props) {
         </div>
       </div>
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
-        dealCost={price} costLabel="Hybrid purchase price" />
-      <RateSavings loanAmount={bal} defaultRate={4} defaultTerm={30} />
+        dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} />
+      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} />
+      <AmortBreakdown loanAmount={bal} rate={rsRate} term={rsTerm} />
+      <BuyerDeckButton
+        common={{ ...deckCommon, contractDefault: price }}
+        deal={{
+          type: "Hybrid",
+          headline: `Hybrid · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
+          highlights: [
+            cashFlow > 0 ? `${usd(cashFlow)}/mo in positive cash flow` : null,
+            equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
+            finValue > 0 ? `${usd(finValue)} of value from the assumed low-rate first loan` : null,
+            "Low-rate loan taken subject-to, seller carries the rest — minimal cash in",
+            rent > 0 ? `Rents for about ${usd(rent)}/mo` : null,
+          ],
+          rows: [
+            ["Purchase price", usd(price)],
+            ["Sub-to loan (low rate)", usd(bal)],
+            ["Seller note", usd(note)],
+            ["Total monthly debt", usd(totalMonthly)],
+            ["Monthly cash flow", usd(cashFlow)],
+            ["Equity captured", usd(equity)],
+          ],
+          totalLabel: "Total deal value",
+          totalValue: usd(Math.max(0, equity) + finValue),
+          verdict: detail,
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: cashIn, coc }),
+        }}
+      />
       <TabEducation id="hybrid" />
     </div>
   );
@@ -1154,7 +1697,7 @@ function HybridTab(props) {
 
 // ---------- SELLER FINANCE ----------
 function SellerFinanceTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
   const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns), rent = num(sfRent);
   const loan = Math.max(0, price - down);
   const pi = pmt(loan, num(sfRate), num(sfAmort));
@@ -1166,6 +1709,11 @@ function SellerFinanceTab(props) {
   const totalInterest = pi * num(sfAmort) * 12 - loan;
   const equity = arv - price;
   const coc = down > 0 ? ((cashFlow * 12) / down) * 100 : 0;
+  // seller-finance terms ARE the loan terms — seed the shared rate inputs from them
+  const [rsRate, setRsRate] = useState(num(sfRate) || 4);
+  const [rsTerm, setRsTerm] = useState(num(sfAmort) || 30);
+  const [rsMkt, setRsMkt] = useState(7.5);
+  const finValue = pvSavings(loan, rsRate, rsMkt, rsTerm);
   let status = "maybe", headline = "Enter price & rent to grade", detail = "";
   if (price > 0 && rent > 0) {
     if (cashFlow >= 200) { status = "go"; headline = "STRONG seller-finance"; detail = `${usd(cashFlow)}/mo at ${num(sfRate)}% over ${num(sfAmort)}yr.${balloonYrs ? " Balloon " + usd(balloonBal) + " due yr " + balloonYrs + "." : " No balloon — clean."}`; }
@@ -1201,8 +1749,35 @@ function SellerFinanceTab(props) {
         </div>
       </div>
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
-        dealCost={price} costLabel="Seller-finance price" />
-      <RateSavings loanAmount={loan} defaultRate={num(sfRate) || 4} defaultTerm={num(sfAmort) || 30} />
+        dealCost={price} costLabel="Seller-finance price" financingValue={finValue} />
+      <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} />
+      <AmortBreakdown loanAmount={loan} rate={rsRate} term={rsTerm} />
+      <BuyerDeckButton
+        common={{ ...deckCommon, contractDefault: price }}
+        deal={{
+          type: "Seller Finance",
+          headline: `Seller Finance · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
+          highlights: [
+            cashFlow > 0 ? `${usd(cashFlow)}/mo in positive cash flow` : null,
+            equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
+            num(sfRate) < 7 ? `${usd(finValue)} of value from a ${num(sfRate)}% seller-financed rate vs the market` : null,
+            "Seller-financed — no bank, no qualifying, terms set with the seller",
+            rent > 0 ? `Rents for about ${usd(rent)}/mo` : null,
+          ],
+          rows: [
+            ["Purchase price", usd(price)],
+            ["Down payment", usd(down)],
+            ["Interest rate", `${num(sfRate)}%`],
+            ["Monthly P&I", usd(pi)],
+            ["Monthly cash flow", usd(cashFlow)],
+            ["Equity captured", usd(equity)],
+          ],
+          totalLabel: "Total deal value",
+          totalValue: usd(Math.max(0, equity) + finValue),
+          verdict: detail,
+          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: down, coc }),
+        }}
+      />
       <TabEducation id="sf" />
     </div>
   );

@@ -23,12 +23,12 @@ export default async function handler(req, res) {
 
   // Tuning. Defaults dial the comps in the way we want:
   //  - daysOld=365  → only comps listed/sold within the last 12 months
-  //  - compCount=25 → pull a deep pool so we can filter to ±250 sqft and still have 6 good ones
+  //  - compCount=25 → pull a deep pool so we can filter to ±250 sqft and still have 8 good ones
   const compCount = req.query.compCount || "25";
   const maxRadius = req.query.maxRadius || "";
   const daysOld = req.query.daysOld || "365";
   const sqftBand = Number(req.query.sqftBand || 250);   // ± sq ft vs subject
-  const keepCount = Number(req.query.keepCount || 6);    // how many comps to keep for ARV
+  const keepCount = Number(req.query.keepCount || 8);    // how many comps to keep for ARV
 
   const params = new URLSearchParams({ address, compCount });
   if (maxRadius) params.set("maxRadius", maxRadius);
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     //  1) must have a price and square footage
     //  2) within ±sqftBand (default 250) of the subject's square footage, when we know the subject sqft
     //  3) keep RentCast's correlation order (most similar first)
-    //  4) keep only the top `keepCount` (default 6) for the ARV calc
+    //  4) keep only the top `keepCount` (default 8) for the ARV calc
     const comps = (data.comparables || [])
       .filter((c) => Number(c.price) > 0 && Number(c.squareFootage) > 0)
       .filter((c) => (subjSqft > 0 ? Math.abs(Number(c.squareFootage) - subjSqft) <= sqftBand : true))
