@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search } from "lucide-react";
+import { Home, Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
 const COMP_API = "/api/comp";
+const RENT_API = "/api/rent";
 const AUTOCOMPLETE_API = "/api/autocomplete";
 
 // Google web search link for any address string
@@ -264,6 +265,15 @@ export default function App() {
   ]);
   const [arvOverride, setArvOverride] = useState("");
   const [rentcastArv, setRentcastArv] = useState(null); // RentCast's own AVM, kept as a reference only
+  // --- rental ---
+  const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
+  const [rentLow, setRentLow] = useState(null);
+  const [rentHigh, setRentHigh] = useState(null);
+  const [rentOverride, setRentOverride] = useState(""); // manual rent (wins when set)
+  const [rentLoading, setRentLoading] = useState(false);
+  const [rentMsg, setRentMsg] = useState(null);
+  const [rentFetchedFor, setRentFetchedFor] = useState(""); // address we last pulled rent for (lazy-load guard)
+  const [tab, setTab] = useState("cash");
   const [subjectInfo, setSubjectInfo] = useState(null);
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
@@ -319,14 +329,45 @@ export default function App() {
     }
   }
 
+  // Pull the rent estimate — only fired when the Rental tab is opened (lazy-load),
+  // so address pulls that never touch the Rental tab stay at 1 RentCast credit.
+  async function fetchRent(addr) {
+    const a = (addr || "").trim();
+    if (!a) { setRentMsg({ type: "err", text: "Enter an address up top first, then reopen this tab." }); return; }
+    setRentLoading(true);
+    setRentMsg(null);
+    try {
+      const res = await fetch(`${RENT_API}?address=${encodeURIComponent(a)}`);
+      const data = await res.json();
+      if (!res.ok) { setRentMsg({ type: "err", text: data.error || "Rent lookup failed." }); return; }
+      setRentEst(data.rent || null);
+      setRentLow(data.rentLow || null);
+      setRentHigh(data.rentHigh || null);
+      setRentFetchedFor(a);
+      setRentMsg(data.rent
+        ? { type: "ok", text: `RentCast estimate ${usd(data.rent)}/mo${data.rentLow && data.rentHigh ? ` (range ${usd(data.rentLow)}–${usd(data.rentHigh)})` : ""}. Override below if you have a better number.` }
+        : { type: "err", text: "No rent estimate available — enter rent manually below." });
+    } catch (e) {
+      setRentMsg({ type: "err", text: "Couldn't reach the rent service. Is the proxy deployed?" });
+    } finally {
+      setRentLoading(false);
+    }
+  }
+
+  // Lazy-load: when the Rental tab opens for a fresh address, pull rent once.
+  useEffect(() => {
+    if (tab === "rental" && address.trim() && rentFetchedFor !== address.trim() && !rentLoading) {
+      fetchRent(address);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, address]);
+
   // rehab + MAO %
   const [rehabLevel, setRehabLevel] = useState("moderate");
   const [customPsf, setCustomPsf] = useState("");
   const [repairOverride, setRepairOverride] = useState("");
   const [underPct, setUnderPct] = useState(75); // under $200k band
   const [overPct, setOverPct] = useState(80);    // over $200k band
-
-  const [tab, setTab] = useState("cash");
 
   // cash/mao
   const [wholesaleFee, setWholesaleFee] = useState("10000");
@@ -394,6 +435,10 @@ export default function App() {
     return repairPsf * num(sqft);
   }, [repairPsf, sqft, repairOverride]);
 
+  // ---- rental ----
+  const effRent = num(rentOverride) > 0 ? num(rentOverride) : (rentEst || 0); // override wins
+  const onePctMax = effRent > 0 ? effRent * 100 : 0; // 1% rule: rent >= 1% of price → max price = rent × 100
+
   // ---- cash MAO (both bands) ----
   const ruleMaoUnder = arv * (num(underPct) / 100) - repairs;
   const ruleMaoOver = arv * (num(overPct) / 100) - repairs;
@@ -419,6 +464,7 @@ export default function App() {
     { id: "hybrid", label: "Hybrid", Icon: Layers },
     { id: "sf", label: "Seller Finance", Icon: Banknote },
     { id: "nov", label: "Novation", Icon: RefreshCw },
+    { id: "rental", label: "Rental", Icon: Home },
   ];
 
   return (
@@ -589,6 +635,13 @@ export default function App() {
             <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={num(arvOverride) > 0 ? "manual override" : "avg $/sf × subject sf"} />
             <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
+          {effRent > 0 && (
+            <button onClick={() => setTab("rental")}
+              className="mt-3 flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-left text-[11px] text-slate-500 hover:border-emerald-300 hover:bg-emerald-50/40">
+              <span><Home className="mr-1 inline h-3 w-3 text-emerald-500" /> Est. rent <b className="text-slate-700">{usd(effRent)}/mo</b> · 1% max price <b className="text-slate-700">{usd(onePctMax)}</b></span>
+              <span className="font-semibold text-emerald-600">Rental tab →</span>
+            </button>
+          )}
         </div>
 
         {/* CONTROLS: rehab + MAO bands */}
@@ -681,12 +734,98 @@ export default function App() {
           {tab === "nov" && (
             <NovationTab {...{ novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor }} />
           )}
+          {tab === "rental" && (
+            <RentalTab {...{ rentEst, rentLow, rentHigh, rentOverride, setRentOverride, rentLoading, rentMsg, effRent, address, fetchRent }} />
+          )}
         </div>
 
         <div className="mt-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-slate-400">
           Formulas use standard YLHB methodology (ARV = avg $/sf × sq ft; MAO = ARV × band % − repairs).
           Bands default to 75% under $200k / 80% over, matching your sheet. Estimates only — verify comps and underwriting before offers. Not legal or financial advice.
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- shared: per-tab explainer + free learning links ----------
+const PACE_CHANNEL = "https://www.youtube.com/channel/UCRkUNGepO8YnTFHSj7urWsQ";
+const ytSearch = (q) => `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+
+const EDU = {
+  cash: {
+    title: "Cash / MAO (wholesaling)",
+    what: "A straight cash play. You lock the property under contract at a low enough price that a cash buyer can fix it and flip it — and you pocket the difference as an assignment fee, or buy it yourself.",
+    how: "Start from the ARV (what it's worth fixed up), take 75–80% of it (the band), then subtract repairs and your fee. That's your Max Allowable Offer — the most you can pay and still leave meat on the bone for the next buyer.",
+    analogy: "Like buying wholesale to resell at retail — your profit is baked in at the buy.",
+    videos: [{ label: "Wholesaling basics", q: "pace morby wholesaling for beginners" }, { label: "How to calculate MAO", q: "pace morby maximum allowable offer ARV" }],
+  },
+  subto: {
+    title: "Subject-To (Sub-To)",
+    what: "You buy the house but leave the seller's existing mortgage in place — you take over their payments, while the loan stays in their name. You get the deed; they get out from under the debt.",
+    how: "Gold when the seller has a low locked-in interest rate. You inherit that cheap payment (PITI), cover any back payments, and maybe hand the seller a little cash for their equity. Your money is made on the gap between the rent and that low inherited payment.",
+    analogy: "Like taking over someone's gym membership at last year's rate instead of signing up at today's higher price.",
+    videos: [{ label: "Subject-To explained", q: "pace morby subject to explained" }, { label: "Sub-To from start to finish", q: "pace morby subject to deal walkthrough" }],
+  },
+  hybrid: {
+    title: "Hybrid (Sub-To + Seller Note)",
+    what: "A combo deal: you take over the existing low-rate loan subject-to, AND the seller carries a second note for their equity on top.",
+    how: "The cheap first loan stays in place. The gap between the price and that loan (minus your down) becomes a seller-financed note — often at 0%. You end up with two payments: one cheap and inherited, one to the seller. It gets deals done when the seller needs more than just debt relief.",
+    analogy: "Sub-To handles the bank's loan; the seller note handles the seller's equity — best of both.",
+    videos: [{ label: "The Morby Method", q: "pace morby method hybrid creative finance" }, { label: "Combining sub-to + seller finance", q: "pace morby subto seller finance combo" }],
+  },
+  sf: {
+    title: "Seller Financing",
+    what: "The seller becomes the bank. Instead of paying a mortgage company, you make payments straight to the seller over time, on terms the two of you agree to.",
+    how: "You negotiate the price, down payment, interest rate (often 0% in trade for a higher price), how long it amortizes, and whether there's a balloon. No bank, no qualifying. Works best when the seller owns the home free-and-clear.",
+    analogy: "Like a payment plan made directly with the owner — they hold the note, you hold the keys.",
+    videos: [{ label: "Seller finance explained", q: "pace morby seller finance explained" }, { label: "Structuring 0% seller finance", q: "pace morby zero percent seller financing" }],
+  },
+  nov: {
+    title: "Novation",
+    what: "An agreement that lets you improve and re-sell the seller's home for more — you keep the spread between what you promised them and what it sells for, without ever taking title.",
+    how: "You list the (often fixed-up) house at ARV. The buyer's price, minus selling/closing costs, minus your profit, sets the max you can offer the seller. You're not buying it to hold — you're adding value and capturing the resale spread.",
+    analogy: "Like a consignment deal: you don't own it, you just make it worth more and take a cut of the upside.",
+    videos: [{ label: "Novation agreements", q: "pace morby novation agreement real estate" }, { label: "Novation vs wholesaling", q: "pace morby novation vs wholesale" }],
+  },
+  rental: {
+    title: "Rental (Buy-and-Hold + the 1% rule)",
+    what: "Buying a property to keep as a long-term rental for cash flow and appreciation. The 1% rule is a quick screen: the monthly rent should be at least 1% of the purchase price.",
+    how: "Estimate the rent, then divide by your target percentage to get the highest price that still pencils. It's a fast filter to spot cash-flowing deals — but it ignores taxes, insurance, vacancy, and management, so always underwrite the real numbers before you commit.",
+    analogy: "The 1% rule is a metal detector, not a shovel — it tells you where to dig, not that there's treasure.",
+    videos: [{ label: "Buy-and-hold rentals", q: "pace morby buy and hold rental" }, { label: "The 1% rule explained", q: "1 percent rule rental property explained" }],
+  },
+};
+
+function TabEducation({ id }) {
+  const e = EDU[id];
+  if (!e) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Info className="h-4 w-4 text-emerald-500" />
+        <h3 className="text-sm font-bold text-slate-700">What is {e.title}?</h3>
+      </div>
+      <p className="text-[13px] leading-relaxed text-slate-600">{e.what}</p>
+      <p className="mt-2 text-[13px] leading-relaxed text-slate-600"><b className="font-semibold text-slate-700">How it works:</b> {e.how}</p>
+      {e.analogy && (
+        <p className="mt-2 rounded-lg bg-white px-3 py-2 text-[12px] italic leading-relaxed text-slate-500">💡 {e.analogy}</p>
+      )}
+      <div className="mt-3">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Learn more — free Pace Morby videos</div>
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          {e.videos.map((v, k) => (
+            <a key={k} href={ytSearch(v.q)} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:border-rose-300 hover:text-rose-600">
+              <Play className="h-3 w-3 text-rose-500" /> {v.label} <ExternalLink className="h-2.5 w-2.5 text-slate-300" />
+            </a>
+          ))}
+          <a href={PACE_CHANNEL} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-50">
+            Pace Morby's channel <ExternalLink className="h-2.5 w-2.5 text-slate-300" />
+          </a>
+        </div>
+        <div className="mt-1.5 text-[10px] text-slate-400">Links open a YouTube search of Pace Morby's content on the topic — always current, never a dead link.</div>
       </div>
     </div>
   );
@@ -778,6 +917,7 @@ function CashTab(props) {
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
         </div>
       </div>
+      <TabEducation id="cash" />
     </div>
   );
 }
@@ -952,6 +1092,7 @@ function SubToTab(props) {
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" />
       <RateSavings loanAmount={bal} defaultRate={4} defaultTerm={30} />
+      <TabEducation id="subto" />
     </div>
   );
 }
@@ -1006,6 +1147,7 @@ function HybridTab(props) {
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
         dealCost={price} costLabel="Hybrid purchase price" />
       <RateSavings loanAmount={bal} defaultRate={4} defaultTerm={30} />
+      <TabEducation id="hybrid" />
     </div>
   );
 }
@@ -1061,6 +1203,7 @@ function SellerFinanceTab(props) {
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
         dealCost={price} costLabel="Seller-finance price" />
       <RateSavings loanAmount={loan} defaultRate={num(sfRate) || 4} defaultTerm={num(sfAmort) || 30} />
+      <TabEducation id="sf" />
     </div>
   );
 }
@@ -1105,6 +1248,91 @@ function NovationTab(props) {
           <Stat label="Novation Max Allowable Offer" value={usd(mao)} tone={mao > 0 ? "good" : "bad"} big sub="net − desired profit" />
         </div>
       </div>
+      <TabEducation id="nov" />
+    </div>
+  );
+}
+// ---------- RENTAL ----------
+function RentalTab({ rentEst, rentLow, rentHigh, rentOverride, setRentOverride, rentLoading, rentMsg, effRent, address, fetchRent }) {
+  const [targetPct, setTargetPct] = useState(1);   // the rule % you want to hit (1% default)
+  const [price, setPrice] = useState("");          // a contract price to grade
+
+  const maxPrice = effRent > 0 && targetPct > 0 ? effRent / (targetPct / 100) : 0; // price that hits the target %
+  const p = num(price);
+  const actualPct = p > 0 && effRent > 0 ? (effRent / p) * 100 : 0;
+  const passes = actualPct >= targetPct;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* Estimated rent */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <SectionTitle>Estimated rent</SectionTitle>
+            <button onClick={() => fetchRent(address)} disabled={rentLoading || !address.trim()}
+              className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+              {rentLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} refresh
+            </button>
+          </div>
+          {rentLoading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> Pulling rent for this address…</div>
+          ) : effRent > 0 ? (
+            <div className="mt-1 grid grid-cols-2 gap-3">
+              <Stat label="Monthly rent" value={usd(effRent)} tone="good" big sub={num(rentOverride) > 0 ? "your override" : "RentCast estimate"} />
+              <Stat label="Estimate range" value={rentLow && rentHigh ? `${usd(rentLow)}–${usd(rentHigh)}` : "—"} sub="RentCast low–high" />
+            </div>
+          ) : (
+            <div className="py-3 text-sm text-slate-400">{address.trim() ? "No estimate yet — hit refresh, or enter rent below." : "Auto-comp an address up top first, then come back."}</div>
+          )}
+          <div className="mt-3">
+            <Field label="Override rent (monthly)" hint="wins over the estimate">
+              <MoneyInput value={rentOverride} onChange={setRentOverride} placeholder={rentEst ? String(rentEst) : "your number"} />
+            </Field>
+          </div>
+          {rentMsg && (
+            <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${rentMsg.type === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>{rentMsg.text}</div>
+          )}
+        </div>
+
+        {/* 1% rule → max price */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <SectionTitle>The 1% rule — what to buy it for</SectionTitle>
+          <div className="mt-1">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Target rule</span>
+              <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{targetPct.toFixed(2)}%</span>
+            </div>
+            <input type="range" min={0.5} max={1.5} step={0.05} value={targetPct} onChange={(e) => setTargetPct(parseFloat(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+            <div className="flex justify-between text-[10px] text-slate-400"><span>0.50%</span><span>1.00%</span><span>1.50%</span></div>
+          </div>
+          <div className="mt-3">
+            <Stat label="Max purchase price" value={effRent > 0 ? usd(maxPrice) : "—"} tone={effRent > 0 ? "good" : "default"} big sub={`to hit ${targetPct.toFixed(2)}% on ${usd(effRent)}/mo`} />
+          </div>
+          <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+            {effRent > 0
+              ? <>Buy at or under <b className="text-slate-700">{usd(maxPrice)}</b> and this rents at the <b>{targetPct.toFixed(2)}%</b> rule. Slide the target to see how the max price moves.</>
+              : <>Set a rent above to see the max purchase price.</>}
+          </div>
+        </div>
+      </div>
+
+      {/* Grade a contract price */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <SectionTitle>Grade a contract price</SectionTitle>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Your contract price" info="Type what you'd put it under contract for. The right side shows the rent-to-price ratio and whether it clears your target rule.">
+            <MoneyInput value={price} onChange={setPrice} placeholder={maxPrice > 0 ? String(Math.round(maxPrice)) : "your price"} />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Stat label="Rent-to-price" value={p > 0 && effRent > 0 ? `${actualPct.toFixed(2)}%` : "—"} tone={p > 0 ? (passes ? "good" : "bad") : "default"} sub={`target ${targetPct.toFixed(2)}%`} />
+            <Stat label="Verdict" value={p > 0 && effRent > 0 ? (passes ? "Passes" : "Below") : "—"} tone={p > 0 ? (passes ? "good" : "bad") : "default"} sub={p > 0 && effRent > 0 ? (passes ? `clears ${targetPct.toFixed(2)}%` : `under by ${(targetPct - actualPct).toFixed(2)}%`) : "enter a price"} />
+          </div>
+        </div>
+        <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-400">
+          Heads-up: the 1% rule is a fast screen, not the whole story. It ignores taxes, insurance, vacancy, and management. Use it to filter, then underwrite the cash flow before you commit.
+        </div>
+      </div>
+      <TabEducation id="rental" />
     </div>
   );
 }
