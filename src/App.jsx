@@ -762,7 +762,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault: effRent, deckCommon }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -1029,7 +1029,124 @@ async function generateBuyerDeck(data) {
   await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}.pptx` });
 }
 
-function BuyerDeckButton({ deal, common }) {
+// Dual-exit deck: shows the SAME deal as both a Fix & Flip and a BRRRR hold, so the buyer picks their lane.
+async function generateDualDeck(data) {
+  const PptxGenJS = await loadPptx();
+  const logo = await getLogoData();
+  const pptx = new PptxGenJS();
+  pptx.defineLayout({ name: "W", width: 13.333, height: 7.5 });
+  pptx.layout = "W";
+  pptx.author = "Your Local Home Buyer";
+  pptx.company = "Your Local Home Buyer";
+  const addLogo = (s, x, y, w) => { if (logo) s.addImage({ data: logo, x, y, w, h: w * 0.59 }); };
+  const header = (slide, title) => {
+    slide.background = { color: DECK.PAPER };
+    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 1.1, fill: { color: DECK.FOREST } });
+    slide.addText(title, { x: 0.6, y: 0.28, w: 10.4, h: 0.6, fontSize: 26, color: DECK.WHITE, bold: true });
+    addLogo(slide, 11.3, 0.2, 1.45);
+  };
+  const kv = (rows) => rows.map((r) => [{ text: r[0], options: { bold: true, color: DECK.FOREST } }, { text: r[1], options: { align: "right", color: DECK.INK } }]);
+  const tableOpts = { fontSize: 14, color: DECK.INK, rowH: 0.55, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } };
+  const bullets = (arr, accent) => (arr || []).filter(Boolean).map((t) => ({ text: t, options: { bullet: { code: "2022", indent: 14 }, fontSize: 13, color: DECK.INK, paraSpaceAfter: 7 } }));
+
+  // Slide 1 — cover
+  let s = pptx.addSlide();
+  const headline = "Two ways to win — Fix & Flip or BRRRR";
+  if (data.photo) {
+    s.background = { color: DECK.INK };
+    try { s.addImage({ data: data.photo, x: 0, y: 0, w: 13.333, h: 5.1, sizing: { type: "cover", w: 13.333, h: 5.1 } }); } catch {}
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 5.1, w: 13.333, h: 2.4, fill: { color: DECK.FOREST } });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.35, w: 13.333, h: 0.15, fill: { color: DECK.ORANGE } });
+    addLogo(s, 11.1, 5.32, 1.6);
+    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 5.3, w: 10, h: 0.4, fontSize: 14, color: DECK.SAGE, bold: true, charSpacing: 3 });
+    s.addText(data.address || "Property address", { x: 0.6, y: 5.7, w: 10.3, h: 0.9, fontSize: 30, color: DECK.WHITE, bold: true });
+    s.addText(headline, { x: 0.6, y: 6.7, w: 11, h: 0.5, fontSize: 16, color: DECK.SAGE });
+  } else {
+    s.background = { color: DECK.FOREST };
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.7, w: 13.333, h: 0.8, fill: { color: DECK.ORANGE } });
+    addLogo(s, 0.6, 0.5, 2.3);
+    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 2.5, w: 12.1, h: 0.5, fontSize: 16, color: DECK.SAGE, bold: true, charSpacing: 3 });
+    s.addText(data.address || "Property address", { x: 0.6, y: 3.0, w: 12.1, h: 1.2, fontSize: 38, color: DECK.WHITE, bold: true });
+    s.addText(headline, { x: 0.6, y: 4.35, w: 12.1, h: 0.6, fontSize: 18, color: DECK.SAGE });
+  }
+
+  // Slide 2 — property
+  s = pptx.addSlide(); header(s, "The Property");
+  const propRows = [["Address", data.address || "—"]];
+  if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
+  propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
+  propRows.push(["Asking price", data.asking ? usd(data.asking) : "—"]);
+  propRows.push(["Contract price", data.contractPrice ? usd(data.contractPrice) : "—"]);
+  propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
+  s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts, rowH: 0.6, fontSize: 15 });
+  const bz = data.basis || {};
+  if (bz.compCount > 0) s.addText(`ARV backed by ${bz.compCount} recent sold comp${bz.compCount > 1 ? "s" : ""}${bz.avgPpsf > 0 ? ` averaging ${usd(bz.avgPpsf)}/sq ft` : ""}.`, { x: 0.6, y: 6.4, w: 12.1, h: 0.4, fontSize: 12, color: DECK.FOREST, italic: true });
+  s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
+
+  // Slide 3 — two ways to win (the hero comparison)
+  s = pptx.addSlide(); header(s, "Two ways to win");
+  // Flip card
+  s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 1.45, w: 5.9, h: 4.9, fill: { color: DECK.WHITE }, line: { color: DECK.ORANGE, width: 2 }, rectRadius: 0.1 });
+  s.addText("OPTION A — FIX & FLIP", { x: 0.85, y: 1.7, w: 5.4, h: 0.4, fontSize: 15, color: DECK.ORANGE, bold: true });
+  s.addText([{ text: "Profit potential\n", options: { fontSize: 12, color: "6B7A6F" } }, { text: data.flip.profitStr, options: { fontSize: 30, color: DECK.INK, bold: true } }], { x: 0.85, y: 2.15, w: 5.4, h: 1.1, valign: "top" });
+  s.addText(bullets(data.flip.bullets), { x: 0.95, y: 3.35, w: 5.3, h: 2.85, valign: "top" });
+  // BRRRR card
+  s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 1.45, w: 5.9, h: 4.9, fill: { color: DECK.WHITE }, line: { color: DECK.FOREST, width: 2 }, rectRadius: 0.1 });
+  s.addText("OPTION B — BRRRR (HOLD)", { x: 7.1, y: 1.7, w: 5.4, h: 0.4, fontSize: 15, color: DECK.FOREST, bold: true });
+  s.addText([{ text: "Cash flow & DSCR\n", options: { fontSize: 12, color: "6B7A6F" } }, { text: data.brrrr.headlineStr, options: { fontSize: 24, color: DECK.FOREST, bold: true } }], { x: 7.1, y: 2.15, w: 5.4, h: 1.1, valign: "top" });
+  s.addText(bullets(data.brrrr.bullets), { x: 7.2, y: 3.35, w: 5.3, h: 2.85, valign: "top" });
+  s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+
+  // Slide 4 — Option A detail (flip)
+  s = pptx.addSlide(); header(s, "Option A — Fix & Flip");
+  s.addTable(kv(data.flip.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
+  s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.ORANGE }, rectRadius: 0.1 });
+  s.addText([{ text: "PROFIT POTENTIAL\n", options: { fontSize: 13, color: DECK.WHITE, bold: true } }, { text: data.flip.profitStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
+  if (data.flip.note) s.addText(data.flip.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
+
+  // Slide 5 — Option B detail (BRRRR)
+  s = pptx.addSlide(); header(s, "Option B — BRRRR (Hold)");
+  s.addTable(kv(data.brrrr.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
+  s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
+  s.addText([{ text: "CASH-ON-CASH\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: data.brrrr.cocStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
+  if (data.brrrr.note) s.addText(data.brrrr.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
+
+  // Slide 6 — 5-year wealth (BRRRR)
+  const P5 = data.brrrr.projection;
+  if (P5 && P5.total5 > 0) {
+    s = pptx.addSlide(); header(s, "BRRRR — 5-Year Wealth Snapshot");
+    const projRows = [
+      ["Equity after rehab (below ARV)", usd(P5.startEquity)],
+      ["Loan paydown (5 yrs)", usd(P5.paydown5)],
+      [`Appreciation (5 yrs @ ${P5.apprRate}%/yr)`, usd(P5.appreciation5)],
+      ["Cumulative cash flow (5 yrs)", usd(P5.cumCF5)],
+    ];
+    s.addTable(kv(projRows), { x: 0.6, y: 1.6, w: 7.9, colW: [5.4, 2.5], ...tableOpts, rowH: 0.7, fontSize: 15 });
+    s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.6, w: 3.8, h: 2.8, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
+    s.addText([{ text: "TOTAL 5-YEAR VALUE\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: usd(P5.total5), options: { fontSize: 30, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 2.2, w: 3.8, h: 1.6, align: "center", valign: "middle" });
+    s.addText("Equity build + paydown + modest appreciation + cash flow. Appreciation is an assumption, not a guarantee.", { x: 0.6, y: 6.6, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
+    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
+  }
+
+  // Slide 7 — CTA
+  s = pptx.addSlide();
+  s.background = { color: DECK.FOREST };
+  addLogo(s, 5.45, 0.7, 2.45);
+  s.addText("Flip it or hold it — either way, let's talk.", { x: 0.6, y: 2.35, w: 12.1, h: 0.8, fontSize: 30, color: DECK.WHITE, bold: true, align: "center" });
+  const c = data.contact || {};
+  let cy = 3.35;
+  if (c.name) { s.addText(c.name, { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 20, color: DECK.SAGE, bold: true, align: "center" }); cy += 0.55; }
+  s.addText([{ text: "✉  ", options: { color: DECK.SAGE } }, { text: YLHB.email, options: { color: DECK.WHITE, hyperlink: { url: `mailto:${YLHB.email}` } } }], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" }); cy += 0.5;
+  s.addText([{ text: "✆  ", options: { color: DECK.SAGE } }, { text: c.phone || YLHB.phone, options: { color: DECK.WHITE, hyperlink: { url: `tel:${YLHB.phoneRaw}` } } }], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" }); cy += 0.5;
+  s.addText([{ text: "⌂  ", options: { color: DECK.SAGE } }, { text: YLHB.site, options: { color: DECK.WHITE, bold: true, hyperlink: { url: YLHB.siteUrl } } }], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
+  s.addText("We work a short buyers list and move quickly — reach out to lock this one up.", { x: 0.6, y: cy + 0.7, w: 12.1, h: 0.5, fontSize: 14, color: DECK.SAGE, align: "center", italic: true });
+  s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+
+  const safe = (data.address || "deal").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
+  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-flip-brrrr.pptx` });
+}
+
+function BuyerDeckButton({ deal, common, generateOverride, label }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
@@ -1056,6 +1173,11 @@ function BuyerDeckButton({ deal, common }) {
     if (missing.length) return;
     setBusy(true);
     try {
+      if (generateOverride) {
+        await generateOverride({ address: f.address, asking: num(f.asking), contractPrice: num(f.contractPrice), rent: num(f.rent), photo, contact: { name: f.name, phone: f.phone, email: f.email } });
+        setOpen(false);
+        return;
+      }
       await generateBuyerDeck({
         dealType: deal.type,
         address: f.address,
@@ -1099,14 +1221,14 @@ function BuyerDeckButton({ deal, common }) {
     <>
       <button onClick={() => setOpen(true)}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
-        <FileDown className="h-4 w-4" /> Download buyer deck (.pptx) — {deal.type}
+        <FileDown className="h-4 w-4" /> {label || `Download buyer deck (.pptx) — ${deal.type}`}
       </button>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setOpen(false)}>
           <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-1 flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-800">Buyer deck — {deal.type}</h3>
+              <h3 className="text-base font-bold text-slate-800">{label || `Buyer deck — ${deal.type}`}</h3>
               <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
             </div>
             <p className="mb-4 text-[12px] text-slate-500">Confirm the details for the slides. Fields marked <span className="text-rose-500">*</span> are required.</p>
@@ -1238,7 +1360,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault, deckCommon } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -1322,6 +1444,27 @@ function CashTab(props) {
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
         </div>
       </div>
+      <BrrrrPanel
+        arv={arv} repairs={repairs} rentDefault={rentDefault} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
+        flipDeck={{
+          profit: num(desiredProfit),
+          buyAt: itemizedMao,
+          rows: [
+            ["After-repair value (ARV)", usd(arv)],
+            ["Estimated rehab", usd(repairs)],
+            [`Selling costs (${num(sellingPct)}% of ARV)`, usd(arv * num(sellingPct) / 100)],
+            ["Holding costs", usd(num(holding))],
+            ["Max offer to hit profit", usd(itemizedMao)],
+          ],
+          bullets: [
+            num(desiredProfit) > 0 ? `~${usd(num(desiredProfit))} profit at ${usd(itemizedMao)} or below` : null,
+            arv > 0 ? `${usd(arv)} after-repair value` : null,
+            repairs > 0 ? `Rehab scoped at about ${usd(repairs)}` : null,
+            "Resell at retail once rehabbed",
+          ],
+          note: `Buy at or below ${usd(itemizedMao)} to clear roughly ${usd(num(desiredProfit))} after costs.`,
+        }}
+      />
       <TabEducation id="cash" />
     </div>
   );
@@ -1333,6 +1476,137 @@ const CRow = ({ label, a, b, muted }) => (
     <td className={`py-1.5 text-right ${muted ? "text-slate-500" : "text-slate-900"}`}>{b}</td>
   </tr>
 );
+
+// ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
+function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, flipDeck }) {
+  const [purchase, setPurchase] = useState("");
+  const [rehab, setRehab] = useState("");
+  const [rent, setRent] = useState("");
+  const [taxIns, setTaxIns] = useState("");
+  const [hoa, setHoa] = useState("");
+  const [ltv, setLtv] = useState("75");
+  const [rate, setRate] = useState("7.5");
+  const [term, setTerm] = useState("30");
+  const [reservePct, setReservePct] = useState("10");
+
+  const buy = num(purchase) > 0 ? num(purchase) : num(purchaseDefault);
+  const fix = num(rehab) > 0 ? num(rehab) : repairs;
+  const rnt = num(rent) > 0 ? num(rent) : num(rentDefault);
+  const allIn = buy + fix;
+  const refiLoan = arv * (num(ltv) / 100);
+  const cashLeftIn = allIn - refiLoan;
+  const pi = pmt(refiLoan, num(rate), num(term));
+  const pitia = pi + num(taxIns) + num(hoa);                 // lender's denominator
+  const dscr = pitia > 0 && rnt > 0 ? rnt / pitia : 0;
+  const reserves = rnt * (num(reservePct) / 100);
+  const trueCF = rnt - pitia - reserves;                      // your real monthly cash flow
+  const annualCF = trueCF * 12;
+  const coc = cashLeftIn > 0 ? (annualCF / cashLeftIn) * 100 : null; // null = all capital recovered
+
+  let dTone = "default", dNote = "Qualifies at standard terms.";
+  if (dscr <= 0) { dTone = "default"; dNote = "Enter rent + PITIA to score the refi."; }
+  else if (dscr >= 1.25) { dTone = "good"; dNote = "Strong — qualifies for the best DSCR rates."; }
+  else if (dscr >= 1.0) { dTone = "good"; dNote = "Qualifies with most DSCR lenders (standard terms)."; }
+  else if (dscr >= 0.75) { dTone = "warn"; dNote = "Thin — needs compensating factors (bigger down, reserves, IO)."; }
+  else { dTone = "bad"; dNote = "Won't cover the payment — most lenders pass below 0.75."; }
+
+  let brrrrLine = "Fill in your buy price and refi terms to see how much capital comes back out.";
+  if (arv > 0 && allIn > 0) {
+    if (cashLeftIn <= 0) brrrrLine = `Full BRRRR — the ${usd(refiLoan)} refi pulls out everything you put in, plus ${usd(-cashLeftIn)} above your basis. Infinite return: all your capital recycles into the next deal.`;
+    else if (cashLeftIn <= 15000) brrrrLine = `Near-full BRRRR — you'd leave just ${usd(cashLeftIn)} in the deal after the ${usd(refiLoan)} refi. Most of your capital comes back out.`;
+    else brrrrLine = `Capital-heavy — ${usd(cashLeftIn)} stays trapped in the deal after refi. Push the buy price down or the rehab leaner to recover more.`;
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-1 flex items-center gap-2">
+        <RefreshCw className="h-4 w-4 text-emerald-500" />
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">BRRRR / DSCR — if you (or your buyer) hold it as a rental</h3>
+      </div>
+      <p className="mb-3 text-[11px] text-slate-400">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Purchase price" hint="your buy price" info="What you'd actually buy it for. Defaults to your Investor MAO above."><MoneyInput value={purchase} onChange={setPurchase} placeholder={num(purchaseDefault) > 0 ? String(Math.round(num(purchaseDefault))) : "e.g. 140000"} /></Field>
+        <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
+        <Field label="Monthly rent" info="Market rent once it's fixed and leased. Grab it from the Rental tab if you've pulled it."><MoneyInput value={rent} onChange={setRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "e.g. 1800"} /></Field>
+        <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator."><MoneyInput value={taxIns} onChange={setTaxIns} placeholder="e.g. 300" /></Field>
+        <Field label="HOA" hint="monthly, if any" info="Monthly HOA / association dues, if the property has them. Also part of PITIA."><MoneyInput value={hoa} onChange={setHoa} /></Field>
+        <Field label="Reserves" hint="% of rent" info="Vacancy + maintenance + management set-aside. NOT part of the lender's DSCR, but real money — used here for your true cash flow."><PlainInput value={reservePct} onChange={setReservePct} suffix="%" /></Field>
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <Field label="Refi LTV" hint="% of ARV" info="Cash-out refinances on rentals typically max out around 70–75% of the after-repair value."><PlainInput value={ltv} onChange={setLtv} suffix="%" /></Field>
+        <Field label="Refi rate" hint="%" info="DSCR loan rates run ~6–7.5% right now. Higher than owner-occupied — these are investor loans."><PlainInput value={rate} onChange={setRate} suffix="%" /></Field>
+        <Field label="Refi term" hint="years" info="Almost always a 30-year amortization on DSCR loans."><PlainInput value={term} onChange={setTerm} suffix="yr" /></Field>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Refi loan" value={arv > 0 ? usd(refiLoan) : "—"} sub={`ARV × ${num(ltv)}%`} />
+        <Stat label="Cash left in deal" value={arv > 0 && allIn > 0 ? usd(cashLeftIn) : "—"} tone={allIn > 0 ? (cashLeftIn <= 0 ? "good" : cashLeftIn <= 15000 ? "default" : "warn") : "default"} sub={cashLeftIn <= 0 ? "all capital out" : "stays in after refi"} />
+        <Stat label="DSCR" value={dscr > 0 ? dscr.toFixed(2) : "—"} tone={dTone} big sub="rent ÷ PITIA" />
+        <Stat label="New payment (PITIA)" value={pitia > 0 ? usd(pitia) : "—"} sub={`P&I ${usd(pi)} + tax/ins/HOA`} />
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Stat label="Monthly cash flow" value={pitia > 0 && rnt > 0 ? usd(trueCF) : "—"} tone={trueCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`after ${num(reservePct)}% reserves`} />
+        <Stat label="Cash-on-cash" value={coc === null ? "∞ (all cash out)" : annualCF !== 0 && cashLeftIn > 0 ? coc.toFixed(1) + "%" : "—"} tone={coc === null || (coc && coc > 8) ? "good" : "default"} sub={coc === null ? "no capital left in" : "annual CF ÷ cash left in"} />
+      </div>
+
+      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${dTone === "good" ? "bg-emerald-50 text-emerald-700" : dTone === "bad" ? "bg-rose-50 text-rose-700" : dTone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
+        <b>DSCR {dscr > 0 ? dscr.toFixed(2) : "—"}:</b> {dNote}
+      </div>
+      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">{brrrrLine}</div>
+      <div className="mt-2 text-[10px] text-slate-400">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
+
+      {deckCommon && flipDeck && (
+        <div className="mt-3">
+          <BuyerDeckButton
+            label="Download deal deck — Flip + BRRRR (.pptx)"
+            common={{ ...deckCommon, contractDefault: buy, rent: rnt }}
+            generateOverride={async (form) => {
+              await generateDualDeck({
+                address: form.address,
+                subjectLine: deckCommon.subjectLine,
+                arv,
+                asking: form.asking,
+                contractPrice: form.contractPrice,
+                rent: form.rent,
+                photo: form.photo,
+                basis: { compCount: deckCommon.compCount, avgPpsf: deckCommon.avgPpsf, rent: form.rent },
+                contact: form.contact,
+                flip: {
+                  profitStr: usd(flipDeck.profit),
+                  rows: flipDeck.rows,
+                  bullets: flipDeck.bullets,
+                  note: flipDeck.note,
+                },
+                brrrr: {
+                  headlineStr: `${usd(trueCF)}/mo · DSCR ${dscr > 0 ? dscr.toFixed(2) : "—"}`,
+                  cocStr: coc === null ? "∞" : (cashLeftIn > 0 && coc ? coc.toFixed(1) + "%" : "—"),
+                  rows: [
+                    ["All-in (purchase + rehab)", usd(allIn)],
+                    [`Refi loan (ARV × ${num(ltv)}%)`, usd(refiLoan)],
+                    ["Cash left in deal", cashLeftIn <= 0 ? `${usd(-cashLeftIn)} back out` : usd(cashLeftIn)],
+                    ["New payment (PITIA)", usd(pitia)],
+                    ["DSCR", dscr > 0 ? dscr.toFixed(2) : "—"],
+                    ["Monthly cash flow", usd(trueCF)],
+                  ],
+                  bullets: [
+                    dscr >= 1.0 ? `Qualifies for a DSCR loan at ${dscr.toFixed(2)} — no income docs` : (dscr > 0 ? `DSCR ${dscr.toFixed(2)} — may need compensating factors` : null),
+                    cashLeftIn <= 0 ? "Full BRRRR — all capital comes back out at refi" : `Only ${usd(cashLeftIn)} left in after refi`,
+                    trueCF > 0 ? `${usd(trueCF)}/mo cash flow after reserves` : null,
+                    "Refinance, rent, and hold for long-term wealth",
+                  ],
+                  note: dNote,
+                  projection: buildDealExtras({ loanAmt: refiLoan, rate: num(rate), term: num(term), arv, equity: arv - allIn, cashFlow: trueCF, cashToClose: Math.max(0, cashLeftIn), coc: coc || 0 }).projection,
+                },
+              });
+            }}
+          />
+          <div className="mt-1 text-center text-[10px] text-slate-400">One deck, both exits — your buyer sees the flip play and the BRRRR play side by side.</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------- shared: "wholesale this creative contract" panel ----------
 function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel, financingValue = 0 }) {
@@ -1842,13 +2116,7 @@ function RentalTab({ rentEst, rentLow, rentHigh, rentOverride, setRentOverride, 
       <div className="grid gap-4 md:grid-cols-2">
         {/* Estimated rent */}
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <SectionTitle>Estimated rent</SectionTitle>
-            <button onClick={() => fetchRent(address)} disabled={rentLoading || !address.trim()}
-              className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-              {rentLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} refresh
-            </button>
-          </div>
+          <SectionTitle>Estimated rent</SectionTitle>
           {rentLoading ? (
             <div className="flex items-center gap-2 py-4 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" /> Pulling rent for this address…</div>
           ) : effRent > 0 ? (
@@ -1857,7 +2125,7 @@ function RentalTab({ rentEst, rentLow, rentHigh, rentOverride, setRentOverride, 
               <Stat label="Estimate range" value={rentLow && rentHigh ? `${usd(rentLow)}–${usd(rentHigh)}` : "—"} sub="RentCast low–high" />
             </div>
           ) : (
-            <div className="py-3 text-sm text-slate-400">{address.trim() ? "No estimate yet — hit refresh, or enter rent below." : "Auto-comp an address up top first, then come back."}</div>
+            <div className="py-3 text-sm text-slate-400">{address.trim() ? "No estimate yet — enter rent below." : "Auto-comp an address up top first, then come back."}</div>
           )}
           <div className="mt-3">
             <Field label="Override rent (monthly)" hint="wins over the estimate">
