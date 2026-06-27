@@ -1479,7 +1479,13 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
   const refiLoan = arv * (num(ltv) / 100);
   const cashLeftIn = allIn - refiLoan;
   const pi = pmt(refiLoan, num(rate), num(term));
-  const pitia = pi + num(taxIns) + num(hoa);                 // lender's denominator
+  // Estimated taxes + insurance from the ARV (editable). Based on U.S. average rates, excluding the
+  // outlier states CA, NY & FL: ~0.9%/yr effective property tax + ~0.6%/yr dwelling insurance = ~1.5%/yr.
+  const estTax = arv > 0 ? (arv * 0.009) / 12 : 0;
+  const estIns = arv > 0 ? (arv * 0.006) / 12 : 0;
+  const estTaxIns = estTax + estIns;
+  const taxInsEff = num(taxIns) > 0 ? num(taxIns) : estTaxIns;
+  const pitia = pi + taxInsEff + num(hoa);                 // lender's denominator
   const dscr = pitia > 0 && rnt > 0 ? rnt / pitia : 0;
   const reserves = rnt * (num(reservePct) / 100);
   const trueCF = rnt - pitia - reserves;                      // your real monthly cash flow
@@ -1524,7 +1530,15 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
           {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
           {num(rentDefault) > 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">RentCast estimate ${Math.round(num(rentDefault)).toLocaleString()}/mo loaded — shown above; type to override.</div>}
         </Field>
-        <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator."><MoneyInput value={taxIns} onChange={setTaxIns} placeholder="e.g. 300" /></Field>
+        <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator. Auto-estimated from the ARV using U.S. average rates (~0.9% tax + ~0.6% insurance per year), excluding the outlier states CA, NY & FL. Type the actual to override.">
+          <MoneyInput value={taxIns} onChange={setTaxIns} placeholder={estTaxIns > 0 ? String(Math.round(estTaxIns)) : "e.g. 300"} />
+          {estTaxIns > 0 && (
+            <div className="mt-1 text-[10px] text-slate-400">
+              {num(taxIns) <= 0 ? <>Auto-estimate ~${Math.round(estTax).toLocaleString()} tax + ~${Math.round(estIns).toLocaleString()} insurance/mo. </> : null}
+              <span className="italic">U.S. average rates, excludes CA/NY/FL — verify the actual for this property.</span>
+            </div>
+          )}
+        </Field>
         <Field label="HOA" hint="monthly, if any" info="Monthly HOA / association dues, if the property has them. Also part of PITIA."><MoneyInput value={hoa} onChange={setHoa} /></Field>
         <Field label="Reserves" hint="% of rent" info="Vacancy + maintenance + management set-aside. NOT part of the lender's DSCR, but real money — used here for your true cash flow."><PlainInput value={reservePct} onChange={setReservePct} suffix="%" /></Field>
       </div>
