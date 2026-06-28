@@ -1681,15 +1681,21 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
 }
 
 // ---------- shared: "wholesale this creative contract" panel ----------
-function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel, financingValue = 0 }) {
+function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel, financingValue = 0, buyerCashIn = 0, annualCF = 0 }) {
   const [feeInput, setFeeInput] = useState("");
   const fee = num(feeInput);                                   // assignment fee you want to charge the next buyer
   const haveDeal = arv > 0 && dealCost > 0;
   const equity = haveDeal ? arv - repairs - dealCost : 0;      // hard spread you created by locking it up creative
   const finVal = Math.max(0, financingValue || 0);             // soft value of the below-market loan (PV)
   const totalValue = equity + finVal;                          // what the deal is really worth to a creative buyer
-  const buyerKeeps = totalValue - fee;                         // value the assignee inherits after paying your fee
+  const buyerKeeps = totalValue - fee;                        // value the assignee inherits after paying your fee
+  const buyerEquity = equity - fee;                           // hard equity the assignee inherits after your fee
   const CUSHION = 5000;                                        // a little value we want to leave the buyer
+  // --- what the END BUYER earns: their cash in = this deal's cash to close + your fee ---
+  const buyerTotalCashIn = Math.max(0, buyerCashIn) + fee;
+  const buyerCoC = buyerTotalCashIn > 0 ? (annualCF / buyerTotalCashIn) * 100 : null;          // cash flow on their cash
+  const buyerRoi = buyerTotalCashIn > 0 ? ((annualCF + buyerEquity) / buyerTotalCashIn) * 100 : null; // + equity stepped into
+  const showBuyerReturns = haveDeal && buyerTotalCashIn > 0 && annualCF !== 0;
 
   let tone = "default", note = "Lock in the deal numbers above, then enter the assignment fee you'd charge to hand this creative contract to another investor.";
   if (arv <= 0) { note = "Set the ARV up top to see what this creative deal could assign for."; }
@@ -1732,9 +1738,23 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
         <Stat label="Financing value" value={haveDeal ? usd(finVal) : "—"} tone={finVal > 0 ? "good" : "default"} sub="PV of the low rate" />
         <Stat label="Total deal value" value={haveDeal ? usd(totalValue) : "—"} tone={totalValue > 0 ? "good" : "default"} big sub="equity + financing" />
       </div>
+      {haveDeal && (
+        <div className="mt-2 text-[10px] text-slate-400">"Basis" is your cost to acquire ({costLabel.toLowerCase()}) — <b>not</b> your fee. Your fee comes out of the equity, leaving the buyer the rest.</div>
+      )}
       {haveDeal && fee > 0 && (
-        <div className="mt-3">
-          <Stat label="Buyer keeps after your fee" value={usd(buyerKeeps)} tone={buyerKeeps >= CUSHION ? "good" : buyerKeeps > 0 ? "warn" : "bad"} sub="total value − your fee" />
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Stat label="Buyer's equity after your fee" value={usd(buyerEquity)} tone={buyerEquity >= CUSHION ? "good" : buyerEquity > 0 ? "warn" : "bad"} sub="equity − your fee" />
+          <Stat label="Buyer keeps, all-in" value={usd(buyerKeeps)} tone={buyerKeeps >= CUSHION ? "good" : buyerKeeps > 0 ? "warn" : "bad"} sub="+ financing value" />
+        </div>
+      )}
+      {showBuyerReturns && (
+        <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What the end buyer earns</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub={`annual cash flow ÷ ${usd(buyerTotalCashIn)} in`} />
+            <Stat label="Buyer ROI — year 1" value={buyerRoi === null ? "—" : pct(buyerRoi)} tone={buyerRoi !== null && buyerRoi > 0 ? "good" : "warn"} sub="cash flow + equity stepped into" />
+          </div>
+          <div className="mt-2 text-[10px] text-slate-400">Buyer's cash in = this deal's cash to close (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that cash; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
         </div>
       )}
       <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
@@ -1746,17 +1766,21 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
 }
 
 // ---------- shared: rate-savings explorer ----------
-function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) {
+function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, dealPayment = 0 }) {
   const [origTerm, setOrigTerm] = useState(30);
   const P = loanAmount;
   const effOrig = Math.max(term, origTerm);                 // original term can't be less than years left
   const seasoned = Math.max(0, effOrig - term);             // years the seller has already paid down
-  const payDeal = pmt(P, rate, term);                       // inherited payment over the years left
+  const payDeal = pmt(P, rate, term);                       // financing-only P&I implied by the loan terms
   const payNew = pmt(P, mkt, effOrig);                      // fresh market loan, same balance, full term
   const intSubTo = Math.max(0, payDeal * term * 12 - P);    // interest left to pay on this loan
   const intNew = Math.max(0, payNew * effOrig * 12 - P);    // interest on a brand-new loan
   const intSaved = Math.max(0, intNew - intSubTo);          // total interest the buyer avoids
   const finValue = pvSavings(P, rate, mkt, term);           // PV of the rate edge over the years left (feeds deal value)
+  // Fixed payment comparison: use the REAL payment entered on the deal, don't re-derive it.
+  const haveRealPmt = dealPayment > 0;
+  const tiPortion = haveRealPmt ? Math.max(0, dealPayment - payDeal) : 0;  // taxes/insurance (+ any 2nd-lien) baked into the real payment
+  const newPmtFull = payNew + tiPortion;                                   // a new market loan, carrying the same taxes/insurance
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1812,7 +1836,7 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) 
               {[
                 ["Rate", `${rate.toFixed(2)}%`, `${mkt.toFixed(2)}%`],
                 ["Years to pay", `${term} left`, `${effOrig} fresh`],
-                ["Payment", `${usd(payDeal)}/mo`, `${usd(payNew)}/mo`],
+                ...(haveRealPmt ? [["Payment", `${usd(dealPayment)}/mo`, `${usd(newPmtFull)}/mo`]] : []),
                 ["Total interest", usd(intSubTo), usd(intNew)],
               ].map((r, i, arr) => (
                 <div key={r[0]} className={`grid grid-cols-3 ${i < arr.length - 1 ? "border-b border-slate-100" : ""}`}>
@@ -1822,6 +1846,9 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) 
                 </div>
               ))}
             </div>
+            {haveRealPmt && (
+              <div className="text-[10px] text-slate-400">Payment row uses the <b>real payment from this deal</b> — fixed, it won't move with the sliders. The new-loan figure is a fresh-rate loan carrying the same taxes &amp; insurance; set "Years left" to the loan's actual remaining term for the most accurate new-loan number.</div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Stat label="Interest saved" value={usd(intSaved)} tone={intSaved > 0 ? "good" : "default"} sub="vs a brand-new loan" />
               <Stat label="Paid off sooner" value={seasoned > 0 ? `${seasoned} ${seasoned === 1 ? "yr" : "yrs"}` : "—"} tone={seasoned > 0 ? "good" : "default"} sub="free & clear earlier" />
@@ -1842,70 +1869,6 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) 
   );
 }
 
-
-// ---------- shared: amortization breakdown (interest-heavy early → principal-heavy later) ----------
-function AmortBreakdown({ loanAmount, rate, term }) {
-  const [year, setYear] = useState(1);
-  const P = loanAmount;
-  const m = rate / 100 / 12;
-  const M = pmt(P, rate, term);
-  const yr = Math.min(Math.max(1, year), term);
-  const startBal = balanceAt(P, rate, term, yr - 1);   // balance at the start of year `yr`
-  const interest = m > 0 ? startBal * m : 0;            // first month of that year
-  const principal = Math.max(0, M - interest);
-  const pctPrin = M > 0 ? (principal / M) * 100 : 0;
-  const pctInt = M > 0 ? (interest / M) * 100 : 0;
-  const endBal = balanceAt(P, rate, term, yr);
-
-  // year principal first overtakes interest
-  let crossover = 0;
-  for (let y = 1; y <= term; y++) {
-    const b = balanceAt(P, rate, term, y - 1);
-    const i = m > 0 ? b * m : 0;
-    if (M - i > i) { crossover = y; break; }
-  }
-
-  if (P <= 0) return null;
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-1 flex items-center gap-2">
-        <Layers className="h-4 w-4 text-slate-400" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Where the payment goes — interest vs principal</h3>
-      </div>
-      <p className="mb-3 text-[11px] text-slate-400">Early on, a mortgage is almost all interest. Slide through the years to see the payment shift toward principal as the loan matures.</p>
-
-      <div className="grid gap-5 md:grid-cols-2">
-        <div>
-          <div className="flex items-baseline justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Year of the loan</span>
-            <span className="font-mono text-lg font-bold tabular-nums text-slate-900">Yr {yr} <span className="text-slate-400">/ {term}</span></span>
-          </div>
-          <input type="range" min={1} max={term} step={1} value={yr} onChange={(e) => setYear(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
-          <div className="mt-4 text-[11px] text-slate-400">Monthly payment <span className="font-mono text-slate-700">{usd(M)}</span> · balance now <span className="font-mono text-slate-700">{usd(startBal)}</span></div>
-          {/* split bar */}
-          <div className="mt-2 flex h-5 w-full overflow-hidden rounded-md">
-            <div className="flex items-center justify-center bg-emerald-500 text-[9px] font-bold text-white" style={{ width: `${Math.max(4, pctPrin)}%` }}>{pctPrin >= 12 ? "PRINCIPAL" : ""}</div>
-            <div className="flex items-center justify-center bg-slate-300 text-[9px] font-bold text-slate-600" style={{ width: `${Math.max(4, pctInt)}%` }}>{pctInt >= 12 ? "INTEREST" : ""}</div>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <Stat label="To principal" value={usd(principal)} tone="good" sub={`${pctPrin.toFixed(0)}% of payment`} />
-            <Stat label="To interest" value={usd(interest)} sub={`${pctInt.toFixed(0)}% of payment`} />
-          </div>
-          <Stat label="Balance after year" value={usd(endBal)} sub={`paid down ${usd(startBal - endBal)} this year`} />
-        </div>
-      </div>
-      <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
-        {rate === 0
-          ? <>At 0% every dollar hits principal — the whole payment pays down the loan from day one.</>
-          : crossover > 0
-            ? <>At year <b>{yr}</b>, <b>{pctPrin.toFixed(0)}%</b> of the payment goes to principal. Principal first overtakes interest around <b>year {crossover}</b> of this {term}-year loan — that's why a low rate (or carrying a loan you assumed years ago) is so powerful.</>
-            : <>Most of this payment is still interest at year {yr}.</>}
-      </div>
-    </div>
-  );
-}
 
 // ---------- SUB-TO ----------
 function SubToTab(props) {
@@ -1953,9 +1916,8 @@ function SubToTab(props) {
         </div>
       </div>
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
-        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} />
-      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} />
-      <AmortBreakdown loanAmount={bal} rate={rsRate} term={rsTerm} />
+        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
+      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
       <BuyerDeckButton
         common={{ ...deckCommon, contractDefault: bal + cashSeller + arrears }}
         deal={{
@@ -2039,9 +2001,8 @@ function HybridTab(props) {
         </div>
       </div>
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
-        dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} />
-      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} />
-      <AmortBreakdown loanAmount={bal} rate={rsRate} term={rsTerm} />
+        dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
+      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
@@ -2128,9 +2089,8 @@ function SellerFinanceTab(props) {
         </div>
       </div>
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
-        dealCost={price} costLabel="Seller-finance price" financingValue={finValue} />
-      <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} />
-      <AmortBreakdown loanAmount={loan} rate={rsRate} term={rsTerm} />
+        dealCost={price} costLabel="Seller-finance price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
+      <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
