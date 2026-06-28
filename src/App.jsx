@@ -1018,6 +1018,7 @@ async function generateBuyerDeck(data) {
 
   s.addText("We work a short buyers list and move quickly — reach out to lock this one up.", { x: 0.6, y: cy + 0.7, w: 12.1, h: 0.5, fontSize: 14, color: DECK.SAGE, align: "center", italic: true });
   s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+  const safe = (data.address || "deal").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
   await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}.pptx` });
 }
 
