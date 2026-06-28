@@ -1747,20 +1747,22 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
 
 // ---------- shared: rate-savings explorer ----------
 function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) {
+  const [origTerm, setOrigTerm] = useState(30);
   const P = loanAmount;
-  const payDeal = pmt(P, rate, term);
-  const payMkt = pmt(P, mkt, term);
-  const intDeal = Math.max(0, payDeal * term * 12 - P);
-  const intMkt = Math.max(0, payMkt * term * 12 - P);
-  const lifeSavings = Math.max(0, intMkt - intDeal);
-  const moSavings = Math.max(0, payMkt - payDeal);
-  const finValue = pvSavings(P, rate, mkt, term); // worth of the cheap loan today
+  const effOrig = Math.max(term, origTerm);                 // original term can't be less than years left
+  const seasoned = Math.max(0, effOrig - term);             // years the seller has already paid down
+  const payDeal = pmt(P, rate, term);                       // inherited payment over the years left
+  const payNew = pmt(P, mkt, effOrig);                      // fresh market loan, same balance, full term
+  const intSubTo = Math.max(0, payDeal * term * 12 - P);    // interest left to pay on this loan
+  const intNew = Math.max(0, payNew * effOrig * 12 - P);    // interest on a brand-new loan
+  const intSaved = Math.max(0, intNew - intSubTo);          // total interest the buyer avoids
+  const finValue = pvSavings(P, rate, mkt, term);           // PV of the rate edge over the years left (feeds deal value)
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center gap-2">
         <TrendingDown className="h-4 w-4 text-emerald-500" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Rate savings — what your low rate is worth</h3>
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Rate + seasoning savings — what taking over this loan is worth</h3>
       </div>
       {P > 0 ? (
         <div className="grid gap-5 md:grid-cols-2">
@@ -1768,36 +1770,66 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt }) 
           <div className="space-y-4">
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Your interest rate</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Seller's rate — you inherit</span>
                 <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{rate.toFixed(2)}%</span>
               </div>
               <input type="range" min={0} max={12} step={0.125} value={rate} onChange={(e) => setRate(parseFloat(e.target.value))} className="mt-1 w-full accent-emerald-600" />
             </div>
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Remaining loan term</span>
-                <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{term} yrs</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Original loan term</span>
+                <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{effOrig} yrs</span>
               </div>
-              <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => setTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+              <input type="range" min={5} max={40} step={1} value={origTerm} onChange={(e) => setOrigTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
             </div>
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Market rate — compare to</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Years left on the loan</span>
+                <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{term} yrs</span>
+              </div>
+              <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => setTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+              <div className="mt-1 text-[11px] text-emerald-700">Seller has already paid <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b>{seasoned > 0 ? " — past the interest-heavy years" : ""}.</div>
+            </div>
+            <div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">New-loan rate today — compare to</span>
                 <span className="font-mono text-sm font-bold tabular-nums text-slate-500">{mkt.toFixed(2)}%</span>
               </div>
               <input type="range" min={0} max={14} step={0.125} value={mkt} onChange={(e) => setMkt(parseFloat(e.target.value))} className="mt-1 w-full accent-slate-400" />
             </div>
-            <div className="text-[11px] text-slate-400">Loan amount: <span className="font-mono text-slate-600">{usd(P)}</span> — pulled from this deal.</div>
+            <div className="text-[11px] text-slate-400">Loan balance: <span className="font-mono text-slate-600">{usd(P)}</span> — pulled from this deal.</div>
           </div>
           {/* savings */}
           <div className="space-y-3">
             <Stat label="Financing value today" value={usd(finValue)} tone="good" big sub={`PV of the rate edge vs ${mkt.toFixed(2)}% market`} />
+            {/* side-by-side: take this loan vs new loan */}
+            <div className="overflow-hidden rounded-xl border border-slate-200 text-[12px]">
+              <div className="grid grid-cols-3 bg-slate-50 font-semibold text-slate-500">
+                <div className="px-3 py-1.5"></div>
+                <div className="px-2 py-1.5 text-center text-emerald-700">Take this loan</div>
+                <div className="px-2 py-1.5 text-center">Get a new loan</div>
+              </div>
+              {[
+                ["Rate", `${rate.toFixed(2)}%`, `${mkt.toFixed(2)}%`],
+                ["Years to pay", `${term} left`, `${effOrig} fresh`],
+                ["Payment", `${usd(payDeal)}/mo`, `${usd(payNew)}/mo`],
+                ["Total interest", usd(intSubTo), usd(intNew)],
+              ].map((r, i, arr) => (
+                <div key={r[0]} className={`grid grid-cols-3 ${i < arr.length - 1 ? "border-b border-slate-100" : ""}`}>
+                  <div className="px-3 py-1.5 text-slate-500">{r[0]}</div>
+                  <div className="px-2 py-1.5 text-center font-semibold tabular-nums text-emerald-700">{r[1]}</div>
+                  <div className="px-2 py-1.5 text-center tabular-nums text-slate-700">{r[2]}</div>
+                </div>
+              ))}
+            </div>
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Monthly savings" value={usd(moSavings)} tone={moSavings > 0 ? "good" : "default"} sub="vs market pmt" />
-              <Stat label="Lifetime interest saved" value={usd(lifeSavings)} sub={`over ${term} yrs`} />
+              <Stat label="Interest saved" value={usd(intSaved)} tone={intSaved > 0 ? "good" : "default"} sub="vs a brand-new loan" />
+              <Stat label="Paid off sooner" value={seasoned > 0 ? `${seasoned} ${seasoned === 1 ? "yr" : "yrs"}` : "—"} tone={seasoned > 0 ? "good" : "default"} sub="free & clear earlier" />
             </div>
             <div className="rounded-lg bg-emerald-50/60 px-3 py-2 text-[11px] text-emerald-700">
-              That <b>{usd(finValue)}</b> is what this below-market loan is worth in today's dollars — it feeds the deal value in the wholesale panel above.
+              {seasoned > 0
+                ? <>This loan is <b>{seasoned} of {effOrig} yrs</b> in — the seller already paid down the interest-heavy years. A fresh loan at {mkt.toFixed(2)}% restarts that clock, so the buyer saves <b>{usd(intSaved)}</b> in interest and owns it free &amp; clear <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b> sooner. The <b>{usd(finValue)}</b> financing value feeds the deal value above.</>
+                : <>Set the original term, then drag <b>Years left</b> down to model a seasoned loan and watch the interest saved vs a new loan grow. The <b>{usd(finValue)}</b> financing value feeds the deal value above.</>}
             </div>
           </div>
         </div>
@@ -1880,9 +1912,9 @@ function SubToTab(props) {
   const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
   const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent);
   const reserves = rent * (num(stReservePct) / 100);
-  const cashIn = cashSeller + arrears + closing;
+  const cashIn = cashSeller + arrears + closing + repairs;
   const cashFlow = rent - piti - reserves;
-  const equity = arv - (bal + cashSeller + arrears);
+  const equity = arv - (bal + cashSeller + arrears + repairs);
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
   // shared rate-savings inputs (feed both Rate Savings + the creative-wholesale value)
   const [rsRate, setRsRate] = useState(4);
@@ -1914,8 +1946,8 @@ function SubToTab(props) {
           <Verdict status={status} headline={headline} detail={detail} />
           <div className="grid gap-3 sm:grid-cols-2">
             <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − PITI − ${usd(reserves)} reserves`} />
-            <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub="ARV − loan − entry" />
-            <Stat label="Total cash in" value={usd(cashIn)} sub="seller + arrears + closing" />
+            <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub={repairs > 0 ? "ARV − loan − entry − rehab" : "ARV − loan − entry"} />
+            <Stat label="Total cash in" value={usd(cashIn)} sub={repairs > 0 ? "seller + arrears + closing + rehab" : "seller + arrears + closing"} />
             <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="annual" />
           </div>
         </div>
@@ -1964,8 +1996,8 @@ function HybridTab(props) {
   const totalMonthly = piti + notePay;
   const reserves = rent * (num(hyReservePct) / 100);
   const cashFlow = rent - totalMonthly - reserves;
-  const cashIn = down + closing;
-  const equity = arv - price;
+  const cashIn = down + closing + repairs;
+  const equity = arv - price - repairs;
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
   const [rsRate, setRsRate] = useState(4);
   const [rsTerm, setRsTerm] = useState(30);
@@ -2001,7 +2033,7 @@ function HybridTab(props) {
             <Stat label="Seller note amount" value={usd(note)} sub="price − loan − down" />
             <Stat label="Note payment" value={usd(notePay)} sub={`${num(hyRate)}% / ${num(hyTerm)}yr`} />
             <Stat label="Total monthly debt" value={usd(totalMonthly)} sub="PITI + note" />
-            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub="ARV − price" />
+            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
             <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={`${usd(cashIn)} in`} />
           </div>
         </div>
@@ -2053,8 +2085,9 @@ function SellerFinanceTab(props) {
   const balloonYrs = num(sfBalloon);
   const balloonBal = balloonYrs > 0 ? balanceAt(loan, num(sfRate), num(sfAmort), balloonYrs) : 0;
   const totalInterest = pi * num(sfAmort) * 12 - loan;
-  const equity = arv - price;
-  const coc = down > 0 ? ((cashFlow * 12) / down) * 100 : 0;
+  const equity = arv - price - repairs;
+  const cashIn = down + repairs;
+  const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
   // seller-finance terms ARE the loan terms — seed the shared rate inputs from them
   const [rsRate, setRsRate] = useState(num(sfRate) || 4);
   const [rsTerm, setRsTerm] = useState(num(sfAmort) || 30);
@@ -2089,8 +2122,8 @@ function SellerFinanceTab(props) {
             <Stat label="Principal & interest" value={usd(pi)} big sub={`${usd(loan)} @ ${num(sfRate)}%`} />
             <Stat label="Balloon balance" value={balloonYrs ? usd(balloonBal) : "None"} tone={balloonYrs ? "warn" : "good"} sub={balloonYrs ? `due year ${balloonYrs}` : "fully amortizing"} />
             <Stat label="Total interest" value={usd(Math.max(0, totalInterest))} sub={num(sfRate) === 0 ? "0% — principal only" : "life of loan"} />
-            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub="ARV − price" />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="on down pmt" />
+            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "down + rehab" : "on down pmt"} />
           </div>
         </div>
       </div>
@@ -2121,7 +2154,7 @@ function SellerFinanceTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: down, coc }),
+          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: cashIn, coc }),
         }}
       />
       <TabEducation id="sf" />
