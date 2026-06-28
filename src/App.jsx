@@ -1511,7 +1511,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
   const [term, setTerm] = useState("30");
   const [reservePct, setReservePct] = useState("10");
 
-  const buy = num(purchase) > 0 ? num(purchase) : num(purchaseDefault);
+  const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
   const fix = num(rehab) > 0 ? num(rehab) : repairs;
   const rnt = num(rent) > 0 ? num(rent) : num(rentDefault);
   const allIn = buy + fix;
@@ -1561,7 +1561,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
       <p className="mb-3 text-[11px] text-slate-400">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Purchase price" hint="your buy price" info="What you'd actually buy it for. Defaults to your Investor MAO above."><MoneyInput value={purchase} onChange={setPurchase} placeholder={num(purchaseDefault) > 0 ? String(Math.round(num(purchaseDefault))) : "e.g. 140000"} /></Field>
+        <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price plus your wholesale / assignment fee. Enter it directly; no default."><MoneyInput value={purchase} onChange={setPurchase} placeholder="e.g. 140000" /></Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
           <div className="flex items-center gap-2">
@@ -1596,13 +1596,13 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Refi loan" value={arv > 0 ? usd(refiLoan) : "—"} sub={`ARV × ${num(ltv)}%`} />
-        <Stat label="Cash left in deal" value={arv > 0 && allIn > 0 ? usd(cashLeftIn) : "—"} tone={allIn > 0 ? (cashLeftIn <= 0 ? "good" : cashLeftIn <= 15000 ? "default" : "warn") : "default"} sub={cashLeftIn <= 0 ? "all capital out" : "stays in after refi"} />
+        <Stat label="Cash left in deal" value={arv > 0 && buy > 0 ? usd(cashLeftIn) : "—"} tone={buy > 0 ? (cashLeftIn <= 0 ? "good" : cashLeftIn <= 15000 ? "default" : "warn") : "default"} sub={cashLeftIn <= 0 ? "all capital out" : "stays in after refi"} />
         <Stat label="DSCR" value={dscr > 0 ? dscr.toFixed(2) : "—"} tone={dTone} big sub="rent ÷ PITIA" />
         <Stat label="New payment (PITIA)" value={pitia > 0 ? usd(pitia) : "—"} sub={`P&I ${usd(pi)} + tax/ins/HOA`} />
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Stat label="Monthly cash flow" value={pitia > 0 && rnt > 0 ? usd(trueCF) : "—"} tone={trueCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`after ${num(reservePct)}% reserves`} />
-        <Stat label="Cash-on-cash" value={coc === null ? "∞ (all cash out)" : annualCF !== 0 && cashLeftIn > 0 ? coc.toFixed(1) + "%" : "—"} tone={coc === null || (coc && coc > 8) ? "good" : "default"} sub={coc === null ? "no capital left in" : "annual CF ÷ cash left in"} />
+        <Stat label="Cash-on-cash" value={buy <= 0 ? "—" : coc === null ? "∞ (all cash out)" : annualCF !== 0 && cashLeftIn > 0 ? coc.toFixed(1) + "%" : "—"} tone={buy > 0 && (coc === null || (coc && coc > 8)) ? "good" : "default"} sub={coc === null ? "no capital left in" : "annual CF ÷ cash left in"} />
       </div>
 
       {/* ROI / Returns */}
@@ -1613,12 +1613,12 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
         </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat label="Cap rate" value={arv > 0 && rnt > 0 ? capRate.toFixed(1) + "%" : "—"} tone={capRate >= 7 ? "good" : capRate > 0 ? "default" : "default"} sub="NOI ÷ ARV (unlevered)" />
-          <Stat label="Equity captured" value={arv > 0 && allIn > 0 ? usd(equityCaptured) : "—"} tone={equityCaptured > 0 ? "good" : allIn > 0 ? "bad" : "default"} sub="ARV − all-in" />
-          <Stat label="Total ROI (yr 1)" value={totalRoi === null ? "∞ (all cash out)" : (cashLeftIn > 0 && totalReturn1 !== 0 ? totalRoi.toFixed(1) + "%" : "—")} tone={totalRoi === null || (totalRoi && totalRoi > 12) ? "good" : "default"} sub="cash flow + paydown ÷ cash in" />
+          <Stat label="Equity captured" value={arv > 0 && buy > 0 ? usd(equityCaptured) : "—"} tone={buy > 0 && equityCaptured > 0 ? "good" : buy > 0 ? "bad" : "default"} sub="ARV − all-in" />
+          <Stat label="Total ROI (yr 1)" value={buy <= 0 ? "—" : totalRoi === null ? "∞ (all cash out)" : (cashLeftIn > 0 && totalReturn1 !== 0 ? totalRoi.toFixed(1) + "%" : "—")} tone={buy > 0 && (totalRoi === null || (totalRoi && totalRoi > 12)) ? "good" : "default"} sub="cash flow + paydown ÷ cash in" />
           <Stat label="Annual cash flow" value={pitia > 0 && rnt > 0 ? usd(annualCF) : "—"} tone={annualCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`${usd(trueCF)}/mo × 12`} />
         </div>
         <div className="mt-2 text-[10px] text-slate-400">
-          Cap rate is the unlevered yield (NOI ÷ ARV). Total ROI (yr 1) adds your first-year loan paydown to cash flow{equityCaptured > 0 ? <>, on top of the <b className="text-emerald-700">{usd(equityCaptured)}</b> of equity you captured up front</> : null} — your real return on the cash left in the deal.
+          Cap rate is the unlevered yield (NOI ÷ ARV). Total ROI (yr 1) adds your first-year loan paydown to cash flow{buy > 0 && equityCaptured > 0 ? <>, on top of the <b className="text-emerald-700">{usd(equityCaptured)}</b> of equity you captured up front</> : null} — your real return on the cash left in the deal.
         </div>
       </div>
 
