@@ -1794,11 +1794,11 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
         <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
           <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What the end buyer earns</div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <Stat label="Buyer's cash in" value={usd(buyerTotalCashIn)} sub="cash to close + your fee" />
+            <Stat label="Buyer's cash in" value={usd(buyerTotalCashIn)} sub="cash to close + rehab + your fee" />
             <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub="annual cash flow ÷ cash in" />
             <Stat label="Buyer ROI — year 1" value={buyerRoi === null ? "—" : pct(buyerRoi)} tone={buyerRoi !== null && buyerRoi > 0 ? "good" : "warn"} sub="cash flow + equity stepped into" />
           </div>
-          <div className="mt-2 text-[10px] text-slate-400">Buyer's cash in = this deal's cash to close (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that cash; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
+          <div className="mt-2 text-[10px] text-slate-400">Buyer's cash in is everything they sink in — cash to close + rehab (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that full amount; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
         </div>
       )}
       <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
@@ -1962,7 +1962,7 @@ function SubToTab(props) {
   const closeCash = cashSeller + arrears + closing + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
   const cashFlow = rent - piti - reserves;
   const equity = arv - (bal + cashSeller + arrears + repairs);
-  const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   // shared rate-savings inputs (feed both Rate Savings + the creative-wholesale value)
   const [rsRate, setRsRate] = useState(4);
@@ -1995,8 +1995,8 @@ function SubToTab(props) {
           <div className="grid gap-3 sm:grid-cols-2">
             <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − PITI − ${usd(reserves)} reserves`} />
             <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub={repairs > 0 ? "ARV − loan − entry − rehab" : "ARV − loan − entry"} />
-            <Stat label="Total cash in" value={usd(cashIn)} sub={repairs > 0 ? "seller + arrears + closing + rehab" : "seller + arrears + closing"} />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub="annual" />
+            <Stat label="Total cash in" value={usd(closeCash)} sub={num(wholesaleFee) > 0 ? "seller + arrears + closing + fee" : "seller + arrears + closing"} />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "annual · on cash in + rehab" : "annual · on cash in"} />
           </div>
         </div>
       </div>
@@ -2047,7 +2047,7 @@ function HybridTab(props) {
   const cashIn = down + closing + repairs;
   const closeCash = down + closing + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
   const equity = arv - price - repairs;
-  const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   const [rsRate, setRsRate] = useState(4);
   const [rsTerm, setRsTerm] = useState(30);
@@ -2084,7 +2084,7 @@ function HybridTab(props) {
             <Stat label="Note payment" value={usd(notePay)} sub={`${num(hyRate)}% / ${num(hyTerm)}yr`} />
             <Stat label="Total monthly debt" value={usd(totalMonthly)} sub="PITI + note" />
             <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={`${usd(cashIn)} in`} />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={`${usd(closeCash + repairs)} in`} />
           </div>
         </div>
       </div>
@@ -2137,7 +2137,7 @@ function SellerFinanceTab(props) {
   const equity = arv - price - repairs;
   const cashIn = down + repairs;
   const closeCash = down + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
-  const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   // seller-finance terms ARE the loan terms — seed the shared rate inputs from them
   const [rsRate, setRsRate] = useState(num(sfRate) || 4);
@@ -2174,7 +2174,7 @@ function SellerFinanceTab(props) {
             <Stat label="Balloon balance" value={balloonYrs ? usd(balloonBal) : "None"} tone={balloonYrs ? "warn" : "good"} sub={balloonYrs ? `due year ${balloonYrs}` : "fully amortizing"} />
             <Stat label="Total interest" value={usd(Math.max(0, totalInterest))} sub={num(sfRate) === 0 ? "0% — principal only" : "life of loan"} />
             <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "down + rehab" : "on down pmt"} />
+            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "down + fee + rehab" : "down + fee"} />
           </div>
         </div>
       </div>
