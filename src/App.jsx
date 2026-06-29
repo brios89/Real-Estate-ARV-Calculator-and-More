@@ -405,7 +405,7 @@ export default function App() {
   const [wholesaleFee, setWholesaleFee] = useState("10000");
   const [sellingPct, setSellingPct] = useState("10");
   const [holding, setHolding] = useState("5000");
-  const [desiredProfit, setDesiredProfit] = useState("30000");
+  const [desiredProfit, setDesiredProfit] = useState("25000");
   const [askingPrice, setAskingPrice] = useState("");
 
   // sub-to
@@ -500,7 +500,7 @@ export default function App() {
 
   const validCompCount = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length;
   const deckCommon = {
-    address, arv,
+    address, arv, repairs,
     subjectLine: propLine(subjectInfo),
     rent: effRent,
     askingDefault: num(askingPrice),
@@ -915,17 +915,10 @@ async function generateBuyerDeck(data) {
   const propRows = [["Address", data.address || "—"]];
   if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
   propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
+  propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
   propRows.push(["Asking price", data.asking ? usd(data.asking) : "—"]);
-  propRows.push(["Contract price", data.contractPrice ? usd(data.contractPrice) : "—"]);
   propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts });
-  const b = data.basis || {};
-  if (b.compCount > 0 || b.avgPpsf > 0) {
-    const basisParts = [];
-    if (b.compCount > 0) basisParts.push(`ARV backed by ${b.compCount} recent sold comp${b.compCount > 1 ? "s" : ""}${b.avgPpsf > 0 ? ` averaging ${usd(b.avgPpsf)}/sq ft` : ""}`);
-    if (b.rent > 0) basisParts.push(`rent is a current market estimate for the area`);
-    s.addText(basisParts.join(".  ") + ".", { x: 0.6, y: 6.4, w: 12.1, h: 0.4, fontSize: 12, color: DECK.FOREST, italic: true });
-  }
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
 
   // Slide 3 — the deal
@@ -1068,12 +1061,10 @@ async function generateDualDeck(data) {
   const propRows = [["Address", data.address || "—"]];
   if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
   propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
+  propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
   propRows.push(["Asking price", data.asking ? usd(data.asking) : "—"]);
-  propRows.push(["Contract price", data.contractPrice ? usd(data.contractPrice) : "—"]);
   propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts, rowH: 0.6, fontSize: 15 });
-  const bz = data.basis || {};
-  if (bz.compCount > 0) s.addText(`ARV backed by ${bz.compCount} recent sold comp${bz.compCount > 1 ? "s" : ""}${bz.avgPpsf > 0 ? ` averaging ${usd(bz.avgPpsf)}/sq ft` : ""}.`, { x: 0.6, y: 6.4, w: 12.1, h: 0.4, fontSize: 12, color: DECK.FOREST, italic: true });
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
 
   // Slide 3 — two ways to win (the hero comparison)
@@ -1086,8 +1077,8 @@ async function generateDualDeck(data) {
   // BRRRR card
   s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 1.45, w: 5.9, h: 4.9, fill: { color: DECK.WHITE }, line: { color: DECK.FOREST, width: 2 }, rectRadius: 0.1 });
   s.addText("OPTION B — BRRRR (HOLD)", { x: 7.1, y: 1.7, w: 5.4, h: 0.4, fontSize: 15, color: DECK.FOREST, bold: true });
-  s.addText([{ text: "Cash flow & DSCR\n", options: { fontSize: 12, color: "6B7A6F" } }, { text: data.brrrr.headlineStr, options: { fontSize: 24, color: DECK.FOREST, bold: true } }], { x: 7.1, y: 2.15, w: 5.4, h: 1.1, valign: "top" });
-  s.addText(bullets(data.brrrr.bullets), { x: 7.2, y: 3.35, w: 5.3, h: 2.85, valign: "top" });
+  s.addText([{ text: "Cash flow & DSCR\n", options: { fontSize: 12, color: "6B7A6F" } }, { text: data.brrrr.headlineStr + "\n", options: { fontSize: 24, color: DECK.FOREST, bold: true } }, { text: data.brrrr.returnStr, options: { fontSize: 13.5, color: DECK.INK, bold: true } }], { x: 7.1, y: 2.15, w: 5.4, h: 1.5, valign: "top" });
+  s.addText(bullets(data.brrrr.bullets), { x: 7.2, y: 3.7, w: 5.3, h: 2.5, valign: "top" });
   s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
 
   // Slide 4 — Option A detail (flip)
@@ -1205,6 +1196,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
         address: f.address,
         subjectLine: common.subjectLine,
         arv: common.arv,
+        repairs: common.repairs,
         asking: num(f.asking),
         contractPrice: num(f.contractPrice),
         rent: num(f.rent),
@@ -1418,14 +1410,14 @@ function CashTab(props) {
             <div>
               <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">The flipper's numbers — your end buyer</div>
               <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-                What the investor who buys this from you needs to profit on the flip. Feeds the <b className="font-semibold text-slate-600">Itemized max offer</b> — the most you can pay and still leave them a deal worth doing.
+                These are your <b className="font-semibold text-slate-600">end buyer's</b> numbers — the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not yours</b>. They feed the <b className="font-semibold text-slate-600">Itemized max offer</b> below: the highest price you can buy it for and still leave the flipper a deal worth doing.
               </p>
             </div>
           </div>
           <div className="mt-3 space-y-3">
             <Field label="Selling costs" hint="% of ARV" info="Cost to SELL the fixed-up house: agent commissions, title, closing. Roughly 8–10% of ARV."><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
             <Field label="Holding costs" info="Cost to OWN it during rehab and sale: loan interest, taxes, insurance, utilities. ~$3k–$8k on a typical flip."><MoneyInput value={holding} onChange={setHolding} /></Field>
-            <Field label="Desired flip profit" info="Profit the flipper wants to clear after all costs — the cushion that makes them say yes. Commonly $25k–$40k+."><MoneyInput value={desiredProfit} onChange={setDesiredProfit} /></Field>
+            <Field label="Flipper's desired profit" hint="your end buyer — not you" info="The profit the END BUYER (the investor who buys this from you and flips it) wants to clear after all their costs. This is THEIR cushion, not your wholesale fee. Commonly $25k–$40k+."><MoneyInput value={desiredProfit} onChange={setDesiredProfit} /></Field>
           </div>
         </div>
       </div>
@@ -1462,7 +1454,7 @@ function CashTab(props) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Stat label={`${activePct}% Rule MAO`} value={usd(activeRuleMao)} tone={activeRuleMao > 0 ? "default" : "bad"} big sub="ARV × band − repairs" />
           <Stat label="Investor MAO" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
-          <Stat label="Itemized max offer" value={usd(itemizedMao)} sub="leaves the flipper their profit" />
+          <Stat label="Itemized max offer" value={usd(itemizedMao)} sub="What to buy it for — at this price or lower, the flipper still hits their profit" />
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
         </div>
       </div>
@@ -1470,22 +1462,9 @@ function CashTab(props) {
         arv={arv} repairs={repairs} rentDefault={rentDefault} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
         flipDeck={{
-          profit: num(desiredProfit),
-          buyAt: itemizedMao,
-          rows: [
-            ["After-repair value (ARV)", usd(arv)],
-            ["Estimated rehab", usd(repairs)],
-            [`Selling costs (${num(sellingPct)}% of ARV)`, usd(arv * num(sellingPct) / 100)],
-            ["Holding costs", usd(num(holding))],
-            ["Max offer to hit profit", usd(itemizedMao)],
-          ],
-          bullets: [
-            num(desiredProfit) > 0 ? `~${usd(num(desiredProfit))} profit at ${usd(itemizedMao)} or below` : null,
-            arv > 0 ? `${usd(arv)} after-repair value` : null,
-            repairs > 0 ? `Rehab scoped at about ${usd(repairs)}` : null,
-            "Resell at retail once rehabbed",
-          ],
-          note: `Buy at or below ${usd(itemizedMao)} to clear roughly ${usd(num(desiredProfit))} after costs.`,
+          sellingCost: arv * num(sellingPct) / 100,
+          holdingCost: num(holding),
+          sellingPct: num(sellingPct),
         }}
       />
       <TabEducation id="cash" />
@@ -1562,7 +1541,10 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
       <p className="mb-3 text-[11px] text-slate-400">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price plus your wholesale / assignment fee. Enter it directly; no default."><MoneyInput value={purchase} onChange={setPurchase} placeholder="e.g. 140000" /></Field>
+        <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
+          <MoneyInput value={purchase} onChange={setPurchase} placeholder="e.g. 140000" />
+          <div className="mt-1 text-[10px] text-slate-400">Selling to a buyer? Enter your buy price <b className="text-slate-500">+ your wholesale fee</b> — the all-in amount they pay to acquire it. Keeping it yourself? Just your buy price.</div>
+        </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
           <div className="flex items-center gap-2">
@@ -1639,21 +1621,46 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
                 address: form.address,
                 subjectLine: deckCommon.subjectLine,
                 arv,
+                repairs,
                 asking: form.asking,
                 contractPrice: form.contractPrice,
                 rent: form.rent,
                 photo: form.photo,
                 basis: { compCount: deckCommon.compCount, avgPpsf: deckCommon.avgPpsf, rent: form.rent },
                 contact: form.contact,
-                flip: {
-                  profitStr: usd(flipDeck.profit),
-                  rows: flipDeck.rows,
-                  bullets: flipDeck.bullets,
-                  note: flipDeck.note,
-                },
+                flip: (() => {
+                  const fSell = flipDeck.sellingCost || 0;
+                  const fHold = flipDeck.holdingCost || 0;
+                  const fProfit = arv - buy - repairs - fSell - fHold;   // buyer's real flip profit at YOUR offer price
+                  return {
+                    profitStr: buy > 0 ? usd(fProfit) : "—",
+                    rows: [
+                      ["After-repair value (ARV)", usd(arv)],
+                      ["Estimated rehab", usd(repairs)],
+                      [`Selling costs (${flipDeck.sellingPct}% of ARV)`, usd(fSell)],
+                      ["Holding costs", usd(fHold)],
+                      ["Your purchase price", buy > 0 ? usd(buy) : "—"],
+                    ],
+                    bullets: [
+                      buy > 0 && fProfit > 0 ? `About ${usd(fProfit)} profit at your ${usd(buy)} purchase price` : null,
+                      arv > 0 ? `${usd(arv)} after-repair value` : null,
+                      repairs > 0 ? `Rehab scoped at about ${usd(repairs)}` : null,
+                      "Resell at retail once rehabbed",
+                    ],
+                    note: "",
+                  };
+                })(),
                 brrrr: {
                   headlineStr: `${usd(trueCF)}/mo · DSCR ${dscr > 0 ? dscr.toFixed(2) : "—"}`,
                   cocStr: coc === null ? "∞" : (cashLeftIn > 0 && coc ? coc.toFixed(1) + "%" : "—"),
+                  returnStr: (() => {
+                    if (buy <= 0) return "";
+                    if (cashLeftIn <= 0) return "∞ cash-on-cash & ROI — all cash out";
+                    const parts = [];
+                    if (coc) parts.push(coc.toFixed(1) + "% cash-on-cash");
+                    if (totalRoi && totalReturn1 !== 0) parts.push(totalRoi.toFixed(1) + "% total ROI (yr 1)");
+                    return parts.join("  ·  ");
+                  })(),
                   rows: [
                     ["All-in (purchase + rehab)", usd(allIn)],
                     [`Refi loan (ARV × ${num(ltv)}%)`, usd(refiLoan)],
