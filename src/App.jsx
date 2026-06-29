@@ -925,6 +925,7 @@ async function generateBuyerDeck(data) {
   s = pptx.addSlide(); header(s, `The Deal — ${data.dealType}`);
   const dRows = (data.dealRows && data.dealRows.length ? data.dealRows : [["—", "—"]]);
   s.addTable(kv(dRows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
+  if (dRows.some((r) => /PITI/i.test(String(r[0])))) s.addText("PITI = principal, interest, taxes & insurance — the monthly payment you take over.", { x: 0.6, y: 1.5 + dRows.length * 0.6 + 0.15, w: 7.9, h: 0.5, fontSize: 11, color: "6B7A6F", italic: true });
   s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
   s.addText([
     { text: (data.totalLabel || "TOTAL DEAL VALUE").toUpperCase() + "\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } },
@@ -1091,6 +1092,7 @@ async function generateDualDeck(data) {
   // Slide 5 — Option B detail (BRRRR)
   s = pptx.addSlide(); header(s, "Option B — BRRRR (Hold)");
   s.addTable(kv(data.brrrr.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
+  s.addText("PITIA = principal, interest, taxes, insurance & HOA — the all-in monthly payment on the new loan.", { x: 0.6, y: 1.5 + data.brrrr.rows.length * 0.6 + 0.15, w: 7.9, h: 0.5, fontSize: 11, color: "6B7A6F", italic: true });
   s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
   s.addText([{ text: "CASH-ON-CASH\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: data.brrrr.cocStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
   if (data.brrrr.note) s.addText(data.brrrr.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
@@ -1165,13 +1167,12 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
   const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
   const [f, setF] = useState({
     address: common.address || "",
-    contractPrice: common.contractDefault ? String(Math.round(common.contractDefault)) : "",
     asking: common.askingDefault ? String(Math.round(common.askingDefault)) : "",
     rent: common.rent ? String(Math.round(common.rent)) : "",
     name: "", phone: "", email: "",
   });
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target?.value ?? e }));
-  const missing = ["address", "contractPrice", "asking", "rent"].filter((k) => !String(f[k]).trim());
+  const missing = ["address", "asking", "rent"].filter((k) => !String(f[k]).trim());
 
   function onPhoto(e) {
     const file = e.target.files && e.target.files[0];
@@ -1187,7 +1188,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
     setBusy(true);
     try {
       if (generateOverride) {
-        await generateOverride({ address: f.address, asking: num(f.asking), contractPrice: num(f.contractPrice), rent: num(f.rent), photo, contact: { name: f.name, phone: f.phone, email: f.email } });
+        await generateOverride({ address: f.address, asking: num(f.asking), rent: num(f.rent), photo, contact: { name: f.name, phone: f.phone, email: f.email } });
         setOpen(false);
         return;
       }
@@ -1198,7 +1199,6 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
         arv: common.arv,
         repairs: common.repairs,
         asking: num(f.asking),
-        contractPrice: num(f.contractPrice),
         rent: num(f.rent),
         photo,
         headline: deal.headline,
@@ -1249,10 +1249,9 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
             <div className="space-y-3">
               {req("address", "Property address")}
               <div className="grid grid-cols-2 gap-3">
-                {req("contractPrice", "Contract price", true)}
                 {req("asking", "Asking price", true)}
+                {req("rent", "Monthly rent", true)}
               </div>
-              {req("rent", "Monthly rent", true)}
               <div className="border-t border-slate-100 pt-3">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Property photo for the cover (optional)</div>
                 {photo ? (
@@ -1277,7 +1276,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
                 </div>
               </div>
             </div>
-            {missing.length > 0 && <div className="mt-3 text-[11px] text-rose-500">Fill in: {missing.map((m) => ({ address: "address", contractPrice: "contract price", asking: "asking price", rent: "monthly rent" }[m])).join(", ")}.</div>}
+            {missing.length > 0 && <div className="mt-3 text-[11px] text-rose-500">Fill in: {missing.map((m) => ({ address: "address", asking: "asking price", rent: "monthly rent" }[m])).join(", ")}.</div>}
             <button onClick={go} disabled={busy || missing.length > 0}
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Building deck…</> : <><FileDown className="h-4 w-4" /> Generate PowerPoint</>}
@@ -1392,33 +1391,12 @@ function CashTab(props) {
   }
   return (
     <div className="space-y-4">
-      {/* INPUTS: two boxes side by side */}
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Your wholesale numbers */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>Your wholesale numbers</SectionTitle>
-          <div className="space-y-3">
-            <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
-            <Field label="Seller asking price" hint="optional — grades the deal"><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
-          </div>
-        </div>
-
-        {/* The flipper's numbers */}
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 shadow-sm">
-          <div className="flex items-start gap-2">
-            <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">The flipper's numbers — your end buyer</div>
-              <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-                These are your <b className="font-semibold text-slate-600">end buyer's</b> numbers — the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not yours</b>. They feed the <b className="font-semibold text-slate-600">Itemized max offer</b> below: the highest price you can buy it for and still leave the flipper a deal worth doing.
-              </p>
-            </div>
-          </div>
-          <div className="mt-3 space-y-3">
-            <Field label="Selling costs" hint="% of ARV" info="Cost to SELL the fixed-up house: agent commissions, title, closing. Roughly 8–10% of ARV."><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
-            <Field label="Holding costs" info="Cost to OWN it during rehab and sale: loan interest, taxes, insurance, utilities. ~$3k–$8k on a typical flip."><MoneyInput value={holding} onChange={setHolding} /></Field>
-            <Field label="Flipper's desired profit" hint="your end buyer — not you" info="The profit the END BUYER (the investor who buys this from you and flips it) wants to clear after all their costs. This is THEIR cushion, not your wholesale fee. Commonly $25k–$40k+."><MoneyInput value={desiredProfit} onChange={setDesiredProfit} /></Field>
-          </div>
+      {/* INPUTS: your wholesale numbers (full width) */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <SectionTitle>Your wholesale numbers</SectionTitle>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
+          <Field label="Seller asking price" hint="optional — grades the deal"><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
         </div>
       </div>
 
@@ -1454,10 +1432,44 @@ function CashTab(props) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Stat label={`${activePct}% Rule MAO`} value={usd(activeRuleMao)} tone={activeRuleMao > 0 ? "default" : "bad"} big sub="ARV × band − repairs" />
           <Stat label="Investor MAO" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
-          <Stat label="Itemized max offer" value={usd(itemizedMao)} sub="What to buy it for — at this price or lower, the flipper still hits their profit" />
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
         </div>
       </div>
+
+      {/* OPTIONAL — Itemized max offer: the flipper's inputs and the resulting number sit together so the cause/effect is obvious */}
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-4 shadow-sm">
+        <div className="flex items-start gap-2">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Itemized max offer</span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Optional</span>
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+              A second, optional way to find your max offer — back into it from your <b className="font-semibold text-slate-600">end buyer's</b> costs and target profit (the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not you</b>). You don't have to fill this in — the Rule and Investor MAO above already work. When you do, the number on the right updates the instant you change a field on the left.
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 grid items-stretch gap-4 md:grid-cols-2">
+          {/* left: the flipper's inputs */}
+          <div className="space-y-3">
+            <Field label="Selling costs" hint="% of ARV" info="Cost to SELL the fixed-up house: agent commissions, title, closing. Roughly 8–10% of ARV."><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
+            <Field label="Holding costs" info="Cost to OWN it during rehab and sale: loan interest, taxes, insurance, utilities. ~$3k–$8k on a typical flip."><MoneyInput value={holding} onChange={setHolding} /></Field>
+            <Field label="Flipper's desired profit" hint="optional — your end buyer, not you" info="The profit the END BUYER (the investor who buys this from you and flips it) wants to clear after all their costs. This is THEIR cushion, not your wholesale fee. Commonly $25k–$40k+. Leave the default if you don't know it.">
+              <MoneyInput value={desiredProfit} onChange={setDesiredProfit} />
+              {num(desiredProfit) > 50000 && <div className="mt-1 flex items-start gap-1 text-[10px] font-medium text-amber-600"><span>⚠</span><span>That's high for a flip cushion — most flippers target $25k–$40k. A big number here pushes your max offer way down. Double-check this is really the buyer's number, not your wholesale fee.</span></div>}
+            </Field>
+          </div>
+          {/* right: the live result, right next to the inputs that drive it */}
+          <div className="flex flex-col justify-center rounded-xl border border-slate-200 bg-white p-5 text-center">
+            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Itemized max offer</div>
+            <div className="mt-1 text-4xl font-bold tabular-nums text-slate-900">{usd(itemizedMao)}</div>
+            <div className="mt-2 text-[11px] leading-snug text-slate-500">Buy at this price or lower and the flipper still clears the profit you entered.</div>
+            <div className="mt-3 text-[10px] font-medium text-amber-700">↻ Updates the instant you change the flipper's desired profit.</div>
+          </div>
+        </div>
+      </div>
+
       <BrrrrPanel
         arv={arv} repairs={repairs} rentDefault={rentDefault} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
@@ -1623,7 +1635,6 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
                 arv,
                 repairs,
                 asking: form.asking,
-                contractPrice: form.contractPrice,
                 rent: form.rent,
                 photo: form.photo,
                 basis: { compCount: deckCommon.compCount, avgPpsf: deckCommon.avgPpsf, rent: form.rent },
