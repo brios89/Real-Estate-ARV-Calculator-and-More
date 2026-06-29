@@ -407,7 +407,6 @@ export default function App() {
   const [holding, setHolding] = useState("5000");
   const [desiredProfit, setDesiredProfit] = useState("25000");
   const [askingPrice, setAskingPrice] = useState("");
-  const [contractPrice, setContractPrice] = useState("");
 
   // sub-to
   const [stBal, setStBal] = useState("");
@@ -505,7 +504,7 @@ export default function App() {
     subjectLine: propLine(subjectInfo),
     rent: effRent,
     askingDefault: num(askingPrice),
-    contractDefault: num(contractPrice),
+    contractDefault: num(askingPrice),
     fee: num(wholesaleFee),
     compCount: num(arvOverride) > 0 ? 0 : validCompCount,
     avgPpsf: num(arvOverride) > 0 ? 0 : avgPsf,
@@ -760,7 +759,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, contractPrice, setContractPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -1379,23 +1378,20 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, contractPrice, setContractPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
-  const contract = num(contractPrice);
-  const gradePrice = contract > 0 ? contract : ask;          // contract wins once entered; asking screens before that
-  const gradeLabel = contract > 0 ? "contract price" : "asking";
-  let status = "maybe", headline = "Enter the asking price to grade the deal", detail = "";
-  if (gradePrice > 0 && arv > 0) {
-    const spread = activeInvestorMao - gradePrice;
-    if (gradePrice <= activeInvestorMao) {
+  let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
+  if (ask > 0 && arv > 0) {
+    const spread = activeInvestorMao - ask;
+    if (ask <= activeInvestorMao) {
       status = "go"; headline = "WHOLESALE — lock it";
-      detail = `At ${usd(gradePrice)} (${gradeLabel}) you're under your investor MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
-    } else if (gradePrice <= activeRuleMao) {
+      detail = `At ${usd(ask)} you're under your investor MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
+    } else if (ask <= activeRuleMao) {
       status = "maybe"; headline = "FLIP margin — thin for an assignment";
-      detail = `Works as a flip at the ${activePct}% rule, but the ${gradeLabel} is ${usd(gradePrice - activeInvestorMao)} over your wholesale MAO. Renegotiate or shrink the fee.`;
+      detail = `Works as a flip at the ${activePct}% rule, but ${usd(ask - activeInvestorMao)} over your wholesale MAO. Renegotiate or shrink the fee.`;
     } else {
       status = "no"; headline = "PASS / renegotiate";
-      detail = `The ${gradeLabel} is ${usd(gradePrice - activeRuleMao)} above even the ${activePct}% MAO. Numbers don't work at this price.`;
+      detail = `Asking is ${usd(ask - activeRuleMao)} above even the ${activePct}% MAO. Numbers don't work at this price.`;
     }
   }
   return (
@@ -1403,16 +1399,9 @@ function CashTab(props) {
       {/* INPUTS: your wholesale numbers (full width) */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <SectionTitle>Your wholesale numbers</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Seller asking price" hint="required — grades the deal" info="What the seller is asking. Grades the deal on your first pass. The moment you enter a contract price, the grade switches to that number instead.">
-            <MoneyInput value={askingPrice} onChange={setAskingPrice} />
-            {num(askingPrice) <= 0 && <div className="mt-1 text-[10px] font-medium text-rose-500">Enter the asking price to grade the deal.</div>}
-          </Field>
-          <Field label="Contract price" hint="needed to print a deck" info="What you actually locked it under contract for. Once entered it grades the deal, fills the BRRRR purchase below, and prints on the buyer deck as Purchase price (contract + your wholesale fee).">
-            <MoneyInput value={contractPrice} onChange={setContractPrice} />
-            {num(contractPrice) <= 0 && <div className="mt-1 text-[10px] text-slate-400">Add this once you're under contract — required to generate a pitch deck.</div>}
-          </Field>
-          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO, and added on top of the contract price for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO, and added on top for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
+          <Field label="Seller asking price" hint="negotiations & final contract price" info="One price for both jobs: it grades the deal while you negotiate, and prints on the buyer deck as your contract price (plus your wholesale fee). Just update it to your locked number once you're under contract."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
         </div>
       </div>
 
@@ -1488,7 +1477,7 @@ function CashTab(props) {
 
       <BrrrrPanel
         arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
-        contractPrice={contractPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
+        askingPrice={askingPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
         flipDeck={{
           sellingCost: arv * num(sellingPct) / 100,
@@ -1509,7 +1498,7 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, contractPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
+function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
   const [purchase, setPurchase] = useState("");
   const [rehab, setRehab] = useState("");
   const [taxIns, setTaxIns] = useState("");
@@ -1520,9 +1509,9 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
   const [reservePct, setReservePct] = useState("10");
 
   const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
-  const contractAmt = num(contractPrice);                    // contract price (set on the Cash / MAO tab above)
+  const ask = num(askingPrice);                              // asking / contract price (set on the Cash / MAO tab above)
   const fee = num(wholesaleFee);                             // your assignment fee — shared Cash-tab value
-  const contractPlusFee = contractAmt + fee;                 // what an end buyer pays when you wholesale it
+  const askPlusFee = ask + fee;                              // what an end buyer pays when you wholesale it
   const fix = num(rehab) > 0 ? num(rehab) : repairs;
   const rnt = num(rentDefault);                              // shared rent (Generate or manual), already = override || estimate
   const allIn = buy + fix;
@@ -1575,20 +1564,20 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
         <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
           <MoneyInput value={purchase} onChange={setPurchase} placeholder="Purchase price (plus wholesale fee)" />
           <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <button type="button" onClick={() => setPurchase(String(Math.round(contractAmt)))} disabled={contractAmt <= 0}
+            <button type="button" onClick={() => setPurchase(String(Math.round(ask)))} disabled={ask <= 0}
               className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
-              title={contractAmt > 0 ? "Fill with your contract price — keeping it yourself, no fee to add" : "Enter a Contract price on the Cash / MAO tab above first"}>
-              Use contract{contractAmt > 0 ? ` · ${usd(contractAmt)}` : ""}
+              title={ask > 0 ? "Fill with your asking / contract price — keeping it yourself, no fee to add" : "Enter a Seller asking price on the Cash / MAO tab above first"}>
+              Use asking{ask > 0 ? ` · ${usd(ask)}` : ""}
             </button>
-            <button type="button" onClick={() => setPurchase(String(Math.round(contractPlusFee)))} disabled={contractAmt <= 0}
+            <button type="button" onClick={() => setPurchase(String(Math.round(askPlusFee)))} disabled={ask <= 0}
               className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
-              title={contractAmt > 0 ? `Wholesaling it — contract + your ${usd(fee)} wholesale fee, what the buyer pays` : "Enter a Contract price on the Cash / MAO tab above first"}>
-              Contract + fee{contractAmt > 0 ? ` · ${usd(contractPlusFee)}` : ""}
+              title={ask > 0 ? `Wholesaling it — asking + your ${usd(fee)} wholesale fee, what the buyer pays` : "Enter a Seller asking price on the Cash / MAO tab above first"}>
+              Asking + fee{ask > 0 ? ` · ${usd(askPlusFee)}` : ""}
             </button>
           </div>
-          {contractAmt <= 0
-            ? <div className="mt-1 text-[10px] italic text-slate-400">Set a <b className="text-slate-500">Contract price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
-            : <div className="mt-1 text-[10px] text-slate-400">Tap a button to fill from your contract price, or type any amount. <b className="text-slate-500">Wholesaling</b> → contract + your fee (what the buyer pays). <b className="text-slate-500">Keeping it</b> → just the contract price.</div>}
+          {ask <= 0
+            ? <div className="mt-1 text-[10px] italic text-slate-400">Set a <b className="text-slate-500">Seller asking price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
+            : <div className="mt-1 text-[10px] text-slate-400">Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-500">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-500">Keeping it</b> → just the price.</div>}
         </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
