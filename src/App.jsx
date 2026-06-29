@@ -1823,7 +1823,10 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
   const intSubTo = Math.max(0, payDeal * term * 12 - P);    // interest left to pay on this loan
   const intNew = Math.max(0, payNew * effOrig * 12 - P);    // interest on a brand-new loan
   const intSaved = Math.max(0, intNew - intSubTo);          // total interest the buyer avoids
-  const finValue = pvSavings(P, rate, mkt, term);           // PV of the rate edge over the years left (feeds deal value)
+  const intSameTerm = Math.max(0, pmt(P, mkt, term) * term * 12 - P); // interest on a market-rate loan over the SAME years left
+  const rateSaved = Math.max(0, intSameTerm - intSubTo);    // savings purely from the lower rate (same remaining term)
+  const seasoningSaved = Math.max(0, intNew - intSameTerm); // savings purely from the loan being seasoned (fewer yrs left)
+  const totalSaved = rateSaved + seasoningSaved;            // rate + seasoning; the two pieces always sum to this on screen
   // Fixed payment comparison: use the REAL payment entered on the deal, don't re-derive it.
   const haveRealPmt = dealPayment > 0;
   const tiPortion = haveRealPmt ? Math.max(0, dealPayment - payDeal) : 0;  // taxes/insurance (+ any 2nd-lien) baked into the real payment
@@ -1886,7 +1889,26 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
           </div>
           {/* savings */}
           <div className="space-y-3">
-            <Stat label="Financing value today" value={usd(finValue)} tone="good" big sub={`PV of the rate edge vs ${mkt.toFixed(2)}% market`} />
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What this loan saves — held to maturity</div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-white/70 px-2.5 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Rate savings</div>
+                  <div className="font-mono text-lg font-bold tabular-nums text-emerald-700">{usd(rateSaved)}</div>
+                  <div className="text-[10px] leading-tight text-slate-400">{rate.toFixed(2)}% vs {mkt.toFixed(2)}%, same {term} yrs left</div>
+                </div>
+                <div className="rounded-lg bg-white/70 px-2.5 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Seasoning savings</div>
+                  <div className="font-mono text-lg font-bold tabular-nums text-emerald-700">{usd(seasoningSaved)}</div>
+                  <div className="text-[10px] leading-tight text-slate-400">{term} yrs left vs a fresh {effOrig}-yr loan</div>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between rounded-lg bg-emerald-600 px-3 py-2 text-white">
+                <span className="text-[11px] font-bold uppercase tracking-wide">Total interest saved</span>
+                <span className="font-mono text-2xl font-extrabold tabular-nums">{usd(totalSaved)}</span>
+              </div>
+              <div className="mt-1 text-[10px] leading-tight text-slate-400">Rate savings <b>+</b> seasoning savings. Realized in full only if the loan is held to payoff — sell or refinance early and you capture the part up to that point.</div>
+            </div>
             {/* side-by-side: take this loan vs new loan */}
             <div className="overflow-hidden rounded-xl border border-slate-200 text-[12px]">
               <div className="grid grid-cols-3 bg-slate-50 font-semibold text-slate-500">
@@ -1911,13 +1933,13 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
               <div className="text-[10px] text-slate-400">Payment row uses the <b>real payment from this deal</b> — fixed, it won't move with the sliders. The new-loan figure is a fresh-rate loan carrying the same taxes &amp; insurance; set "Years left" to the loan's actual remaining term for the most accurate new-loan number.</div>
             )}
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Interest saved" value={usd(intSaved)} tone={intSaved > 0 ? "good" : "default"} sub="vs a brand-new loan" />
+              <Stat label="Monthly payment relief" value={usd(haveRealPmt ? Math.max(0, newPmtFull - dealPayment) : Math.max(0, payNew - payDeal))} tone="good" sub="lighter payment vs a new loan" />
               <Stat label="Paid off sooner" value={seasoned > 0 ? `${seasoned} ${seasoned === 1 ? "yr" : "yrs"}` : "—"} tone={seasoned > 0 ? "good" : "default"} sub="free & clear earlier" />
             </div>
             <div className="rounded-lg bg-emerald-50/60 px-3 py-2 text-[11px] text-emerald-700">
               {seasoned > 0
-                ? <>This loan is <b>{seasoned} of {effOrig} yrs</b> in — the seller already paid down the interest-heavy years. A fresh loan at {mkt.toFixed(2)}% restarts that clock, so the buyer saves <b>{usd(intSaved)}</b> in interest and owns it free &amp; clear <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b> sooner. The <b>{usd(finValue)}</b> financing value feeds the deal value above.</>
-                : <>Set the original term, then drag <b>Years left</b> down to model a seasoned loan and watch the interest saved vs a new loan grow. The <b>{usd(finValue)}</b> financing value feeds the deal value above.</>}
+                ? <>This loan is <b>{seasoned} of {effOrig} yrs</b> in — the seller already paid down the interest-heavy years. A fresh {effOrig}-yr loan at {mkt.toFixed(2)}% restarts that clock, so the buyer saves <b>{usd(rateSaved)}</b> from the lower rate <b>+</b> <b>{usd(seasoningSaved)}</b> from the seasoning = <b>{usd(totalSaved)}</b> in total interest, and owns it free &amp; clear <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b> sooner — if held to payoff.</>
+                : <>Set the original term, then drag <b>Years left</b> down to model a seasoned loan and watch the seasoning savings stack on top of the rate savings.</>}
             </div>
           </div>
         </div>
