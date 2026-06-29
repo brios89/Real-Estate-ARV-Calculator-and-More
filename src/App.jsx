@@ -126,7 +126,7 @@ function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClo
     projection: { startEquity, paydown5, appreciation5, cumCF5, total5: startEquity + paydown5 + appreciation5 + cumCF5, apprRate: 3 },
     curve: { series: curveSeries, milestones, cashToClose },
     exits: [
-      "Hold as a cash-flowing mid-term or long-term rental",
+      "Hold as a cash-flowing long-term rental",
       "BRRRR — season, refinance, and recycle your capital",
       "Resell on terms to your own buyer for a markup",
     ],
@@ -407,6 +407,7 @@ export default function App() {
   const [holding, setHolding] = useState("5000");
   const [desiredProfit, setDesiredProfit] = useState("25000");
   const [askingPrice, setAskingPrice] = useState("");
+  const [contractPrice, setContractPrice] = useState("");
 
   // sub-to
   const [stBal, setStBal] = useState("");
@@ -504,6 +505,8 @@ export default function App() {
     subjectLine: propLine(subjectInfo),
     rent: effRent,
     askingDefault: num(askingPrice),
+    contractDefault: num(contractPrice),
+    fee: num(wholesaleFee),
     compCount: num(arvOverride) > 0 ? 0 : validCompCount,
     avgPpsf: num(arvOverride) > 0 ? 0 : avgPsf,
   };
@@ -757,7 +760,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, contractPrice, setContractPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -916,7 +919,7 @@ async function generateBuyerDeck(data) {
   if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
   propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
   propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
-  propRows.push(["Asking price", data.asking ? usd(data.asking) : "—"]);
+  propRows.push([data.priceLabel || "Purchase price", data.asking ? usd(data.asking) : "—"]);
   propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts });
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
@@ -1063,7 +1066,7 @@ async function generateDualDeck(data) {
   if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
   propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
   propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
-  propRows.push(["Asking price", data.asking ? usd(data.asking) : "—"]);
+  propRows.push([data.priceLabel || "Purchase price", data.asking ? usd(data.asking) : "—"]);
   propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts, rowH: 0.6, fontSize: 15 });
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
@@ -1091,8 +1094,8 @@ async function generateDualDeck(data) {
 
   // Slide 5 — Option B detail (BRRRR)
   s = pptx.addSlide(); header(s, "Option B — BRRRR (Hold)");
-  s.addTable(kv(data.brrrr.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
-  s.addText("PITIA = principal, interest, taxes, insurance & HOA — the all-in monthly payment on the new loan.", { x: 0.6, y: 1.5 + data.brrrr.rows.length * 0.6 + 0.15, w: 7.9, h: 0.5, fontSize: 11, color: "6B7A6F", italic: true });
+  s.addTable(kv(data.brrrr.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts, rowH: 0.5 });
+  s.addText("PITIA = principal, interest, taxes, insurance & HOA — the all-in monthly payment on the new loan.", { x: 0.6, y: 1.5 + data.brrrr.rows.length * 0.5 + 0.15, w: 7.9, h: 0.5, fontSize: 11, color: "6B7A6F", italic: true });
   s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
   s.addText([{ text: "CASH-ON-CASH\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: data.brrrr.cocStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
   if (data.brrrr.note) s.addText(data.brrrr.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
@@ -1161,18 +1164,18 @@ async function generateDualDeck(data) {
   await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-flip-brrrr.pptx` });
 }
 
-function BuyerDeckButton({ deal, common, generateOverride, label }) {
+function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "Purchase price" }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
   const [f, setF] = useState({
     address: common.address || "",
-    asking: common.askingDefault ? String(Math.round(common.askingDefault)) : "",
+    contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : "",
     rent: common.rent ? String(Math.round(common.rent)) : "",
     name: "", phone: "", email: "",
   });
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target?.value ?? e }));
-  const missing = ["address", "asking", "rent"].filter((k) => !String(f[k]).trim());
+  const missing = ["address", "contract", "rent"].filter((k) => !String(f[k]).trim());
 
   function onPhoto(e) {
     const file = e.target.files && e.target.files[0];
@@ -1186,9 +1189,10 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
   async function go() {
     if (missing.length) return;
     setBusy(true);
+    const buyerPrice = num(f.contract);  // field already holds contract + your fee (buyer's all-in)
     try {
       if (generateOverride) {
-        await generateOverride({ address: f.address, asking: num(f.asking), rent: num(f.rent), photo, contact: { name: f.name, phone: f.phone, email: f.email } });
+        await generateOverride({ address: f.address, asking: buyerPrice, rent: num(f.rent), photo, contact: { name: f.name, phone: f.phone, email: f.email } });
         setOpen(false);
         return;
       }
@@ -1198,7 +1202,8 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
         subjectLine: common.subjectLine,
         arv: common.arv,
         repairs: common.repairs,
-        asking: num(f.asking),
+        asking: buyerPrice,
+        priceLabel,
         rent: num(f.rent),
         photo,
         headline: deal.headline,
@@ -1233,7 +1238,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
 
   return (
     <>
-      <button onClick={() => { setF((p) => ({ ...p, address: common.address || p.address, asking: common.askingDefault ? String(Math.round(common.askingDefault)) : p.asking, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); }}
+      <button onClick={() => { setF((p) => ({ ...p, address: common.address || p.address, contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : p.contract, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); }}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
         <FileDown className="h-4 w-4" /> {label || `Download buyer deck (.pptx) — ${deal.type}`}
       </button>
@@ -1249,9 +1254,10 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
             <div className="space-y-3">
               {req("address", "Property address")}
               <div className="grid grid-cols-2 gap-3">
-                {req("asking", "Asking price", true)}
+                {req("contract", `${priceLabel}${num(common.fee) > 0 ? " (incl. fee)" : ""}`, true)}
                 {req("rent", "Monthly rent", true)}
               </div>
+              {num(common.fee) > 0 && <div className="-mt-1 text-[10px] text-slate-400">{priceLabel} includes your {usd(num(common.fee))} wholesale fee — what the buyer pays. Edit if needed.</div>}
               <div className="border-t border-slate-100 pt-3">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Property photo for the cover (optional)</div>
                 {photo ? (
@@ -1276,7 +1282,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
                 </div>
               </div>
             </div>
-            {missing.length > 0 && <div className="mt-3 text-[11px] text-rose-500">Fill in: {missing.map((m) => ({ address: "address", asking: "asking price", rent: "monthly rent" }[m])).join(", ")}.</div>}
+            {missing.length > 0 && <div className="mt-3 text-[11px] text-rose-500">Fill in: {missing.map((m) => ({ address: "address", contract: "purchase price", rent: "monthly rent" }[m])).join(", ")}.</div>}
             <button onClick={go} disabled={busy || missing.length > 0}
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
               {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Building deck…</> : <><FileDown className="h-4 w-4" /> Generate PowerPoint</>}
@@ -1373,20 +1379,23 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, contractPrice, setContractPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
-  let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
-  if (ask > 0 && arv > 0) {
-    const spread = activeInvestorMao - ask;
-    if (ask <= activeInvestorMao) {
+  const contract = num(contractPrice);
+  const gradePrice = contract > 0 ? contract : ask;          // contract wins once entered; asking screens before that
+  const gradeLabel = contract > 0 ? "contract price" : "asking";
+  let status = "maybe", headline = "Enter the asking price to grade the deal", detail = "";
+  if (gradePrice > 0 && arv > 0) {
+    const spread = activeInvestorMao - gradePrice;
+    if (gradePrice <= activeInvestorMao) {
       status = "go"; headline = "WHOLESALE — lock it";
-      detail = `At ${usd(ask)} you're under your investor MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
-    } else if (ask <= activeRuleMao) {
+      detail = `At ${usd(gradePrice)} (${gradeLabel}) you're under your investor MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
+    } else if (gradePrice <= activeRuleMao) {
       status = "maybe"; headline = "FLIP margin — thin for an assignment";
-      detail = `Works as a flip at the ${activePct}% rule, but ${usd(ask - activeInvestorMao)} over your wholesale MAO. Renegotiate or shrink the fee.`;
+      detail = `Works as a flip at the ${activePct}% rule, but the ${gradeLabel} is ${usd(gradePrice - activeInvestorMao)} over your wholesale MAO. Renegotiate or shrink the fee.`;
     } else {
       status = "no"; headline = "PASS / renegotiate";
-      detail = `Asking is ${usd(ask - activeRuleMao)} above even the ${activePct}% MAO. Numbers don't work at this price.`;
+      detail = `The ${gradeLabel} is ${usd(gradePrice - activeRuleMao)} above even the ${activePct}% MAO. Numbers don't work at this price.`;
     }
   }
   return (
@@ -1394,9 +1403,16 @@ function CashTab(props) {
       {/* INPUTS: your wholesale numbers (full width) */}
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <SectionTitle>Your wholesale numbers</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
-          <Field label="Seller asking price" hint="optional — grades the deal"><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Seller asking price" hint="required — grades the deal" info="What the seller is asking. Grades the deal on your first pass. The moment you enter a contract price, the grade switches to that number instead.">
+            <MoneyInput value={askingPrice} onChange={setAskingPrice} />
+            {num(askingPrice) <= 0 && <div className="mt-1 text-[10px] font-medium text-rose-500">Enter the asking price to grade the deal.</div>}
+          </Field>
+          <Field label="Contract price" hint="needed to print a deck" info="What you actually locked it under contract for. Once entered it grades the deal, fills the BRRRR purchase below, and prints on the buyer deck as Purchase price (contract + your wholesale fee).">
+            <MoneyInput value={contractPrice} onChange={setContractPrice} />
+            {num(contractPrice) <= 0 && <div className="mt-1 text-[10px] text-slate-400">Add this once you're under contract — required to generate a pitch deck.</div>}
+          </Field>
+          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO, and added on top of the contract price for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
         </div>
       </div>
 
@@ -1471,7 +1487,8 @@ function CashTab(props) {
       </div>
 
       <BrrrrPanel
-        arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
+        arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
+        contractPrice={contractPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
         flipDeck={{
           sellingCost: arv * num(sellingPct) / 100,
@@ -1492,7 +1509,7 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
+function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, contractPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
   const [purchase, setPurchase] = useState("");
   const [rehab, setRehab] = useState("");
   const [taxIns, setTaxIns] = useState("");
@@ -1503,6 +1520,9 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
   const [reservePct, setReservePct] = useState("10");
 
   const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
+  const contractAmt = num(contractPrice);                    // contract price (set on the Cash / MAO tab above)
+  const fee = num(wholesaleFee);                             // your assignment fee — shared Cash-tab value
+  const contractPlusFee = contractAmt + fee;                 // what an end buyer pays when you wholesale it
   const fix = num(rehab) > 0 ? num(rehab) : repairs;
   const rnt = num(rentDefault);                              // shared rent (Generate or manual), already = override || estimate
   const allIn = buy + fix;
@@ -1554,7 +1574,21 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
           <MoneyInput value={purchase} onChange={setPurchase} placeholder="Purchase price (plus wholesale fee)" />
-          <div className="mt-1 text-[10px] text-slate-400">Selling to a buyer? Enter your buy price <b className="text-slate-500">+ your wholesale fee</b> — the all-in amount they pay to acquire it. Keeping it yourself? Just your buy price.</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => setPurchase(String(Math.round(contractAmt)))} disabled={contractAmt <= 0}
+              className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title={contractAmt > 0 ? "Fill with your contract price — keeping it yourself, no fee to add" : "Enter a Contract price on the Cash / MAO tab above first"}>
+              Use contract{contractAmt > 0 ? ` · ${usd(contractAmt)}` : ""}
+            </button>
+            <button type="button" onClick={() => setPurchase(String(Math.round(contractPlusFee)))} disabled={contractAmt <= 0}
+              className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title={contractAmt > 0 ? `Wholesaling it — contract + your ${usd(fee)} wholesale fee, what the buyer pays` : "Enter a Contract price on the Cash / MAO tab above first"}>
+              Contract + fee{contractAmt > 0 ? ` · ${usd(contractPlusFee)}` : ""}
+            </button>
+          </div>
+          {contractAmt <= 0
+            ? <div className="mt-1 text-[10px] italic text-slate-400">Set a <b className="text-slate-500">Contract price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
+            : <div className="mt-1 text-[10px] text-slate-400">Tap a button to fill from your contract price, or type any amount. <b className="text-slate-500">Wholesaling</b> → contract + your fee (what the buyer pays). <b className="text-slate-500">Keeping it</b> → just the contract price.</div>}
         </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
@@ -1626,7 +1660,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
         <div className="mt-3">
           <BuyerDeckButton
             label="Download deal deck — Flip + BRRRR (.pptx)"
-            common={{ ...deckCommon, contractDefault: buy, rent: rnt }}
+            common={{ ...deckCommon, rent: rnt }}
             generateOverride={async (form) => {
               await generateDualDeck({
                 address: form.address,
@@ -1674,8 +1708,11 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
                   rows: [
                     ["All-in (purchase + rehab)", usd(allIn)],
                     [`Refi loan (ARV × ${num(ltv)}%)`, usd(refiLoan)],
+                    ["Loan term", `${num(term)} yr`],
                     ["Cash left in deal", cashLeftIn <= 0 ? `${usd(-cashLeftIn)} back out` : usd(cashLeftIn)],
+                    ["Monthly rent", rnt > 0 ? usd(rnt) : "—"],
                     ["New payment (PITIA)", usd(pitia)],
+                    [`Reserves (${num(reservePct)}% of rent)`, reserves > 0 ? usd(reserves) : "—"],
                     ["DSCR", dscr > 0 ? dscr.toFixed(2) : "—"],
                     ["Monthly cash flow", usd(trueCF)],
                   ],
@@ -1911,9 +1948,11 @@ function SubToTab(props) {
   const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent) || num(rentDefault);
   const reserves = rent * (num(stReservePct) / 100);
   const cashIn = cashSeller + arrears + closing + repairs;
+  const closeCash = cashSeller + arrears + closing + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
   const cashFlow = rent - piti - reserves;
   const equity = arv - (bal + cashSeller + arrears + repairs);
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   // shared rate-savings inputs (feed both Rate Savings + the creative-wholesale value)
   const [rsRate, setRsRate] = useState(4);
   const [rsTerm, setRsTerm] = useState(30);
@@ -1954,12 +1993,13 @@ function SubToTab(props) {
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
       <BuyerDeckButton
-        common={{ ...deckCommon, contractDefault: bal + cashSeller + arrears }}
+        common={{ ...deckCommon, contractDefault: closeCash, fee: 0 }}
+        priceLabel="Buyer's cash in"
         deal={{
           type: "Subject-To",
           headline: `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
           highlights: [
-            cashFlow > 0 ? `${usd(cashFlow)}/mo in positive cash flow from day one` : null,
+            cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
             equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
             finValue > 0 ? `${usd(finValue)} of value from the assumed below-market loan` : null,
             "Take over the seller's existing financing — no new bank loan or qualifying",
@@ -1976,7 +2016,7 @@ function SubToTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: cashIn, coc }),
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc }),
         }}
       />
       <TabEducation id="subto" />
@@ -1994,8 +2034,10 @@ function HybridTab(props) {
   const reserves = rent * (num(hyReservePct) / 100);
   const cashFlow = rent - totalMonthly - reserves;
   const cashIn = down + closing + repairs;
+  const closeCash = down + closing + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
   const equity = arv - price - repairs;
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   const [rsRate, setRsRate] = useState(4);
   const [rsTerm, setRsTerm] = useState(30);
   const [rsMkt, setRsMkt] = useState(7.5);
@@ -2044,7 +2086,7 @@ function HybridTab(props) {
           type: "Hybrid",
           headline: `Hybrid · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
           highlights: [
-            cashFlow > 0 ? `${usd(cashFlow)}/mo in positive cash flow` : null,
+            cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
             equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
             finValue > 0 ? `${usd(finValue)} of value from the assumed low-rate first loan` : null,
             "Low-rate loan taken subject-to, seller carries the rest — minimal cash in",
@@ -2061,7 +2103,7 @@ function HybridTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: cashIn, coc }),
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc }),
         }}
       />
       <TabEducation id="hybrid" />
@@ -2083,7 +2125,9 @@ function SellerFinanceTab(props) {
   const totalInterest = pi * num(sfAmort) * 12 - loan;
   const equity = arv - price - repairs;
   const cashIn = down + repairs;
+  const closeCash = down + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
   const coc = cashIn > 0 ? ((cashFlow * 12) / cashIn) * 100 : 0;
+  const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   // seller-finance terms ARE the loan terms — seed the shared rate inputs from them
   const [rsRate, setRsRate] = useState(num(sfRate) || 4);
   const [rsTerm, setRsTerm] = useState(num(sfAmort) || 30);
@@ -2132,7 +2176,7 @@ function SellerFinanceTab(props) {
           type: "Seller Finance",
           headline: `Seller Finance · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
           highlights: [
-            cashFlow > 0 ? `${usd(cashFlow)}/mo in positive cash flow` : null,
+            cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
             equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
             num(sfRate) < 7 ? `${usd(finValue)} of value from a ${num(sfRate)}% seller-financed rate vs the market` : null,
             "Seller-financed — no bank, no qualifying, terms set with the seller",
@@ -2149,7 +2193,7 @@ function SellerFinanceTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: cashIn, coc }),
+          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc }),
         }}
       />
       <TabEducation id="sf" />
