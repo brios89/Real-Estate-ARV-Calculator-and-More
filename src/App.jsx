@@ -1553,7 +1553,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
-          <MoneyInput value={purchase} onChange={setPurchase} placeholder="Buy price + wholesale fee combined" />
+          <MoneyInput value={purchase} onChange={setPurchase} placeholder="Purchase price (plus wholesale fee)" />
           <div className="mt-1 text-[10px] text-slate-400">Selling to a buyer? Enter your buy price <b className="text-slate-500">+ your wholesale fee</b> — the all-in amount they pay to acquire it. Keeping it yourself? Just your buy price.</div>
         </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
