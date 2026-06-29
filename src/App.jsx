@@ -404,7 +404,7 @@ export default function App() {
   // cash/mao
   const [wholesaleFee, setWholesaleFee] = useState("15000");
   const [sellingPct, setSellingPct] = useState("10");
-  const [holding, setHolding] = useState("5000");
+  const [holding, setHolding] = useState("7500");
   const [desiredProfit, setDesiredProfit] = useState("25000");
   const [askingPrice, setAskingPrice] = useState("");
 
@@ -1163,12 +1163,15 @@ async function generateDualDeck(data) {
   await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-flip-brrrr.pptx` });
 }
 
+// Strip the leading house/street number from an address so buyer decks show street + city only (protects the exact property; the calculator's comp/search still use the full address).
+const stripHouseNum = (a) => String(a || "").replace(/^\s*\d[\w-]*\s+/, "");
+
 function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "Purchase price" }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
   const [f, setF] = useState({
-    address: common.address || "",
+    address: stripHouseNum(common.address) || "",
     contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : "",
     rent: common.rent ? String(Math.round(common.rent)) : "",
     name: "", phone: "", email: "",
@@ -1237,7 +1240,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
 
   return (
     <>
-      <button onClick={() => { setF((p) => ({ ...p, address: common.address || p.address, contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : p.contract, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); }}
+      <button onClick={() => { setF((p) => ({ ...p, address: stripHouseNum(common.address) || p.address, contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : p.contract, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); }}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
         <FileDown className="h-4 w-4" /> {label || `Download buyer deck (.pptx) — ${deal.type}`}
       </button>
@@ -1794,11 +1797,11 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
         <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
           <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What the end buyer earns</div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <Stat label="Buyer's cash in" value={usd(buyerTotalCashIn)} sub="cash to close + rehab + your fee" />
+            <Stat label="Buyer's total cash in" value={usd(buyerTotalCashIn)} sub="cash to close + rehab + your fee" />
             <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub="annual cash flow ÷ cash in" />
             <Stat label="Buyer ROI — year 1" value={buyerRoi === null ? "—" : pct(buyerRoi)} tone={buyerRoi !== null && buyerRoi > 0 ? "good" : "warn"} sub="cash flow + equity stepped into" />
           </div>
-          <div className="mt-2 text-[10px] text-slate-400">Buyer's cash in is everything they sink in — cash to close + rehab (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that full amount; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
+          <div className="mt-2 text-[10px] text-slate-400">Buyer's total cash in is everything they sink in — cash to close + rehab (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that full amount; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
         </div>
       )}
       <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
@@ -1995,7 +1998,7 @@ function SubToTab(props) {
           <div className="grid gap-3 sm:grid-cols-2">
             <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − PITI − ${usd(reserves)} reserves`} />
             <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub={repairs > 0 ? "ARV − loan − entry − rehab" : "ARV − loan − entry"} />
-            <Stat label="Total cash in" value={usd(closeCash)} sub={num(wholesaleFee) > 0 ? "seller + arrears + closing + fee" : "seller + arrears + closing"} />
+            <Stat label="Total cash to close" value={usd(closeCash)} sub={num(wholesaleFee) > 0 ? "seller + arrears + closing + fee" : "seller + arrears + closing"} />
             <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "annual · on cash in + rehab" : "annual · on cash in"} />
           </div>
         </div>
@@ -2004,8 +2007,8 @@ function SubToTab(props) {
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
       <BuyerDeckButton
-        common={{ ...deckCommon, contractDefault: closeCash, fee: 0 }}
-        priceLabel="Buyer's cash in"
+        common={{ ...deckCommon, contractDefault: closeCash + repairs, fee: 0 }}
+        priceLabel="Buyer's total cash in"
         deal={{
           type: "Subject-To",
           headline: `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
