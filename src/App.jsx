@@ -402,7 +402,7 @@ export default function App() {
   const [overPct, setOverPct] = useState(80);    // over $200k band
 
   // cash/mao
-  const [wholesaleFee, setWholesaleFee] = useState("10000");
+  const [wholesaleFee, setWholesaleFee] = useState("15000");
   const [sellingPct, setSellingPct] = useState("10");
   const [holding, setHolding] = useState("5000");
   const [desiredProfit, setDesiredProfit] = useState("25000");
@@ -757,16 +757,16 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
-            <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, deckCommon, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
+            <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
             <NovationTab {...{ novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor }} />
@@ -1233,7 +1233,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label }) {
 
   return (
     <>
-      <button onClick={() => setOpen(true)}
+      <button onClick={() => { setF((p) => ({ ...p, address: common.address || p.address, asking: common.askingDefault ? String(Math.round(common.askingDefault)) : p.asking, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); }}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
         <FileDown className="h-4 w-4" /> {label || `Download buyer deck (.pptx) — ${deal.type}`}
       </button>
@@ -1373,7 +1373,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -1471,7 +1471,7 @@ function CashTab(props) {
       </div>
 
       <BrrrrPanel
-        arv={arv} repairs={repairs} rentDefault={rentDefault} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
+        arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
         flipDeck={{
           sellingCost: arv * num(sellingPct) / 100,
@@ -1492,10 +1492,9 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
+function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
   const [purchase, setPurchase] = useState("");
   const [rehab, setRehab] = useState("");
-  const [rent, setRent] = useState("");
   const [taxIns, setTaxIns] = useState("");
   const [hoa, setHoa] = useState("");
   const [ltv, setLtv] = useState("75");
@@ -1505,7 +1504,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
 
   const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
   const fix = num(rehab) > 0 ? num(rehab) : repairs;
-  const rnt = num(rent) > 0 ? num(rent) : num(rentDefault);
+  const rnt = num(rentDefault);                              // shared rent (Generate or manual), already = override || estimate
   const allIn = buy + fix;
   const refiLoan = arv * (num(ltv) / 100);
   const cashLeftIn = allIn - refiLoan;
@@ -1554,13 +1553,13 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
-          <MoneyInput value={purchase} onChange={setPurchase} placeholder="e.g. 140000" />
+          <MoneyInput value={purchase} onChange={setPurchase} placeholder="Buy price + your fee" />
           <div className="mt-1 text-[10px] text-slate-400">Selling to a buyer? Enter your buy price <b className="text-slate-500">+ your wholesale fee</b> — the all-in amount they pay to acquire it. Keeping it yourself? Just your buy price.</div>
         </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
           <div className="flex items-center gap-2">
-            <div className="flex-1"><MoneyInput value={rent} onChange={setRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "e.g. 1800"} /></div>
+            <div className="flex-1"><MoneyInput value={rentOverride} onChange={setRentOverride} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type, or hit Generate"} /></div>
             <button type="button" onClick={onGenerateRent} disabled={rentLoading || !hasAddress}
               className="flex shrink-0 items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
               title={hasAddress ? "Pull a RentCast rent estimate for this address" : "Add an address up top first"}>
@@ -1700,9 +1699,8 @@ function BrrrrPanel({ arv, repairs, rentDefault, purchaseDefault, deckCommon, fl
 }
 
 // ---------- shared: "wholesale this creative contract" panel ----------
-function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealCost, costLabel, financingValue = 0, buyerCashIn = 0, annualCF = 0 }) {
-  const [feeInput, setFeeInput] = useState("");
-  const fee = num(feeInput);                                   // assignment fee you want to charge the next buyer
+function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, dealCost, costLabel, financingValue = 0, buyerCashIn = 0, annualCF = 0 }) {
+  const fee = num(wholesaleFee);                               // assignment fee — shared with the Cash/MAO tab's wholesale fee
   const haveDeal = arv > 0 && dealCost > 0;
   const equity = haveDeal ? arv - repairs - dealCost : 0;      // hard spread you created by locking it up creative
   const finVal = Math.max(0, financingValue || 0);             // soft value of the below-market loan (PV)
@@ -1746,10 +1744,10 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
       <div className="mb-3">
         <Field
           label="Your assignment fee"
-          hint="the fee to hand off this contract"
-          info="What you'd charge another investor to take over this creative contract. It comes out of the total value you created — equity PLUS the present value of the below-market rate. The lower the rate, the more financing value, the bigger the fee the deal can carry."
+          hint="shared across all tabs"
+          info="What you'd charge another investor to take over this creative contract. This is the SAME number as 'Your wholesale fee' on the Cash / MAO tab — set it on any tab and it updates everywhere. It comes out of the total value you created — equity PLUS the present value of the below-market rate."
         >
-          <MoneyInput value={feeInput} onChange={setFeeInput} placeholder={num(wholesaleFee) > 0 ? String(Math.round(num(wholesaleFee))) : "e.g. 10000"} />
+          <MoneyInput value={wholesaleFee} onChange={setWholesaleFee} placeholder="Type your fee" />
         </Field>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -1769,8 +1767,9 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
       {showBuyerReturns && (
         <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
           <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What the end buyer earns</div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub={`annual cash flow ÷ ${usd(buyerTotalCashIn)} in`} />
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Stat label="Buyer's cash in" value={usd(buyerTotalCashIn)} sub="cash to close + your fee" />
+            <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub="annual cash flow ÷ cash in" />
             <Stat label="Buyer ROI — year 1" value={buyerRoi === null ? "—" : pct(buyerRoi)} tone={buyerRoi !== null && buyerRoi > 0 ? "good" : "warn"} sub="cash flow + equity stepped into" />
           </div>
           <div className="mt-2 text-[10px] text-slate-400">Buyer's cash in = this deal's cash to close (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that cash; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
@@ -1787,6 +1786,9 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, dealC
 // ---------- shared: rate-savings explorer ----------
 function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, dealPayment = 0 }) {
   const [origTerm, setOrigTerm] = useState(30);
+  const currentYear = new Date().getFullYear();
+  const [rateStr, setRateStr] = useState(rate.toFixed(2));            // editable buffer for the rate input
+  const [yearStr, setYearStr] = useState(String(currentYear + term)); // editable buffer for the maturity-year input
   const P = loanAmount;
   const effOrig = Math.max(term, origTerm);                 // original term can't be less than years left
   const seasoned = Math.max(0, effOrig - term);             // years the seller has already paid down
@@ -1811,12 +1813,26 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
         <div className="grid gap-5 md:grid-cols-2">
           {/* sliders */}
           <div className="space-y-4">
+            {/* type-it inputs: loan rate + maturity year — drive the same values as the sliders */}
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Loan's rate</div>
+                  <PlainInput value={rateStr} onChange={(v) => { setRateStr(v); const n = parseFloat(v); if (!isNaN(n)) setRate(n); }} suffix="%" />
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Matures (year)</div>
+                  <PlainInput value={yearStr} onChange={(v) => { setYearStr(v); const yr = parseInt(v, 10); if (yr > currentYear) setTerm(Math.min(40, yr - currentYear)); }} />
+                </div>
+              </div>
+              <div className="mt-1.5 text-[10px] text-slate-400">Type the loan's rate and the year it pays off — or drag the sliders below. They stay in sync, and the savings update instantly.</div>
+            </div>
             <div>
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Seller's rate — you inherit</span>
                 <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{rate.toFixed(2)}%</span>
               </div>
-              <input type="range" min={0} max={12} step={0.125} value={rate} onChange={(e) => setRate(parseFloat(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+              <input type="range" min={0} max={12} step={0.125} value={rate} onChange={(e) => { const v = parseFloat(e.target.value); setRate(v); setRateStr(v.toFixed(2)); }} className="mt-1 w-full accent-emerald-600" />
             </div>
             <div>
               <div className="flex items-baseline justify-between">
@@ -1830,7 +1846,7 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Years left on the loan</span>
                 <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{term} yrs</span>
               </div>
-              <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => setTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
+              <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => { const v = parseInt(e.target.value); setTerm(v); setYearStr(String(currentYear + v)); }} className="mt-1 w-full accent-emerald-600" />
               <div className="mt-1 text-[11px] text-emerald-700">Seller has already paid <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b>{seasoned > 0 ? " — past the interest-heavy years" : ""}.</div>
             </div>
             <div>
@@ -1891,8 +1907,8 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
 
 // ---------- SUB-TO ----------
 function SubToTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
-  const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent);
+  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
+  const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent) || num(rentDefault);
   const reserves = rent * (num(stReservePct) / 100);
   const cashIn = cashSeller + arrears + closing + repairs;
   const cashFlow = rent - piti - reserves;
@@ -1920,7 +1936,7 @@ function SubToTab(props) {
             <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
             <Field label="Cash to seller" hint="equity"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /></Field>
             <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
-            <Field label="Market rent (monthly)"><MoneyInput value={stRent} onChange={setStRent} /></Field>
+            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "auto-filled — type to override" : ""} info="Carried over from the rent you generate in the Cash / MAO tab's BRRRR panel. Type here to use a different rent for this strategy only."><MoneyInput value={stRent} onChange={setStRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
           </div>
         </div>
@@ -1934,7 +1950,7 @@ function SubToTab(props) {
           </div>
         </div>
       </div>
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
       <BuyerDeckButton
@@ -1970,8 +1986,8 @@ function SubToTab(props) {
 
 // ---------- HYBRID ----------
 function HybridTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
-  const price = num(hyPrice), down = num(hyDown), bal = num(hyBal), piti = num(hyPiti), rent = num(hyRent), closing = num(hyClosing);
+  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
+  const price = num(hyPrice), down = num(hyDown), bal = num(hyBal), piti = num(hyPiti), rent = num(hyRent) || num(rentDefault), closing = num(hyClosing);
   const note = Math.max(0, price - bal - down);
   const notePay = pmt(note, num(hyRate), num(hyTerm));
   const totalMonthly = piti + notePay;
@@ -2003,7 +2019,7 @@ function HybridTab(props) {
             <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
             <Field label="Seller note term"><PlainInput value={hyTerm} onChange={setHyTerm} suffix="yrs" /></Field>
             <Field label="Closing costs"><MoneyInput value={hyClosing} onChange={setHyClosing} /></Field>
-            <Field label="Market rent (monthly)"><MoneyInput value={hyRent} onChange={setHyRent} /></Field>
+            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "auto-filled — type to override" : ""} info="Carried over from the rent you generate in the Cash / MAO tab's BRRRR panel. Type here to use a different rent for this strategy only."><MoneyInput value={hyRent} onChange={setHyRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={hyReservePct} onChange={setHyReservePct} suffix="%" /></Field>
           </div>
         </div>
@@ -2019,7 +2035,7 @@ function HybridTab(props) {
           </div>
         </div>
       </div>
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton
@@ -2055,8 +2071,8 @@ function HybridTab(props) {
 
 // ---------- SELLER FINANCE ----------
 function SellerFinanceTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, deckCommon, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
-  const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns), rent = num(sfRent);
+  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
+  const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns), rent = num(sfRent) || num(rentDefault);
   const loan = Math.max(0, price - down);
   const pi = pmt(loan, num(sfRate), num(sfAmort));
   const totalMonthly = pi + taxIns;
@@ -2091,7 +2107,7 @@ function SellerFinanceTab(props) {
             <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
             <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
             <Field label="Taxes + insurance" hint="monthly"><MoneyInput value={sfTaxIns} onChange={setSfTaxIns} /></Field>
-            <Field label="Market rent (monthly)"><MoneyInput value={sfRent} onChange={setSfRent} /></Field>
+            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "auto-filled — type to override" : ""} info="Carried over from the rent you generate in the Cash / MAO tab's BRRRR panel. Type here to use a different rent for this strategy only."><MoneyInput value={sfRent} onChange={setSfRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={sfReservePct} onChange={setSfReservePct} suffix="%" /></Field>
           </div>
         </div>
@@ -2107,7 +2123,7 @@ function SellerFinanceTab(props) {
           </div>
         </div>
       </div>
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee}
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={price} costLabel="Seller-finance price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton
