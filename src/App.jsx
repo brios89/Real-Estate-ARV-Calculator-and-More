@@ -107,6 +107,28 @@ const pvSavings = (loan, ratePct, mktPct, years) => {
 };
 
 // Returns snapshot + 5-year wealth projection for the buyer deck (shared across creative tabs).
+// Loan-takeover savings — mirrors the on-screen Rate Savings panel so the deck shows identical figures.
+// origTerm defaults to 30 (standard original mortgage term); P/rate/term/mkt/payment come from the deal's loan.
+function computeLoanSavings({ P, rate, term, mkt, origTerm = 30, dealPayment = 0 }) {
+  if (!(P > 0)) return { totalSaved: 0 };
+  const effOrig = Math.max(term, origTerm);
+  const seasoned = Math.max(0, effOrig - term);
+  const payDeal = pmt(P, rate, term);
+  const payNew = pmt(P, mkt, effOrig);
+  const intSubTo = Math.max(0, payDeal * term * 12 - P);
+  const intNew = Math.max(0, payNew * effOrig * 12 - P);
+  const intSameTerm = Math.max(0, pmt(P, mkt, term) * term * 12 - P);
+  const rateSaved = Math.max(0, intSameTerm - intSubTo);
+  const seasoningSaved = Math.max(0, intNew - intSameTerm);
+  const totalSaved = rateSaved + seasoningSaved;
+  const haveRealPmt = dealPayment > 0;
+  const tiPortion = haveRealPmt ? Math.max(0, dealPayment - payDeal) : 0;   // taxes/insurance baked into the real payment
+  const newPmtFull = payNew + tiPortion;                                    // fresh market loan carrying the same T&I
+  const moRelief = haveRealPmt ? Math.max(0, newPmtFull - dealPayment) : Math.max(0, payNew - payDeal);
+  const takePayment = haveRealPmt ? dealPayment : payDeal;
+  return { P, rate, mkt, term, effOrig, seasoned, payDeal, payNew, newPmtFull, intSubTo, intNew, rateSaved, seasoningSaved, totalSaved, moRelief, takePayment, haveRealPmt };
+}
+
 function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClose, coc }) {
   const paydown5 = loanAmt > 0 ? loanAmt - balanceAt(loanAmt, rate, term, 5) : 0;
   const appreciation5 = arv > 0 ? arv * (Math.pow(1.03, 5) - 1) : 0;
@@ -967,6 +989,50 @@ async function generateBuyerDeck(data) {
     s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
   }
 
+  // Slide — what taking over this loan saves (financing value)
+  try {
+    const LS = data.loanSavings;
+    if (LS && LS.totalSaved > 0) {
+      s = pptx.addSlide(); header(s, "What This Loan Saves");
+      s.addText("Held to maturity — vs. financing this property with a new loan today", { x: 0.6, y: 1.18, w: 12.1, h: 0.3, fontSize: 12, color: DECK.SAGE, italic: true });
+      const lsCard = (x, label, value, sub) => {
+        s.addShape(pptx.ShapeType.roundRect, { x, y: 1.55, w: 5.95, h: 1.6, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
+        s.addText([
+          { text: label.toUpperCase() + "\n", options: { fontSize: 12, color: "6B7A6F", bold: true } },
+          { text: value + "\n", options: { fontSize: 30, color: DECK.FOREST, bold: true } },
+          { text: sub, options: { fontSize: 11, color: "8A968C" } },
+        ], { x: x + 0.25, y: 1.62, w: 5.45, h: 1.45, align: "left", valign: "middle" });
+      };
+      lsCard(0.6, "Rate savings", usd(LS.rateSaved), `${LS.rate.toFixed(2)}% vs ${LS.mkt.toFixed(2)}%, same ${LS.term} yrs left`);
+      lsCard(6.78, "Seasoning savings", usd(LS.seasoningSaved), `${LS.term} yrs left vs a fresh ${LS.effOrig}-yr loan`);
+      s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.35, w: 12.13, h: 1.0, fill: { color: DECK.FOREST }, rectRadius: 0.08 });
+      s.addText([
+        { text: "TOTAL INTEREST SAVED     ", options: { fontSize: 16, color: DECK.SAGE, bold: true } },
+        { text: usd(LS.totalSaved), options: { fontSize: 34, color: DECK.WHITE, bold: true } },
+      ], { x: 0.9, y: 3.35, w: 11.5, h: 1.0, align: "left", valign: "middle" });
+      const cmp = [
+        [{ text: "" }, { text: "Take this loan", options: { bold: true, color: DECK.FOREST, align: "center" } }, { text: "Get a new loan", options: { bold: true, color: DECK.INK, align: "center" } }],
+        [{ text: "Rate", options: { bold: true, color: DECK.FOREST } }, { text: LS.rate.toFixed(2) + "%", options: { align: "center", color: DECK.FOREST } }, { text: LS.mkt.toFixed(2) + "%", options: { align: "center", color: DECK.INK } }],
+        [{ text: "Years to pay", options: { bold: true, color: DECK.FOREST } }, { text: LS.term + " left", options: { align: "center", color: DECK.FOREST } }, { text: LS.effOrig + " fresh", options: { align: "center", color: DECK.INK } }],
+      ];
+      if (LS.haveRealPmt) cmp.push([{ text: "Payment", options: { bold: true, color: DECK.FOREST } }, { text: usd(LS.takePayment) + "/mo", options: { align: "center", color: DECK.FOREST } }, { text: usd(LS.newPmtFull) + "/mo", options: { align: "center", color: DECK.INK } }]);
+      cmp.push([{ text: "Total interest", options: { bold: true, color: DECK.FOREST } }, { text: usd(LS.intSubTo), options: { align: "center", color: DECK.FOREST } }, { text: usd(LS.intNew), options: { align: "center", color: DECK.INK } }]);
+      s.addTable(cmp, { x: 0.6, y: 4.6, w: 7.6, colW: [2.6, 2.5, 2.5], fontSize: 12.5, color: DECK.INK, rowH: 0.38, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } });
+      const miniCard = (y, label, value, sub) => {
+        s.addShape(pptx.ShapeType.roundRect, { x: 8.45, y, w: 4.28, h: 0.92, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
+        s.addText([
+          { text: label.toUpperCase() + "   ", options: { fontSize: 10, color: "6B7A6F", bold: true } },
+          { text: value, options: { fontSize: 19, color: DECK.ORANGE, bold: true } },
+          { text: "\n" + sub, options: { fontSize: 9, color: "8A968C" } },
+        ], { x: 8.65, y: y + 0.04, w: 3.9, h: 0.84, align: "left", valign: "middle" });
+      };
+      miniCard(4.6, "Monthly payment relief", usd(LS.moRelief), "lighter payment vs a new loan");
+      miniCard(5.62, "Paid off sooner", LS.seasoned > 0 ? `${LS.seasoned} ${LS.seasoned === 1 ? "yr" : "yrs"}` : "—", "free & clear earlier");
+      s.addText("Realized in full only if the loan is held to payoff. Estimates for buyer review.", { x: 0.6, y: 6.5, w: 12.1, h: 0.3, fontSize: 9, color: "8A968C", italic: true });
+      s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
+    }
+  } catch (e) { /* loan-savings slide is optional — never block the rest of the deck */ }
+
   // Slide — 5-year wealth projection
   const P5 = data.projection;
   if (P5 && P5.total5 > 0) {
@@ -1216,6 +1282,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
         highlights: deal.highlights,
         returns: deal.returns,
         projection: deal.projection,
+        loanSavings: deal.loanSavings,
         basis: { compCount: common.compCount, avgPpsf: common.avgPpsf, rent: num(f.rent) },
         exits: deal.exits,
         contact: { name: f.name, phone: f.phone, email: f.email },
@@ -2011,6 +2078,7 @@ function SubToTab(props) {
         priceLabel="Buyer's total cash in"
         deal={{
           type: "Subject-To",
+          loanSavings: computeLoanSavings({ P: bal, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: piti }),
           headline: `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
           highlights: [
             cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
@@ -2098,6 +2166,7 @@ function HybridTab(props) {
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
           type: "Hybrid",
+          loanSavings: computeLoanSavings({ P: bal, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: totalMonthly }),
           headline: `Hybrid · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
           highlights: [
             cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
@@ -2188,6 +2257,7 @@ function SellerFinanceTab(props) {
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
           type: "Seller Finance",
+          loanSavings: computeLoanSavings({ P: loan, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: totalMonthly }),
           headline: `Seller Finance · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
           highlights: [
             cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
