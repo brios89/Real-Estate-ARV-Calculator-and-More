@@ -94,23 +94,34 @@ export default async function handler(req, res) {
         const t = Date.parse(c.saleDate);
         return isNaN(t) ? true : (now - t) / 86400000 <= windowDays + 5;
       })
-      // 3) similar size to the subject, when we know the subject's sqft
-      .filter((c) => (subjectSqft > 0 ? Math.abs(c.sqft - subjectSqft) <= sqftBand : true))
-      // 4) drop the subject itself if it slipped into the results (same address)
+      // 3) drop the subject itself if it slipped into the results (same address)
       .filter((c) => c.address.trim().toLowerCase() !== address.toLowerCase());
 
-    // Closest first (when distance is available), then most recent sale.
-    comps.sort((a, b) => {
+    // Split by the ±sqft band around the subject; in-band comps are the clean ones for the ARV.
+    const near = (c) => subjectSqft > 0 && Math.abs(c.sqft - subjectSqft) <= sqftBand;
+    const sortClose = (arr) => arr.sort((a, b) => {
       const da = a.distance == null ? Infinity : a.distance;
       const db = b.distance == null ? Infinity : b.distance;
-      if (da !== db) return da - db;
-      return String(b.saleDate || "").localeCompare(String(a.saleDate || ""));
+      if (da !== db) return da - db;                                            // closest first (when distance is available)
+      return String(b.saleDate || "").localeCompare(String(a.saleDate || "")); // then most recent sale
     });
 
-    comps = comps.slice(0, keepCount);
+    const inBand = sortClose((subjectSqft > 0 ? comps.filter(near) : comps).slice());
+    let chosen = inBand.slice(0, keepCount);
+    // Guarantee at least keepCount comps when the pool allows: backfill with the closest-by-sqft
+    // out-of-band sales (they'll trip the "sqft off" junk flag in the UI, so they're clearly marked).
+    if (chosen.length < keepCount && subjectSqft > 0) {
+      const fill = comps
+        .filter((c) => !near(c))
+        .sort((a, b) => Math.abs(a.sqft - subjectSqft) - Math.abs(b.sqft - subjectSqft));
+      chosen = chosen.concat(fill.slice(0, keepCount - chosen.length));
+    }
+    comps = chosen;
 
-    // Median $/sqft is robust to one weird flip; imply the ARV against the subject's size.
-    const ppsfs = comps.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
+    // Raw median $/sqft from the in-band comps (a fallback/reference — the calculator recomputes a
+    // clean median that also drops beds/baths/age outliers via the junk filter, client-side).
+    const arvPool = (inBand.length ? inBand : comps).slice(0, keepCount);
+    const ppsfs = arvPool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
     let medianPpsf = null;
     if (ppsfs.length) {
       const mid = Math.floor(ppsfs.length / 2);

@@ -60,14 +60,19 @@ export default async function handler(req, res) {
 
     // Build the comp list, dialed in the way the user asked:
     //  1) must have a price and square footage
-    //  2) within ±sqftBand (default 250) of the subject's square footage, when we know the subject sqft
-    //  3) keep RentCast's correlation order (most similar first)
-    //  4) keep only the top `keepCount` (default 8) for the ARV calc
-    const comps = (data.comparables || [])
-      .filter((c) => Number(c.price) > 0 && Number(c.squareFootage) > 0)
-      .filter((c) => (subjSqft > 0 ? Math.abs(Number(c.squareFootage) - subjSqft) <= sqftBand : true))
-      .slice(0, keepCount)
-      .map((c) => ({
+    //  2) prefer comps within ±sqftBand (default 250) of the subject, in RentCast correlation order
+    //  3) ALWAYS return at least keepCount (default 8) when the pool allows — backfill with the
+    //     closest-by-sqft out-of-band comps (the UI flags those as junk so they're clearly marked)
+    const valid = (data.comparables || []).filter((c) => Number(c.price) > 0 && Number(c.squareFootage) > 0);
+    const near = (c) => subjSqft > 0 && Math.abs(Number(c.squareFootage) - subjSqft) <= sqftBand;
+    let chosen = (subjSqft > 0 ? valid.filter(near) : valid).slice(0, keepCount);
+    if (chosen.length < keepCount && subjSqft > 0) {
+      const fill = valid
+        .filter((c) => !near(c))
+        .sort((a, b) => Math.abs(Number(a.squareFootage) - subjSqft) - Math.abs(Number(b.squareFootage) - subjSqft));
+      chosen = chosen.concat(fill.slice(0, keepCount - chosen.length));
+    }
+    const comps = chosen.map((c) => ({
         address: c.formattedAddress || c.addressLine1 || "",
         price: Math.round(Number(c.price)),
         sqft: Math.round(Number(c.squareFootage)),

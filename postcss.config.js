@@ -1,5 +1,1 @@
-node_modules
-dist
-.vercel
-.env
-.env.local
+export default { plugins: { tailwindcss: {}, autoprefixer: {} } };

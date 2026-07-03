@@ -409,7 +409,7 @@ export default function App() {
       setSoldData(data);
       const n = data.count || 0;
       setSoldMsg(n > 0
-        ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found${data.soldArv ? ` · sold-comp ARV ${usd(data.soldArv)}` : ""}. 1 RentCast credit used.` }
+        ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found. 1 RentCast credit used.` }
         : { type: "err", text: "No recorded sales matched — widen the radius/date range, or the county may be light on recorded prices. Enter comps manually." });
     } catch (e) {
       setSoldMsg({ type: "err", text: "Couldn't reach the sold-comps service. Is the proxy deployed?" });
@@ -503,6 +503,23 @@ export default function App() {
     const avgPsf = valid.reduce((a, c) => a + num(c.price) / num(c.sqft), 0) / valid.length;
     return avgPsf * sf;
   }, [comps, sqft, arvOverride]);
+
+  // Sold-comp summary: apply the SAME junk filter used on the comp grid, then take the median $/sf
+  // from the UNFLAGGED sold comps (so a bad flip can't drag the ARV) × the subject's sq ft.
+  const soldSummary = useMemo(() => {
+    if (!soldData || !soldData.comps || !soldData.comps.length) return null;
+    const flagged = soldData.comps.map((c) => ({ ...c, flags: compFlags(c, subjectInfo, num(sqft)) }));
+    const clean = flagged.filter((c) => c.flags.length === 0);
+    const pool = clean.length ? clean : flagged;   // fall back to all if everything got flagged
+    const ppsfs = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
+    let medianPpsf = null;
+    if (ppsfs.length) {
+      const m = Math.floor(ppsfs.length / 2);
+      medianPpsf = ppsfs.length % 2 ? ppsfs[m] : Math.round((ppsfs[m - 1] + ppsfs[m]) / 2);
+    }
+    const arv = medianPpsf && num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null);
+    return { flagged, cleanCount: clean.length, total: flagged.length, medianPpsf, arv };
+  }, [soldData, subjectInfo, sqft]);
 
   const avgPsf = useMemo(() => {
     const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
@@ -753,27 +770,27 @@ export default function App() {
             </div>
           )}
 
-          {soldData && soldData.count > 0 && (
+          {soldData && soldSummary && (
             <>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <Stat label="Sold-comp ARV" value={soldData.soldArv ? usd(soldData.soldArv) : "—"} tone="good" big sub={soldData.subject?.sqft ? `median $/sf × ${soldData.subject.sqft} sf` : "enter subject sq ft above"} />
-                <Stat label="Median $/sf" value={soldData.medianPpsf ? `$${soldData.medianPpsf}` : "—"} sub={`${soldData.count} recorded sale${soldData.count === 1 ? "" : "s"}`} />
+                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(soldSummary.arv) : "—"} tone="good" big sub={num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"} />
+                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.cleanCount} of ${soldSummary.total} comps · junk excluded`} />
                 <div className="flex items-end">
-                  {soldData.soldArv > 0 && num(arvOverride) !== soldData.soldArv && (
-                    <button onClick={() => setArvOverride(String(soldData.soldArv))}
+                  {soldSummary.arv > 0 && num(arvOverride) !== soldSummary.arv && (
+                    <button onClick={() => setArvOverride(String(soldSummary.arv))}
                       className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100">
                       Use sold-comp ARV →
                     </button>
                   )}
-                  {soldData.soldArv > 0 && num(arvOverride) === soldData.soldArv && (
+                  {soldSummary.arv > 0 && num(arvOverride) === soldSummary.arv && (
                     <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-center text-[11px] font-semibold text-emerald-600">Driving the ARV ✓</div>
                   )}
                 </div>
               </div>
 
               <div className="mt-3 space-y-2">
-                {soldData.comps.map((c, i) => (
-                  <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+                {soldSummary.flagged.map((c, i) => (
+                  <div key={i} className={`rounded-lg border p-2 ${c.flags.length ? "border-amber-300 bg-amber-50/40" : "border-slate-200 bg-slate-50/50"}`}>
                     <div className="flex items-center gap-2">
                       <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
                       <span className="flex-1 truncate text-xs font-medium text-slate-700">{c.address || "(address withheld)"}</span>
@@ -784,6 +801,16 @@ export default function App() {
                         </a>
                       )}
                     </div>
+                    {c.flags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
+                        {c.flags.map((f, k) => (
+                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
+                          </span>
+                        ))}
+                        <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
+                      </div>
+                    )}
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
                       <span className="font-bold text-slate-700">{usd(c.salePrice)}</span>
                       <span className="font-mono text-slate-600">${c.ppsf}/sf</span>
@@ -797,7 +824,7 @@ export default function App() {
                 ))}
               </div>
               <div className="mt-2 text-[10px] italic text-slate-400">
-                Recorded prices come from public records and can lag a few weeks. Sale prices aren't published in non-disclosure states — KY and IN both disclose, so coverage should be good. Verify anything you'll hang a deal on.
+                Flagged comps (amber) are dropped from the ARV median — same junk filter as the comp grid above. Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
               </div>
             </>
           )}
