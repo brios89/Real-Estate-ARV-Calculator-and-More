@@ -1,23 +1,4 @@
-{
-  "name": "ylhb-deal-desk",
-  "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "lucide-react": "^0.383.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "autoprefixer": "^10.4.19",
-    "postcss": "^8.4.38",
-    "tailwindcss": "^3.4.4",
-    "vite": "^5.3.1"
-  }
-}
+# Local testing only. In production these live in Vercel → Settings → Environment Variables.
+RENTCAST_API_KEY=your_rentcast_key_here
+# Optional: lock the proxy to your site's domain (leave blank for same-origin)
+ALLOWED_ORIGIN=
