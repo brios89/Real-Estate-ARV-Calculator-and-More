@@ -337,6 +337,11 @@ export default function App() {
   const [rentFetchedFor, setRentFetchedFor] = useState(""); // address we last pulled rent for (lazy-load guard)
   const [tab, setTab] = useState("cash");
   const [subjectInfo, setSubjectInfo] = useState(null);
+  // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
+  const [adjBeds, setAdjBeds] = useState(0);
+  const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
+  const [bedAdjAmt, setBedAdjAmt] = useState("10000");   // $ per bedroom — appraiser count-adjustment (same sqft), not an addition
+  const [bathAdjAmt, setBathAdjAmt] = useState("10000"); // $ per FULL bath; a half bath = 0.5 × this
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
   const [soldData, setSoldData] = useState(null);      // actual recorded sold comps (RentCast /properties)
@@ -497,14 +502,18 @@ export default function App() {
   const [novCostFactor, setNovCostFactor] = useState("8");
 
   // ---- ARV ----
+  // Record-correction dollars: rides on TOP of whatever ARV source is driving (comps, AVM, sold, average, or manual),
+  // because a bedroom the county missed is missing from every one of those sources equally.
+  const subjAdjust = Math.round(adjBeds * num(bedAdjAmt) + adjBaths * num(bathAdjAmt));
+
   const arv = useMemo(() => {
-    if (num(arvOverride) > 0) return num(arvOverride);
+    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
     const sf = num(sqft);
     const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
     if (valid.length === 0 || sf <= 0) return 0;
     const avgPsf = valid.reduce((a, c) => a + num(c.price) / num(c.sqft), 0) / valid.length;
-    return avgPsf * sf;
-  }, [comps, sqft, arvOverride]);
+    return Math.max(0, avgPsf * sf + subjAdjust);
+  }, [comps, sqft, arvOverride, subjAdjust]);
 
   // Sold-comp summary: apply the SAME junk filter used on the comp grid, then take the median $/sf
   // from the UNFLAGGED sold comps (so a bad flip can't drag the ARV) × the subject's sq ft.
@@ -525,6 +534,25 @@ export default function App() {
     const arv = medianPpsf && num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null);
     return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv };
   }, [soldData, subjectInfo, sqft, soldIncluded]);
+
+  // Label the ARV stat with where the number actually came from — AVM model, recorded sales, blend, or manual.
+  // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
+  const arvSourceSub = useMemo(() => {
+    const o = num(arvOverride);
+    const avmVal = rentcastArv > 0 ? Math.round(rentcastArv) : null;
+    const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;
+    const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;
+    let src;
+    if (o > 0) {
+      if (avmVal && o === avmVal) src = "RentCast AVM · model estimate, not recorded sales";
+      else if (soldVal && o === soldVal) src = "sold-comp ARV · actual recorded sales";
+      else if (avgVal && o === avgVal) src = "average of AVM + sold-comp ARV";
+      else src = "manual override";
+    } else {
+      src = avmVal ? "avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
+    }
+    return subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
+  }, [arvOverride, rentcastArv, soldSummary, subjAdjust]);
 
   const avgPsf = useMemo(() => {
     const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
@@ -634,6 +662,44 @@ export default function App() {
             </Field>
           </div>
 
+          {/* Record corrections — beds/baths the county record missed */}
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Record corrections</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-500">Beds</span>
+                <button type="button" onClick={() => setAdjBeds((v) => v - 1)}
+                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">−</button>
+                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBeds !== 0 ? "text-emerald-700" : "text-slate-400"}`}>{adjBeds > 0 ? `+${adjBeds}` : adjBeds}</span>
+                <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
+                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
+                <span className="text-[10px] text-slate-400">×</span>
+                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="10000" /></div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-500">Baths</span>
+                <button type="button" onClick={() => setAdjBaths((v) => Math.round((v - 0.5) * 2) / 2)}
+                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">−</button>
+                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBaths !== 0 ? "text-emerald-700" : "text-slate-400"}`}>{adjBaths > 0 ? `+${adjBaths}` : adjBaths}</span>
+                <button type="button" onClick={() => setAdjBaths((v) => Math.round((v + 0.5) * 2) / 2)}
+                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
+                <span className="text-[10px] text-slate-400">×</span>
+                <div className="w-24"><MoneyInput value={bathAdjAmt} onChange={setBathAdjAmt} placeholder="10000" /></div>
+                <span className="text-[10px] text-slate-400">/full</span>
+              </div>
+              <span className={`ml-auto font-mono text-sm font-bold tabular-nums ${subjAdjust > 0 ? "text-emerald-700" : subjAdjust < 0 ? "text-rose-600" : "text-slate-400"}`}>
+                {subjAdjust !== 0 ? `${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} to ARV` : "no adjustment"}
+              </span>
+              {(adjBeds !== 0 || adjBaths !== 0) && (
+                <button type="button" onClick={() => { setAdjBeds(0); setAdjBaths(0); }}
+                  className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">clear</button>
+              )}
+            </div>
+            <div className="mt-1 text-[10px] text-slate-400">
+              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are conservative appraiser count-adjustments ($10K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
+            </div>
+          </div>
+
           {/* comp grid */}
           <div className="mt-4">
             <div className="flex items-center justify-between">
@@ -727,30 +793,13 @@ export default function App() {
               <Field label="Or enter ARV directly" hint="overrides comps">
                 <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
               </Field>
-              {rentcastArv > 0 && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                  <span>RentCast AVM (reference): <b className="text-slate-700">{usd(rentcastArv)}</b></span>
-                  {num(arvOverride) !== rentcastArv && (
-                    <button onClick={() => setArvOverride(String(rentcastArv))}
-                      className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600 hover:bg-emerald-50">
-                      use as ARV
-                    </button>
-                  )}
-                  {num(arvOverride) > 0 && (
-                    <button onClick={() => setArvOverride("")}
-                      className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
-                      back to comps
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
           </div>
 
           {/* ARV result */}
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length} comps`} />
-            <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={num(arvOverride) > 0 ? "manual override" : "avg $/sf × subject sf"} />
+            <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={arvSourceSub} />
             <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
         </div>
