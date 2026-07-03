@@ -506,14 +506,22 @@ export default function App() {
   // because a bedroom the county missed is missing from every one of those sources equally.
   const subjAdjust = Math.round(adjBeds * num(bedAdjAmt) + adjBaths * num(bathAdjAmt));
 
-  const arv = useMemo(() => {
-    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
+  // The comp-grid base: avg $/sf × subject sf from the current grid — the same number the After-Repair Value
+  // card shows when nothing overrides it. The picker's AVM button uses THIS (B's method on the AVM comps),
+  // not RentCast's point estimate. Kept adjustment-free so the bed/bath correction never double-counts.
+  const gridArv = useMemo(() => {
     const sf = num(sqft);
     const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
     if (valid.length === 0 || sf <= 0) return 0;
     const avgPsf = valid.reduce((a, c) => a + num(c.price) / num(c.sqft), 0) / valid.length;
-    return Math.max(0, avgPsf * sf + subjAdjust);
-  }, [comps, sqft, arvOverride, subjAdjust]);
+    return avgPsf * sf;
+  }, [comps, sqft]);
+
+  const arv = useMemo(() => {
+    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
+    if (gridArv <= 0) return 0;
+    return Math.max(0, gridArv + subjAdjust);
+  }, [gridArv, arvOverride, subjAdjust]);
 
   // Sold-comp summary: apply the SAME junk filter used on the comp grid, then take the median $/sf
   // from the UNFLAGGED sold comps (so a bad flip can't drag the ARV) × the subject's sq ft.
@@ -539,7 +547,7 @@ export default function App() {
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
   const arvSourceSub = useMemo(() => {
     const o = num(arvOverride);
-    const avmVal = rentcastArv > 0 ? Math.round(rentcastArv) : null;
+    const avmVal = rentcastArv > 0 && gridArv > 0 ? Math.round(gridArv) : null;
     const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;
     const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;
     let src;
@@ -552,7 +560,7 @@ export default function App() {
       src = avmVal ? "avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
     }
     return subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
-  }, [arvOverride, rentcastArv, soldSummary, subjAdjust]);
+  }, [arvOverride, rentcastArv, soldSummary, subjAdjust, gridArv]);
 
   const avgPsf = useMemo(() => {
     const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
@@ -657,9 +665,22 @@ export default function App() {
                 </div>
               )}
             </div>
-            <Field label="Subject sq ft">
-              <PlainInput value={sqft} onChange={setSqft} placeholder="1500" suffix="sf" />
-            </Field>
+            <div>
+              <Field label="Subject sq ft">
+                <PlainInput value={sqft} onChange={setSqft} placeholder="1500" suffix="sf" />
+              </Field>
+              <div className="mt-2 flex items-center gap-2">
+                <button onClick={autoComp} disabled={compLoading}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+                  {compLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+                  {compLoading ? "Pulling…" : "Auto-comp address"}
+                </button>
+                <button onClick={addComp}
+                  className="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
+                  + comp
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Record corrections — beds/baths the county record missed */}
@@ -702,22 +723,9 @@ export default function App() {
 
           {/* comp grid */}
           <div className="mt-4">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Sold comps (YLHB method: avg $/sf × subject sf)
-              </span>
-              <div className="flex items-center gap-2">
-                <button onClick={autoComp} disabled={compLoading}
-                  className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
-                  {compLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                  {compLoading ? "Pulling…" : "Auto-comp address"}
-                </button>
-                <button onClick={addComp}
-                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
-                  + comp
-                </button>
-              </div>
-            </div>
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Sold comps (YLHB method: avg $/sf × subject sf)
+            </span>
             <div className="mt-1 text-[10px] text-slate-400">
               Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject.
             </div>
@@ -891,7 +899,7 @@ export default function App() {
 
         {/* ARV SOURCE PICKER — which valuation drives the deal */}
         {(rentcastArv > 0 || (soldSummary && soldSummary.arv > 0)) && (() => {
-          const avmVal = rentcastArv > 0 ? Math.round(rentcastArv) : null;                          // RentCast's model estimate
+          const avmVal = rentcastArv > 0 && gridArv > 0 ? Math.round(gridArv) : null;              // the AVM-path ARV — same number as the After-Repair Value card
           const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;  // ARV from actual recorded sales
           const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;             // reconciled blend of the two
           const cur = num(arvOverride);
@@ -1889,7 +1897,6 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
               {rentLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Generate
             </button>
           </div>
-          <div className="mt-1 text-[10px] font-bold text-rose-600">⚠ Only generate once the deal is under contract — each pull uses a RentCast credit.</div>
           {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
           {num(rentDefault) > 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">RentCast estimate ${Math.round(num(rentDefault)).toLocaleString()}/mo loaded — shown above; type to override.</div>}
         </Field>
