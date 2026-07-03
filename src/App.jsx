@@ -4,6 +4,7 @@ import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, Chec
 // Where the proxies live. Same-origin by default on Vercel.
 const COMP_API = "/api/comp";
 const RENT_API = "/api/rent";
+const SOLD_API = "/api/sold";
 const AUTOCOMPLETE_API = "/api/autocomplete";
 
 // Google web search link for any address string
@@ -338,6 +339,9 @@ export default function App() {
   const [subjectInfo, setSubjectInfo] = useState(null);
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
+  const [soldData, setSoldData] = useState(null);      // actual recorded sold comps (RentCast /properties)
+  const [soldLoading, setSoldLoading] = useState(false);
+  const [soldMsg, setSoldMsg] = useState(null);
 
   async function autoComp() {
     const a = address.trim();
@@ -387,6 +391,30 @@ export default function App() {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
       setCompLoading(false);
+    }
+  }
+
+  // Pull ACTUAL recorded sold comps from RentCast's Property Records endpoint (1 credit per pull).
+  async function pullSold() {
+    const a = address.trim();
+    if (!a) { setSoldMsg({ type: "err", text: "Type the subject address first." }); return; }
+    setSoldLoading(true); setSoldMsg(null);
+    try {
+      const params = new URLSearchParams({ address: a });
+      if (num(sqft) > 0) params.set("subjectSqft", String(num(sqft)));
+      if (subjectInfo?.propertyType) params.set("propertyType", subjectInfo.propertyType);
+      const r = await fetch(`${SOLD_API}?${params.toString()}`);
+      const data = await r.json();
+      if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); return; }
+      setSoldData(data);
+      const n = data.count || 0;
+      setSoldMsg(n > 0
+        ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found${data.soldArv ? ` · sold-comp ARV ${usd(data.soldArv)}` : ""}. 1 RentCast credit used.` }
+        : { type: "err", text: "No recorded sales matched — widen the radius/date range, or the county may be light on recorded prices. Enter comps manually." });
+    } catch (e) {
+      setSoldMsg({ type: "err", text: "Couldn't reach the sold-comps service. Is the proxy deployed?" });
+    } finally {
+      setSoldLoading(false);
     }
   }
 
@@ -703,6 +731,76 @@ export default function App() {
             <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={num(arvOverride) > 0 ? "manual override" : "avg $/sf × subject sf"} />
             <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
+        </div>
+
+        {/* ACTUAL SOLD COMPS (recorded closings) */}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex items-center justify-between gap-2">
+            <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
+            <button onClick={pullSold} disabled={soldLoading}
+              className="flex shrink-0 items-center gap-1.5 rounded-md bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-900 disabled:opacity-60">
+              {soldLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+              {soldLoading ? "Pulling…" : "Pull sold comps"}
+            </button>
+          </div>
+          <div className="mt-1 text-[10px] text-slate-400">
+            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject. Median $/sf × your subject sq ft. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
+          </div>
+
+          {soldMsg && (
+            <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${soldMsg.type === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+              {soldMsg.text}
+            </div>
+          )}
+
+          {soldData && soldData.count > 0 && (
+            <>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <Stat label="Sold-comp ARV" value={soldData.soldArv ? usd(soldData.soldArv) : "—"} tone="good" big sub={soldData.subject?.sqft ? `median $/sf × ${soldData.subject.sqft} sf` : "enter subject sq ft above"} />
+                <Stat label="Median $/sf" value={soldData.medianPpsf ? `$${soldData.medianPpsf}` : "—"} sub={`${soldData.count} recorded sale${soldData.count === 1 ? "" : "s"}`} />
+                <div className="flex items-end">
+                  {soldData.soldArv > 0 && num(arvOverride) !== soldData.soldArv && (
+                    <button onClick={() => setArvOverride(String(soldData.soldArv))}
+                      className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100">
+                      Use sold-comp ARV →
+                    </button>
+                  )}
+                  {soldData.soldArv > 0 && num(arvOverride) === soldData.soldArv && (
+                    <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-center text-[11px] font-semibold text-emerald-600">Driving the ARV ✓</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {soldData.comps.map((c, i) => (
+                  <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
+                      <span className="flex-1 truncate text-xs font-medium text-slate-700">{c.address || "(address withheld)"}</span>
+                      {c.address && (
+                        <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer"
+                          className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
+                          <Search className="h-3 w-3" /> Google
+                        </a>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
+                      <span className="font-bold text-slate-700">{usd(c.salePrice)}</span>
+                      <span className="font-mono text-slate-600">${c.ppsf}/sf</span>
+                      <span>{c.sqft.toLocaleString()} sf</span>
+                      {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
+                      {c.saleDate && <span>sold {c.saleDate}</span>}
+                      {c.distance != null && <span>{Number(c.distance).toFixed(2)} mi</span>}
+                      {c.yearBuilt && <span>built {c.yearBuilt}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 text-[10px] italic text-slate-400">
+                Recorded prices come from public records and can lag a few weeks. Sale prices aren't published in non-disclosure states — KY and IN both disclose, so coverage should be good. Verify anything you'll hang a deal on.
+              </div>
+            </>
+          )}
         </div>
 
         {/* CONTROLS: rehab + MAO bands */}

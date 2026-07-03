@@ -1,0 +1,132 @@
+// /api/sold.js — Vercel serverless function (runs on the server, NOT in the browser).
+// Pulls ACTUAL sold comps from RentCast's Property Records endpoint (/v1/properties),
+// using recorded sale prices (lastSalePrice / lastSaleDate) — not AVM estimates.
+//
+// Billing note: RentCast bills per REQUEST, not per record. One call to /v1/properties
+// returns up to 500 records, so a full sold-comp pull for a deal = 1 API credit.
+//
+// The calculator calls:
+//   /api/sold?address=123 Main St, Louisville, KY&subjectSqft=1500&propertyType=Single Family
+// Returns a trimmed, browser-safe payload:
+//   { soldArv, medianPpsf, count, window, subject, comps: [...] }
+
+export default async function handler(req, res) {
+  // Lock CORS to same-origin by default. Set ALLOWED_ORIGIN in Vercel if the UI is on another domain.
+  const allowed = process.env.ALLOWED_ORIGIN || "";
+  if (allowed) res.setHeader("Access-Control-Allow-Origin", allowed);
+
+  const key = process.env.RENTCAST_API_KEY;
+  if (!key) {
+    return res.status(500).json({ error: "Server is missing RENTCAST_API_KEY. Add it in Vercel → Settings → Environment Variables." });
+  }
+
+  const address = (req.query.address || "").toString().trim();
+  if (!address) {
+    return res.status(400).json({ error: "Provide an address, e.g. /api/sold?address=123 Main St, Louisville, KY" });
+  }
+
+  // Tuning. Defaults match how /api/comp already thinks, tuned for actual sold comps:
+  //  - radius=1         → miles around the subject (RentCast circular search)
+  //  - saleDateRange    → only properties SOLD within this many days (365 = last 12 months)
+  //  - propertyType     → keep comps to the subject's type (optional; omitted = all types)
+  //  - subjectSqft      → the subject's size, used to filter ±sqftBand and imply the ARV (from the AVM pull)
+  //  - sqftBand=250     → ± sq ft vs the subject, filtered locally
+  //  - keepCount=8      → how many sold comps to keep for the ARV
+  const radius = req.query.radius || "1";
+  const saleDateRange = req.query.saleDateRange || "365";
+  const propertyType = (req.query.propertyType || "").toString().trim();
+  const subjectSqft = Number(req.query.subjectSqft || 0);
+  const sqftBand = Number(req.query.sqftBand || 250);
+  const keepCount = Number(req.query.keepCount || 8);
+
+  // One request, up to 500 records = 1 RentCast credit regardless of how many come back.
+  const params = new URLSearchParams({ address, radius, saleDateRange, limit: "500" });
+  if (propertyType) params.set("propertyType", propertyType);
+
+  const url = `https://api.rentcast.io/v1/properties?${params.toString()}`;
+
+  try {
+    const r = await fetch(url, {
+      headers: { "X-Api-Key": key, Accept: "application/json" },
+    });
+
+    if (!r.ok) {
+      const body = await r.text();
+      // 404 = nothing found; 401 = bad key; 429 = out of calls / rate limited
+      return res.status(r.status).json({
+        error:
+          r.status === 404 ? "RentCast found no sold records for that area. Widen the radius or date range, or comp manually."
+          : r.status === 401 ? "RentCast rejected the API key. Re-check RENTCAST_API_KEY in Vercel."
+          : r.status === 429 ? "RentCast call limit reached for this period (free tier = 50/mo)."
+          : `RentCast error ${r.status}.`,
+        detail: body.slice(0, 300),
+      });
+    }
+
+    const data = await r.json();
+    // /properties returns a JSON array of records; stay defensive in case of an envelope.
+    const records = Array.isArray(data) ? data : (data.properties || data.results || []);
+    const now = Date.now();
+    const windowDays = Number(saleDateRange) || 365;
+
+    let comps = records
+      .map((p) => {
+        const price = Number(p.lastSalePrice) || 0;   // actual RECORDED sale price (off the deed)
+        const sqft = Number(p.squareFootage) || 0;
+        return {
+          address: p.formattedAddress || p.addressLine1 || "",
+          salePrice: price ? Math.round(price) : 0,
+          saleDate: p.lastSaleDate || null,           // actual recorded sale date
+          sqft: sqft ? Math.round(sqft) : 0,
+          beds: p.bedrooms ?? null,
+          baths: p.bathrooms ?? null,
+          yearBuilt: p.yearBuilt ?? null,
+          propertyType: p.propertyType ?? null,
+          distance: p.distance ?? null,               // miles from subject, when RentCast provides it
+          ppsf: price > 0 && sqft > 0 ? Math.round(price / sqft) : null,
+        };
+      })
+      // 1) must have a real recorded sale price AND a size, so $/sqft is meaningful
+      .filter((c) => c.salePrice > 0 && c.sqft > 0 && c.ppsf)
+      // 2) sold within the window (saleDateRange handles this server-side; belt-and-suspenders here)
+      .filter((c) => {
+        if (!c.saleDate) return true;
+        const t = Date.parse(c.saleDate);
+        return isNaN(t) ? true : (now - t) / 86400000 <= windowDays + 5;
+      })
+      // 3) similar size to the subject, when we know the subject's sqft
+      .filter((c) => (subjectSqft > 0 ? Math.abs(c.sqft - subjectSqft) <= sqftBand : true))
+      // 4) drop the subject itself if it slipped into the results (same address)
+      .filter((c) => c.address.trim().toLowerCase() !== address.toLowerCase());
+
+    // Closest first (when distance is available), then most recent sale.
+    comps.sort((a, b) => {
+      const da = a.distance == null ? Infinity : a.distance;
+      const db = b.distance == null ? Infinity : b.distance;
+      if (da !== db) return da - db;
+      return String(b.saleDate || "").localeCompare(String(a.saleDate || ""));
+    });
+
+    comps = comps.slice(0, keepCount);
+
+    // Median $/sqft is robust to one weird flip; imply the ARV against the subject's size.
+    const ppsfs = comps.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
+    let medianPpsf = null;
+    if (ppsfs.length) {
+      const mid = Math.floor(ppsfs.length / 2);
+      medianPpsf = ppsfs.length % 2 ? ppsfs[mid] : Math.round((ppsfs[mid - 1] + ppsfs[mid]) / 2);
+    }
+    const soldArv = medianPpsf && subjectSqft > 0 ? Math.round(medianPpsf * subjectSqft) : null;
+
+    return res.status(200).json({
+      soldArv,                    // median sold $/sqft × subject sqft — an ARV backed by real closings
+      medianPpsf,                 // median $/sqft across the kept sold comps
+      count: comps.length,
+      window: { radius: Number(radius), saleDateRange: windowDays, sqftBand, keepCount },
+      subject: { sqft: subjectSqft || null, propertyType: propertyType || null },
+      comps,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: "Could not reach RentCast.", detail: String(err).slice(0, 200) });
+  }
+}
