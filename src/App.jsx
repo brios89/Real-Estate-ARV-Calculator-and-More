@@ -342,6 +342,7 @@ export default function App() {
   const [soldData, setSoldData] = useState(null);      // actual recorded sold comps (RentCast /properties)
   const [soldLoading, setSoldLoading] = useState(false);
   const [soldMsg, setSoldMsg] = useState(null);
+  const [soldIncluded, setSoldIncluded] = useState({}); // manual "include" overrides for flagged sold comps, keyed by comp index (reset on each pull)
 
   async function autoComp() {
     const a = address.trim();
@@ -386,7 +387,7 @@ export default function App() {
       setRentcastArv(data.arv || null);
       setArvOverride("");   // let the comps drive the ARV live
       const n = (data.comps || []).length;
-      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps below — trim outliers and it recalculates.` });
+      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps above — trim outliers and it recalculates.` });
     } catch (e) {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
@@ -405,8 +406,9 @@ export default function App() {
       if (subjectInfo?.propertyType) params.set("propertyType", subjectInfo.propertyType);
       const r = await fetch(`${SOLD_API}?${params.toString()}`);
       const data = await r.json();
-      if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); return; }
+      if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); setSoldIncluded({}); return; }
       setSoldData(data);
+      setSoldIncluded({});
       const n = data.count || 0;
       setSoldMsg(n > 0
         ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found. 1 RentCast credit used.` }
@@ -508,9 +510,12 @@ export default function App() {
   // from the UNFLAGGED sold comps (so a bad flip can't drag the ARV) × the subject's sq ft.
   const soldSummary = useMemo(() => {
     if (!soldData || !soldData.comps || !soldData.comps.length) return null;
-    const flagged = soldData.comps.map((c) => ({ ...c, flags: compFlags(c, subjectInfo, num(sqft)) }));
-    const clean = flagged.filter((c) => c.flags.length === 0);
-    const pool = clean.length ? clean : flagged;   // fall back to all if everything got flagged
+    const flagged = soldData.comps.map((c, i) => {
+      const flags = compFlags(c, subjectInfo, num(sqft));
+      return { ...c, flags, included: flags.length === 0 || !!soldIncluded[i] }; // clean comps always in; flagged ones only if manually included
+    });
+    const inMedian = flagged.filter((c) => c.included);
+    const pool = inMedian.length ? inMedian : flagged;   // fall back to all if everything got flagged and nothing included
     const ppsfs = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
     let medianPpsf = null;
     if (ppsfs.length) {
@@ -518,8 +523,8 @@ export default function App() {
       medianPpsf = ppsfs.length % 2 ? ppsfs[m] : Math.round((ppsfs[m - 1] + ppsfs[m]) / 2);
     }
     const arv = medianPpsf && num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null);
-    return { flagged, cleanCount: clean.length, total: flagged.length, medianPpsf, arv };
-  }, [soldData, subjectInfo, sqft]);
+    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv };
+  }, [soldData, subjectInfo, sqft, soldIncluded]);
 
   const avgPsf = useMemo(() => {
     const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
@@ -772,20 +777,9 @@ export default function App() {
 
           {soldData && soldSummary && (
             <>
-              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(soldSummary.arv) : "—"} tone="good" big sub={num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"} />
-                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.cleanCount} of ${soldSummary.total} comps · junk excluded`} />
-                <div className="flex items-end">
-                  {soldSummary.arv > 0 && num(arvOverride) !== soldSummary.arv && (
-                    <button onClick={() => setArvOverride(String(soldSummary.arv))}
-                      className="w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100">
-                      Use sold-comp ARV →
-                    </button>
-                  )}
-                  {soldSummary.arv > 0 && num(arvOverride) === soldSummary.arv && (
-                    <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-center text-[11px] font-semibold text-emerald-600">Driving the ARV ✓</div>
-                  )}
-                </div>
+                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps in the median`} />
               </div>
 
               <div className="mt-3 space-y-2">
@@ -808,7 +802,23 @@ export default function App() {
                             <AlertTriangle className="h-2.5 w-2.5" /> {f}
                           </span>
                         ))}
-                        <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
+                        {c.included ? (
+                          <>
+                            <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
+                            <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: false }))}
+                              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
+                              exclude
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
+                            <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: true }))}
+                              className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
+                              include
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
@@ -824,11 +834,57 @@ export default function App() {
                 ))}
               </div>
               <div className="mt-2 text-[10px] italic text-slate-400">
-                Flagged comps (amber) are dropped from the ARV median — same junk filter as the comp grid above. Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
+                Flagged comps (amber) are dropped from the ARV median unless you hit <b className="text-slate-500">include</b> — same junk filter as the comp grid above. Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
               </div>
             </>
           )}
         </div>
+
+        {/* ARV SOURCE PICKER — which valuation drives the deal */}
+        {(rentcastArv > 0 || (soldSummary && soldSummary.arv > 0)) && (() => {
+          const avmVal = rentcastArv > 0 ? Math.round(rentcastArv) : null;                          // RentCast's model estimate
+          const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;  // ARV from actual recorded sales
+          const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;             // reconciled blend of the two
+          const cur = num(arvOverride);
+          const pickBtn = (val, label, sub, missing) => (
+            <button type="button" disabled={!val} onClick={() => setArvOverride(String(val))}
+              title={!val ? missing : `Set the deal's ARV to ${usd(val)}`}
+              className={`rounded-xl border px-3 py-2.5 text-left transition ${!val
+                ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-50"
+                : cur === val
+                  ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200"
+                  : "border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40"}`}>
+              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}{val && cur === val ? " ✓" : ""}</div>
+              <div className="font-mono text-lg font-bold tabular-nums text-slate-800">{val ? usd(val) : "—"}</div>
+              <div className="text-[10px] leading-tight text-slate-400">{val ? sub : missing}</div>
+            </button>
+          );
+          return (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <SectionTitle>Which number drives the deal?</SectionTitle>
+              <div className="mt-1 grid gap-3 sm:grid-cols-3">
+                {pickBtn(avmVal, "Use AVM number", "RentCast model estimate", "Run Auto-comp above to get the AVM")}
+                {pickBtn(soldVal, "Use ARV number", "sold-comp ARV · recorded sales", "Pull sold comps above to get this")}
+                {pickBtn(avgVal, "Use average of both", "AVM + sold-comp ARV, split down the middle", "Needs both the AVM and sold comps")}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                <span>
+                  {cur === 0 ? "Right now the comp grid average above is driving the ARV (no override)."
+                    : cur === avmVal ? "The AVM is driving the ARV."
+                    : cur === soldVal ? "The sold-comp ARV is driving the ARV."
+                    : cur === avgVal ? "The AVM / sold-comp average is driving the ARV."
+                    : "A manual ARV override is active."}
+                </span>
+                {cur > 0 && (
+                  <button type="button" onClick={() => setArvOverride("")}
+                    className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
+                    back to comp grid
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
