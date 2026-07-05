@@ -84,18 +84,6 @@ const lastSoldLine = (info) => {
   const when = fullDate(info.lastSaleDate);
   return `Last sold ${usd(info.lastSalePrice)}${when ? ` on ${when}` : ""}`;
 };
-// Comp listing line: "Listed $209k May '25 · off market Sep '25"
-const listingLine = (c) => {
-  if (!c) return "";
-  const bits = [];
-  const listed = shortDate(c.listedDate);
-  const off = shortDate(c.removedDate || c.lastSeenDate);
-  if (listed) bits.push(`listed ${listed}`);
-  if (off && c.status && c.status.toLowerCase() !== "active") bits.push(`off market ${off}`);
-  else if (off && !listed) bits.push(`seen ${off}`);
-  return bits.join(" · ");
-};
-
 // ---------- helpers ----------
 const num = (v) => {
   const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
@@ -346,11 +334,7 @@ export default function App() {
   // property + ARV
   const [address, setAddress] = useState("");
   const [sqft, setSqft] = useState("");
-  const [comps, setComps] = useState([
-    { sqft: "", price: "", address: "" },
-    { sqft: "", price: "", address: "" },
-    { sqft: "", price: "", address: "" },
-  ]);
+  const [comps, setComps] = useState([]); // read-only grid: filled by Auto-comp, curated with include/exclude
   const [arvOverride, setArvOverride] = useState("");
   const [rentcastArv, setRentcastArv] = useState(null); // RentCast's own AVM, kept as a reference only
   // --- rental ---
@@ -411,7 +395,6 @@ export default function App() {
         status: c.status,
       }));
       if (incoming.length) {
-        while (incoming.length < 3) incoming.push({ sqft: "", price: "", address: "" });
         setComps(incoming);
       }
       // Keep RentCast's own AVM as a REFERENCE only — do NOT shove it into the override,
@@ -424,7 +407,7 @@ export default function App() {
       // so the comp grid renders immediately while the sold panel loads on its own spinner.
       pullSold({ sqft: data.subject?.sqft || num(sqft), propertyType: data.subject?.propertyType });
       const n = (data.comps || []).length;
-      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps above — trim outliers and it recalculates.` });
+      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps above — include/exclude comps and it recalculates.` });
     } catch (e) {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
@@ -453,7 +436,7 @@ export default function App() {
       const n = data.count || 0;
       setSoldMsg(n > 0
         ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found. 1 RentCast credit used.` }
-        : { type: "err", text: "No recorded sales matched — widen the radius/date range, or the county may be light on recorded prices. Enter comps manually." });
+        : { type: "err", text: "No recorded sales matched — widen the radius/date range, or the county may be light on recorded prices. You can enter your ARV directly in the picker below." });
     } catch (e) {
       setSoldMsg({ type: "err", text: "Couldn't reach the sold-comps service. Is the proxy deployed?" });
     } finally {
@@ -650,10 +633,6 @@ export default function App() {
   const activeInvestorMao = isOver ? investorMaoOver : investorMaoUnder;
   const activePct = isOver ? num(overPct) : num(underPct);
 
-  const setComp = (i, key, val) =>
-    setComps((cs) => cs.map((c, idx) => (idx === i ? { ...c, [key]: val } : c)));
-  const addComp = () => setComps((cs) => (cs.length < 8 ? [...cs, { sqft: "", price: "", address: "" }] : cs));
-
   const tabs = [
     { id: "cash", label: "Cash / MAO", Icon: Calculator },
     { id: "subto", label: "Sub-To", Icon: Building2 },
@@ -731,10 +710,6 @@ export default function App() {
                   {compLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                   {compLoading ? "Pulling…" : "Auto-comp address"}
                 </button>
-                <button onClick={addComp}
-                  className="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
-                  + comp
-                </button>
               </div>
             </div>
           </div>
@@ -776,90 +751,71 @@ export default function App() {
               For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are conservative appraiser count-adjustments ($10K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
+        </div>
 
-          {/* comp grid */}
-          <div className="mt-4">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Sold comps (YLHB method: avg $/sf × subject sf)
-            </span>
+        {/* AVM COMPS — own section, split from the property card */}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <SectionTitle>Sold comps (YLHB method: avg $/sf × subject sf)</SectionTitle>
             <div className="mt-1 text-[10px] text-slate-400">
               Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject. Flagged comps are dropped from the average unless you hit include — same system as the sold panel below.
             </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
-                const ppsf = num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0;
                 const row = gridSummary.rows[i] || { flags: [], valid: false, included: false, manual: false };
+                if (!row.valid) return null;   // read-only grid: only real pulled comps render
                 const flags = row.flags;
                 return (
-                  <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : row.valid && !row.included ? "border-slate-200 bg-slate-50/50 opacity-60" : "border-slate-200 bg-slate-50/50"}`}>
-                    {/* address row */}
+                  <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : !row.included ? "border-slate-200 bg-slate-50/50 opacity-60" : "border-slate-200 bg-slate-50/50"}`}>
+                    {/* address row — static, same as the sold panel */}
                     <div className="flex items-center gap-2">
                       <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
-                      <div className="flex flex-1 items-center gap-1.5">
-                        <input
-                          type="text"
-                          value={c.address}
-                          onChange={(e) => setComp(i, "address", e.target.value)}
-                          placeholder="comp address (optional)"
-                          className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100"
-                        />
-                        {c.address ? (
-                          <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer"
-                            title="Google this property"
-                            className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
-                            <Search className="h-3 w-3" /> Google <ExternalLink className="h-2.5 w-2.5" />
-                          </a>
-                        ) : (
-                          <span className="shrink-0 px-2 py-1 text-[11px] text-slate-300">no link</span>
-                        )}
-                      </div>
+                      <span className="flex-1 truncate text-xs font-medium text-slate-700">{c.address || "(address withheld)"}</span>
+                      {c.address && (
+                        <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer"
+                          className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
+                          <Search className="h-3 w-3" /> Google
+                        </a>
+                      )}
                     </div>
-                    {/* property details + listing dates line */}
-                    {(propLine(c) || listingLine(c)) && (
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2 pl-7 text-[11px] text-slate-500">
-                        {propLine(c) && <span>{propLine(c)}</span>}
-                        {propLine(c) && listingLine(c) && <span className="text-slate-300">•</span>}
-                        {listingLine(c) && <span className="text-slate-400">{listingLine(c)}</span>}
-                      </div>
-                    )}
                     {/* junk-comp flags + include/exclude — same system as the sold panel */}
-                    {(flags.length > 0 || row.valid) && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
-                        {flags.map((f, k) => (
-                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
-                          </span>
-                        ))}
-                        {row.valid && (row.included ? (
-                          <>
-                            <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
-                            <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: false }))}
-                              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
-                              exclude
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
-                            <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: true }))}
-                              className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
-                              include
-                            </button>
-                          </>
-                        ))}
-                      </div>
-                    )}
-                    {/* numbers row */}
-                    <div className="mt-1.5 flex items-center gap-2 pl-7">
-                      <div className="flex-1">
-                        <PlainInput value={c.sqft} onChange={(v) => setComp(i, "sqft", v)} placeholder="sq ft" suffix="sf" />
-                      </div>
-                      <div className="flex-1">
-                        <MoneyInput value={c.price} onChange={(v) => setComp(i, "price", v)} placeholder="sold price" />
-                      </div>
-                      <span className="w-20 text-right font-mono text-xs tabular-nums text-slate-500">
-                        {ppsf ? `$${ppsf.toFixed(0)}/sf` : "—"}
-                      </span>
+                    <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
+                      {flags.map((f, k) => (
+                        <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                          <AlertTriangle className="h-2.5 w-2.5" /> {f}
+                        </span>
+                      ))}
+                      {row.included ? (
+                        <>
+                          <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
+                          <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: false }))}
+                            className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
+                            exclude
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
+                          <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: true }))}
+                            className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
+                            include
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {/* numbers — static, same as the sold panel */}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
+                      <span className="font-bold text-slate-700">{usd(num(c.price))}</span>
+                      <span className="font-mono text-slate-600">${Math.round(row.ppsf)}/sf</span>
+                      <span>{num(c.sqft).toLocaleString()} sf</span>
+                      {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
+                      {c.listedDate && <span>listed {shortDate(c.listedDate)}</span>}
+                      {(c.removedDate || c.lastSeenDate) && c.status && c.status.toLowerCase() !== "active"
+                        ? <span>off market {shortDate(c.removedDate || c.lastSeenDate)}</span>
+                        : (c.removedDate || c.lastSeenDate) && !c.listedDate
+                          ? <span>seen {shortDate(c.removedDate || c.lastSeenDate)}</span>
+                          : null}
+                      {c.yearBuilt && <span>built {c.yearBuilt}</span>}
+                      {c.distance != null && <span>{Number(c.distance).toFixed(2)} mi</span>}
                     </div>
                   </div>
                 );
@@ -870,7 +826,6 @@ export default function App() {
                 {compMsg.text}
               </div>
             )}
-          </div>
 
           {/* ARV result */}
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
