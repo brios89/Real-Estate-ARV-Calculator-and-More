@@ -596,12 +596,12 @@ export default function App() {
     const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;
     let label, src;
     if (o > 0) {
-      if (avmVal && o === avmVal) { label = "AVM"; src = "RentCast AVM · model estimate, not recorded sales"; }
+      if (avmVal && o === avmVal) { label = "AVM comp"; src = "RentCast AVM · model estimate, not recorded sales"; }
       else if (soldVal && o === soldVal) { label = "ARV"; src = "sold-comp ARV · actual recorded sales"; }
       else if (avgVal && o === avgVal) { label = "AVM / ARV average"; src = "average of AVM + sold-comp ARV"; }
       else { label = "Manual ARV"; src = "manual override"; }
     } else {
-      label = "AVM";
+      label = "AVM comp";
       src = avmVal ? "avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
     }
     const sub = subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
@@ -827,11 +827,13 @@ export default function App() {
               </div>
             )}
 
-          {/* ARV result */}
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps in the average`} />
-            <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
-          </div>
+          {/* ARV result — hidden until comps are pulled, matching the sold panel's empty state */}
+          {comps.length > 0 && (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
+              <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps in the average`} />
+            </div>
+          )}
         </div>
 
         {/* ACTUAL SOLD COMPS (recorded closings) */}
@@ -863,7 +865,7 @@ export default function App() {
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(soldSummary.arv) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"} />
+                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
                 <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps in the median`} />
               </div>
 
@@ -934,14 +936,14 @@ export default function App() {
           const cur = num(arvOverride);
           const pickBtn = (val, label, sub, missing) => (
             <button type="button" disabled={!val} onClick={() => setArvOverride(String(val))}
-              title={!val ? missing : `Set the deal's ARV to ${usd(val)}`}
+              title={!val ? missing : `Set the deal's ARV to ${usd(Math.max(0, val + subjAdjust))}`}
               className={`rounded-xl border px-3 py-2.5 text-left transition ${!val
                 ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-50"
                 : cur === val
                   ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200"
                   : "border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40"}`}>
               <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}{val && cur === val ? " ✓" : ""}</div>
-              <div className="font-mono text-lg font-bold tabular-nums text-slate-800">{val ? usd(val) : "—"}</div>
+              <div className="font-mono text-lg font-bold tabular-nums text-slate-800">{val ? usd(Math.max(0, val + subjAdjust)) : "—"}</div>
               <div className="text-[10px] leading-tight text-slate-400">{val ? sub : missing}</div>
             </button>
           );
@@ -953,6 +955,11 @@ export default function App() {
                 {pickBtn(soldVal, "Use ARV number", "sold-comp ARV · recorded sales", "Run Auto-comp above to get this")}
                 {pickBtn(avgVal, "Use average of both", "AVM + sold-comp ARV, split down the middle", "Needs both the AVM and sold comps")}
               </div>
+              {subjAdjust !== 0 && (
+                <div className="mt-2 text-[10px] text-slate-400">
+                  All three include your {subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(subjAdjust))} bed/bath record correction from up top.
+                </div>
+              )}
               <div className="mt-3">
                 <Field label="Or enter ARV directly" hint="overrides comps">
                   <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
