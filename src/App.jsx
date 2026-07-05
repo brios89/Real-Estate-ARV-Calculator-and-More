@@ -56,18 +56,27 @@ const flagPriceOutliers = (items) => {
     }
   });
 };
+// All RentCast dates are midnight-UTC ISO strings ("2026-01-22T00:00:00.000Z"). Every formatter pins
+// timeZone: "UTC" — otherwise Eastern time rolls the display back a day (Jan 22 shows as Jan 21).
 const shortDate = (iso) => {
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d)) return "";
-  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
 };
 // Full date like "11/18/2024"
 const fullDate = (iso) => {
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d)) return "";
-  return d.toLocaleDateString("en-US");
+  return d.toLocaleDateString("en-US", { timeZone: "UTC" });
+};
+// Clear readable date like "Jan 22, 2026" — used on the sold-comp cards
+const mediumDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 };
 // Subject's true last-sale line
 const lastSoldLine = (info) => {
@@ -365,6 +374,7 @@ export default function App() {
   const [soldLoading, setSoldLoading] = useState(false);
   const [soldMsg, setSoldMsg] = useState(null);
   const [soldIncluded, setSoldIncluded] = useState({}); // manual "include" overrides for flagged sold comps, keyed by comp index (reset on each pull)
+  const [gridIncluded, setGridIncluded] = useState({}); // AVM grid overrides: true = force in, false = force out, undefined = auto (reset on each Auto-comp)
 
   async function autoComp() {
     const a = address.trim();
@@ -406,6 +416,7 @@ export default function App() {
       }
       // Keep RentCast's own AVM as a REFERENCE only — do NOT shove it into the override,
       // or the comps would stop driving the ARV (removing comps would do nothing).
+      setGridIncluded({});  // fresh pull, fresh include/exclude slate for the grid
       setRentcastArv(data.arv || null);
       setArvOverride("");   // let the comps drive the ARV live
       // One click, both pulls: chain the sold-comps fetch with the subject details we JUST got
@@ -531,28 +542,31 @@ export default function App() {
   // because a bedroom the county missed is missing from every one of those sources equally.
   const subjAdjust = Math.round(adjBeds * num(bedAdjAmt) + adjBaths * num(bathAdjAmt));
 
-  // The comp-grid base: avg $/sf × subject sf from the current grid — the same number the After-Repair Value
-  // card shows when nothing overrides it. The picker's AVM button uses THIS (B's method on the AVM comps),
-  // not RentCast's point estimate. Kept adjustment-free so the bed/bath correction never double-counts.
-  const gridArv = useMemo(() => {
-    const sf = num(sqft);
-    const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
-    if (valid.length === 0 || sf <= 0) return 0;
-    const avgPsf = valid.reduce((a, c) => a + num(c.price) / num(c.sqft), 0) / valid.length;
-    return avgPsf * sf;
-  }, [comps, sqft]);
-
-  // Advisory flags for the editable comp grid — structural junk (compFlags) + the shared price-outlier
-  // rule. ADVISORY ONLY: the grid's ARV still averages every valid row; these chips just tell you which
-  // rows to eyeball and delete. (The sold panel is the strict one that auto-excludes.)
-  const gridFlags = useMemo(() => {
-    const items = comps.map((c) => ({
+  // The AVM comp grid, unified with the sold panel's system: structural flags + the shared price-outlier
+  // rule; flagged comps are auto-EXCLUDED from the average (averages bruise easier than medians), clean
+  // comps auto-included, and every valid card carries an include/exclude override.
+  // gridIncluded: true = force in, false = force out, undefined = automatic.
+  const gridSummary = useMemo(() => {
+    const items = comps.map((c, i) => ({
+      i,
       ppsf: num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0,
       flags: [...compFlags(c, subjectInfo, num(sqft))],
     }));
     flagPriceOutliers(items);
-    return items.map((c) => c.flags);
-  }, [comps, subjectInfo, sqft]);
+    const rows = items.map((it) => {
+      const o = gridIncluded[it.i];
+      const valid = it.ppsf > 0;
+      const included = valid && (o === true || (o === undefined && it.flags.length === 0));
+      return { ...it, valid, included, manual: o !== undefined };
+    });
+    const pool = rows.filter((r) => r.included);
+    const avg = pool.length ? pool.reduce((a, r) => a + r.ppsf, 0) / pool.length : 0;
+    const sf = num(sqft);
+    return { rows, usedCount: pool.length, validCount: rows.filter((r) => r.valid).length, avgPsf: avg, gridArv: avg > 0 && sf > 0 ? avg * sf : 0 };
+  }, [comps, subjectInfo, sqft, gridIncluded]);
+  // Same consumers as before (the arv memo, arvStat, the picker) read these derived constants.
+  const gridArv = gridSummary.gridArv;
+  const avgPsf = gridSummary.avgPsf;
 
   const arv = useMemo(() => {
     if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
@@ -572,21 +586,21 @@ export default function App() {
     if (!soldData || !soldData.comps || !soldData.comps.length) return null;
     const base = soldData.comps.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, num(sqft))] }));
     flagPriceOutliers(base);
-    const solidIdx = base.filter((c) => c.flags.length === 0).slice(0, SOLID_TARGET).map((c) => c.i);
+    const solidIdx = base.filter((c) => c.flags.length === 0 && soldIncluded[c.i] !== false).slice(0, SOLID_TARGET).map((c) => c.i);
     const flagged = base.map((c) => {
-      const manual = !!soldIncluded[c.i];
+      const o = soldIncluded[c.i];                       // true = force in, false = force out, undefined = auto
       const auto = solidIdx.includes(c.i);
-      return { ...c, manual, included: auto || manual, benched: c.flags.length === 0 && !auto && !manual };
+      const included = o === true || (o === undefined && auto);
+      return { ...c, manual: o !== undefined, included, benched: c.flags.length === 0 && o === undefined && !auto };
     });
     const pool = flagged.filter((c) => c.included);
-    const use = pool.length ? pool : flagged;             // last-resort fallback so the median never runs on zero comps
-    const ppsfs = use.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
+    const ppsfs = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
     let medianPpsf = null;
     if (ppsfs.length) {
       const m = Math.floor(ppsfs.length / 2);
       medianPpsf = ppsfs.length % 2 ? ppsfs[m] : Math.round((ppsfs[m - 1] + ppsfs[m]) / 2);
     }
-    const arv = medianPpsf && num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null);
+    const arv = medianPpsf ? (num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null)) : null;
     return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET };
   }, [soldData, subjectInfo, sqft, soldIncluded]);
 
@@ -610,12 +624,6 @@ export default function App() {
     const sub = subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
     return { label, sub };
   }, [arvOverride, rentcastArv, soldSummary, subjAdjust, gridArv]);
-
-  const avgPsf = useMemo(() => {
-    const valid = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0);
-    if (!valid.length) return 0;
-    return valid.reduce((a, c) => a + num(c.price) / num(c.sqft), 0) / valid.length;
-  }, [comps]);
 
   // ---- repairs ----
   const repairPsf = rehabLevel === "cosmetic" ? 15 : rehabLevel === "moderate" ? 30 : rehabLevel === "gut" ? 50 : num(customPsf);
@@ -645,7 +653,6 @@ export default function App() {
   const setComp = (i, key, val) =>
     setComps((cs) => cs.map((c, idx) => (idx === i ? { ...c, [key]: val } : c)));
   const addComp = () => setComps((cs) => (cs.length < 8 ? [...cs, { sqft: "", price: "", address: "" }] : cs));
-  const rmComp = (i) => setComps((cs) => (cs.length > 1 ? cs.filter((_, idx) => idx !== i) : cs));
 
   const tabs = [
     { id: "cash", label: "Cash / MAO", Icon: Calculator },
@@ -776,14 +783,15 @@ export default function App() {
               Sold comps (YLHB method: avg $/sf × subject sf)
             </span>
             <div className="mt-1 text-[10px] text-slate-400">
-              Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject.
+              Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject. Flagged comps are dropped from the average unless you hit include — same system as the sold panel below.
             </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
                 const ppsf = num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0;
-                const flags = gridFlags[i] || [];
+                const row = gridSummary.rows[i] || { flags: [], valid: false, included: false, manual: false };
+                const flags = row.flags;
                 return (
-                  <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : "border-slate-200 bg-slate-50/50"}`}>
+                  <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : row.valid && !row.included ? "border-slate-200 bg-slate-50/50 opacity-60" : "border-slate-200 bg-slate-50/50"}`}>
                     {/* address row */}
                     <div className="flex items-center gap-2">
                       <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
@@ -805,7 +813,6 @@ export default function App() {
                           <span className="shrink-0 px-2 py-1 text-[11px] text-slate-300">no link</span>
                         )}
                       </div>
-                      <button onClick={() => rmComp(i)} className="text-slate-300 hover:text-rose-500" aria-label="remove comp">×</button>
                     </div>
                     {/* property details + listing dates line */}
                     {(propLine(c) || listingLine(c)) && (
@@ -815,13 +822,30 @@ export default function App() {
                         {listingLine(c) && <span className="text-slate-400">{listingLine(c)}</span>}
                       </div>
                     )}
-                    {/* junk-comp flags vs subject */}
-                    {flags.length > 0 && (
+                    {/* junk-comp flags + include/exclude — same system as the sold panel */}
+                    {(flags.length > 0 || row.valid) && (
                       <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
                         {flags.map((f, k) => (
                           <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
                             <AlertTriangle className="h-2.5 w-2.5" /> {f}
                           </span>
+                        ))}
+                        {row.valid && (row.included ? (
+                          <>
+                            <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
+                            <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: false }))}
+                              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
+                              exclude
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
+                            <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: true }))}
+                              className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
+                              include
+                            </button>
+                          </>
                         ))}
                       </div>
                     )}
@@ -850,7 +874,7 @@ export default function App() {
 
           {/* ARV result */}
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length} comps`} />
+            <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps in the average`} />
             <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
           </div>
         </div>
@@ -901,41 +925,39 @@ export default function App() {
                         </a>
                       )}
                     </div>
-                    {(c.flags.length > 0 || c.benched || c.manual) && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
-                        {c.flags.map((f, k) => (
-                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
-                          </span>
-                        ))}
-                        {(c.benched || (c.manual && c.flags.length === 0)) && (
-                          <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
-                        )}
-                        {c.included ? (
-                          <>
-                            <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
-                            <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: false }))}
-                              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
-                              exclude
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
-                            <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: true }))}
-                              className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
-                              include
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )}
+                    <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
+                      {c.flags.map((f, k) => (
+                        <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                          <AlertTriangle className="h-2.5 w-2.5" /> {f}
+                        </span>
+                      ))}
+                      {c.benched && (
+                        <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
+                      )}
+                      {c.included ? (
+                        <>
+                          <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
+                          <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: false }))}
+                            className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
+                            exclude
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
+                          <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: true }))}
+                            className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
+                            include
+                          </button>
+                        </>
+                      )}
+                    </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
                       <span className="font-bold text-slate-700">{usd(c.salePrice)}</span>
                       <span className="font-mono text-slate-600">${c.ppsf}/sf</span>
                       <span>{c.sqft.toLocaleString()} sf</span>
                       {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
-                      {c.saleDate && <span>sold {c.saleDate}</span>}
+                      {c.saleDate && <span>sold {mediumDate(c.saleDate)}</span>}
                       {c.distance != null && <span>{Number(c.distance).toFixed(2)} mi</span>}
                       {c.yearBuilt && <span>built {c.yearBuilt}</span>}
                     </div>
