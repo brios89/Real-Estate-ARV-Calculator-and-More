@@ -40,6 +40,22 @@ const compFlags = (c, subj, subjSqft) => {
   if (cd != null && cd > 0.5) flags.push(`${cd.toFixed(1)} mi away`);
   return flags;
 };
+
+// Group-level price sanity, shared by the sold panel and the comp grid: flags any comp whose $/sf strays
+// more than PRICE_OUTLIER_PCT from the structurally-clean group median. Needs 3+ clean comps so a junk
+// reference median can't flag good comps. Mutates each item's flags array in place; items = [{ ppsf, flags }].
+const PRICE_OUTLIER_PCT = 0.25;
+const flagPriceOutliers = (items) => {
+  const clean = items.filter((c) => c.flags.length === 0 && c.ppsf > 0).map((c) => c.ppsf).sort((a, b) => a - b);
+  if (clean.length < 3) return;
+  const m = Math.floor(clean.length / 2);
+  const mid = clean.length % 2 ? clean[m] : (clean[m - 1] + clean[m]) / 2;
+  items.forEach((c) => {
+    if (c.ppsf > 0 && Math.abs(c.ppsf - mid) / mid > PRICE_OUTLIER_PCT) {
+      c.flags.push(`price outlier · $${Math.round(c.ppsf)}/sf vs $${Math.round(mid)}/sf group`);
+    }
+  });
+};
 const shortDate = (iso) => {
   if (!iso) return "";
   const d = new Date(iso);
@@ -526,6 +542,18 @@ export default function App() {
     return avgPsf * sf;
   }, [comps, sqft]);
 
+  // Advisory flags for the editable comp grid — structural junk (compFlags) + the shared price-outlier
+  // rule. ADVISORY ONLY: the grid's ARV still averages every valid row; these chips just tell you which
+  // rows to eyeball and delete. (The sold panel is the strict one that auto-excludes.)
+  const gridFlags = useMemo(() => {
+    const items = comps.map((c) => ({
+      ppsf: num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0,
+      flags: [...compFlags(c, subjectInfo, num(sqft))],
+    }));
+    flagPriceOutliers(items);
+    return items.map((c) => c.flags);
+  }, [comps, subjectInfo, sqft]);
+
   const arv = useMemo(() => {
     if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
     if (gridArv <= 0) return 0;
@@ -543,16 +571,7 @@ export default function App() {
   const soldSummary = useMemo(() => {
     if (!soldData || !soldData.comps || !soldData.comps.length) return null;
     const base = soldData.comps.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, num(sqft))] }));
-    const cleanPpsf = base.filter((c) => c.flags.length === 0 && c.ppsf > 0).map((c) => c.ppsf).sort((a, b) => a - b);
-    if (cleanPpsf.length >= 3) {
-      const m = Math.floor(cleanPpsf.length / 2);
-      const midPpsf = cleanPpsf.length % 2 ? cleanPpsf[m] : (cleanPpsf[m - 1] + cleanPpsf[m]) / 2;
-      base.forEach((c) => {
-        if (c.ppsf > 0 && Math.abs(c.ppsf - midPpsf) / midPpsf > 0.25) {
-          c.flags.push(`price outlier · $${c.ppsf}/sf vs $${Math.round(midPpsf)}/sf group`);
-        }
-      });
-    }
+    flagPriceOutliers(base);
     const solidIdx = base.filter((c) => c.flags.length === 0).slice(0, SOLID_TARGET).map((c) => c.i);
     const flagged = base.map((c) => {
       const manual = !!soldIncluded[c.i];
@@ -762,7 +781,7 @@ export default function App() {
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
                 const ppsf = num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0;
-                const flags = compFlags(c, subjectInfo, num(sqft));
+                const flags = gridFlags[i] || [];
                 return (
                   <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : "border-slate-200 bg-slate-50/50"}`}>
                     {/* address row */}
