@@ -810,10 +810,9 @@ export default function App() {
           </div>
 
           {/* ARV result */}
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length} comps`} />
             <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
-            <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
         </div>
 
@@ -821,11 +820,11 @@ export default function App() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
-            <button onClick={() => pullSold()} disabled={soldLoading}
-              className="flex shrink-0 items-center gap-1.5 rounded-md bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-900 disabled:opacity-60">
-              {soldLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-              {soldLoading ? "Pulling…" : "Pull sold comps"}
-            </button>
+            {soldLoading && (
+              <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling…
+              </span>
+            )}
           </div>
           <div className="mt-1 text-[10px] text-slate-400">
             Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject. Median $/sf × your subject sq ft. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
@@ -926,7 +925,7 @@ export default function App() {
               <SectionTitle>Which number drives the deal?</SectionTitle>
               <div className="mt-1 grid gap-3 sm:grid-cols-3">
                 {pickBtn(avmVal, "Use AVM number", "RentCast model estimate", "Run Auto-comp above to get the AVM")}
-                {pickBtn(soldVal, "Use ARV number", "sold-comp ARV · recorded sales", "Pull sold comps above to get this")}
+                {pickBtn(soldVal, "Use ARV number", "sold-comp ARV · recorded sales", "Run Auto-comp above to get this")}
                 {pickBtn(avgVal, "Use average of both", "AVM + sold-comp ARV, split down the middle", "Needs both the AVM and sold comps")}
               </div>
               <div className="mt-3">
@@ -1785,6 +1784,36 @@ function CashTab(props) {
             <div className="mt-1 text-4xl font-bold tabular-nums text-slate-900">{usd(itemizedMao)}</div>
             <div className="mt-2 text-[11px] leading-snug text-slate-500">Buy at this price or lower and the flipper still clears the profit you entered.</div>
             <div className="mt-3 text-[10px] font-medium text-amber-700">↻ Updates the instant you change the flipper's desired profit.</div>
+            {(() => {
+              // Buyer's ceiling: the most the END BUYER can pay all-in (contract + your fee) and still clear
+              // their target profit. itemizedMao already nets out the fee, so ceiling = itemizedMao + fee.
+              const fee = num(wholesaleFee);
+              const asking = num(askingPrice);
+              const maxAssign = itemizedMao + fee;
+              const planned = asking + fee;          // what you'd actually assign it for today
+              const slack = maxAssign - planned;     // = itemizedMao - asking (the fee cancels)
+              const maxFee = maxAssign - asking;     // fee ceiling at the current contract price
+              return (
+                <div className="mt-3 w-full border-t border-slate-200 pt-3 text-left">
+                  <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Assign it for</div>
+                  <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-slate-900">{usd(maxAssign)} <span className="text-sm font-semibold text-slate-400">max</span></div>
+                  <div className="text-[10px] leading-snug text-slate-400">The most your end buyer can pay all-in — contract price + your fee — and still clear {usd(num(desiredProfit))} on the numbers at left.</div>
+                  {asking > 0 ? (
+                    slack >= 0 ? (
+                      <div className="mt-2 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-700">
+                        ✓ Your plan — {usd(asking)} contract + {usd(fee)} fee = <b>{usd(planned)}</b> — works{slack === 0 ? <>, <b>exactly at the ceiling</b> (zero room)</> : <> with <b>{usd(slack)}</b> of room</>}.
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-700">
+                        ⚠ Your plan — {usd(asking)} contract + {usd(fee)} fee = <b>{usd(planned)}</b> — is <b>{usd(-slack)}</b> over the ceiling. {maxFee > 0 ? <>Max fee at this contract price: <b>{usd(maxFee)}</b> — or renegotiate the price down.</> : <>Even a $0 fee doesn't work at this contract price — renegotiate the price.</>}
+                      </div>
+                    )
+                  ) : (
+                    <div className="mt-2 text-[10px] italic text-slate-400">Enter the Seller asking price up top and this checks your actual assignment against the ceiling.</div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
