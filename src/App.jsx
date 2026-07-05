@@ -391,6 +391,10 @@ export default function App() {
       // or the comps would stop driving the ARV (removing comps would do nothing).
       setRentcastArv(data.arv || null);
       setArvOverride("");   // let the comps drive the ARV live
+      // One click, both pulls: chain the sold-comps fetch with the subject details we JUST got
+      // (passed directly — the state setters above aren't visible to this call yet). Not awaited,
+      // so the comp grid renders immediately while the sold panel loads on its own spinner.
+      pullSold({ sqft: data.subject?.sqft || num(sqft), propertyType: data.subject?.propertyType });
       const n = (data.comps || []).length;
       setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps above — trim outliers and it recalculates.` });
     } catch (e) {
@@ -401,14 +405,18 @@ export default function App() {
   }
 
   // Pull ACTUAL recorded sold comps from RentCast's Property Records endpoint (1 credit per pull).
-  async function pullSold() {
+  // `fresh` = { sqft, propertyType } — lets autoComp chain this immediately with values it JUST fetched,
+  // because the setSqft/setSubjectInfo calls above it won't be visible to React state until the next render.
+  async function pullSold(fresh) {
     const a = address.trim();
     if (!a) { setSoldMsg({ type: "err", text: "Type the subject address first." }); return; }
     setSoldLoading(true); setSoldMsg(null);
     try {
       const params = new URLSearchParams({ address: a });
-      if (num(sqft) > 0) params.set("subjectSqft", String(num(sqft)));
-      if (subjectInfo?.propertyType) params.set("propertyType", subjectInfo.propertyType);
+      const sf = Number(fresh?.sqft) > 0 ? Number(fresh.sqft) : num(sqft);
+      if (sf > 0) params.set("subjectSqft", String(sf));
+      const ptype = fresh?.propertyType || subjectInfo?.propertyType;
+      if (ptype) params.set("propertyType", ptype);
       const r = await fetch(`${SOLD_API}?${params.toString()}`);
       const data = await r.json();
       if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); setSoldIncluded({}); return; }
@@ -545,21 +553,23 @@ export default function App() {
 
   // Label the ARV stat with where the number actually came from — AVM model, recorded sales, blend, or manual.
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
-  const arvSourceSub = useMemo(() => {
+  const arvStat = useMemo(() => {
     const o = num(arvOverride);
     const avmVal = rentcastArv > 0 && gridArv > 0 ? Math.round(gridArv) : null;
     const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;
     const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;
-    let src;
+    let label, src;
     if (o > 0) {
-      if (avmVal && o === avmVal) src = "RentCast AVM · model estimate, not recorded sales";
-      else if (soldVal && o === soldVal) src = "sold-comp ARV · actual recorded sales";
-      else if (avgVal && o === avgVal) src = "average of AVM + sold-comp ARV";
-      else src = "manual override";
+      if (avmVal && o === avmVal) { label = "AVM"; src = "RentCast AVM · model estimate, not recorded sales"; }
+      else if (soldVal && o === soldVal) { label = "ARV"; src = "sold-comp ARV · actual recorded sales"; }
+      else if (avgVal && o === avgVal) { label = "AVM / ARV average"; src = "average of AVM + sold-comp ARV"; }
+      else { label = "Manual ARV"; src = "manual override"; }
     } else {
+      label = "AVM";
       src = avmVal ? "avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
     }
-    return subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
+    const sub = subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
+    return { label, sub };
   }, [arvOverride, rentcastArv, soldSummary, subjAdjust, gridArv]);
 
   const avgPsf = useMemo(() => {
@@ -797,17 +807,12 @@ export default function App() {
                 {compMsg.text}
               </div>
             )}
-            <div className="mt-3">
-              <Field label="Or enter ARV directly" hint="overrides comps">
-                <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
-              </Field>
-            </div>
           </div>
 
           {/* ARV result */}
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length} comps`} />
-            <Stat label="After-Repair Value" value={usd(arv)} tone="default" big sub={arvSourceSub} />
+            <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
             <Stat label="Repair estimate" value={usd(repairs)} sub={repairOverride ? "manual" : `${repairPsf || 0} $/sf × ${num(sqft) || 0} sf`} />
           </div>
         </div>
@@ -816,7 +821,7 @@ export default function App() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
-            <button onClick={pullSold} disabled={soldLoading}
+            <button onClick={() => pullSold()} disabled={soldLoading}
               className="flex shrink-0 items-center gap-1.5 rounded-md bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-slate-900 disabled:opacity-60">
               {soldLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
               {soldLoading ? "Pulling…" : "Pull sold comps"}
@@ -898,7 +903,7 @@ export default function App() {
         </div>
 
         {/* ARV SOURCE PICKER — which valuation drives the deal */}
-        {(rentcastArv > 0 || (soldSummary && soldSummary.arv > 0)) && (() => {
+        {(() => {
           const avmVal = rentcastArv > 0 && gridArv > 0 ? Math.round(gridArv) : null;              // the AVM-path ARV — same number as the After-Repair Value card
           const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;  // ARV from actual recorded sales
           const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;             // reconciled blend of the two
@@ -924,20 +929,10 @@ export default function App() {
                 {pickBtn(soldVal, "Use ARV number", "sold-comp ARV · recorded sales", "Pull sold comps above to get this")}
                 {pickBtn(avgVal, "Use average of both", "AVM + sold-comp ARV, split down the middle", "Needs both the AVM and sold comps")}
               </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
-                <span>
-                  {cur === 0 ? "Right now the comp grid average above is driving the ARV (no override)."
-                    : cur === avmVal ? "The AVM is driving the ARV."
-                    : cur === soldVal ? "The sold-comp ARV is driving the ARV."
-                    : cur === avgVal ? "The AVM / sold-comp average is driving the ARV."
-                    : "A manual ARV override is active."}
-                </span>
-                {cur > 0 && (
-                  <button type="button" onClick={() => setArvOverride("")}
-                    className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
-                    back to comp grid
-                  </button>
-                )}
+              <div className="mt-3">
+                <Field label="Or enter ARV directly" hint="overrides comps">
+                  <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
+                </Field>
               </div>
             </div>
           );
@@ -972,6 +967,17 @@ export default function App() {
               <Field label="Or total repair $" hint="overrides">
                 <MoneyInput value={repairOverride} onChange={setRepairOverride} placeholder="optional" />
               </Field>
+              <div className="mt-3 flex items-baseline justify-between rounded-lg bg-slate-50 px-3 py-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Estimated rehab</span>
+                <span className="font-mono text-xl font-bold tabular-nums text-slate-800">{repairs > 0 ? usd(repairs) : "—"}</span>
+              </div>
+              <div className="mt-1 text-[10px] text-slate-400">
+                {num(repairOverride) > 0
+                  ? "manual total — overrides the $/sf tiles"
+                  : num(sqft) > 0
+                    ? `${usd(repairPsf || 0)}/sf × ${num(sqft).toLocaleString()} sf — updates live with the tiles and subject sq ft`
+                    : "pick a level and enter subject sq ft above to compute"}
+              </div>
             </div>
           </div>
 
