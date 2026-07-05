@@ -5,6 +5,7 @@ import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, Chec
 const COMP_API = "/api/comp";
 const RENT_API = "/api/rent";
 const SOLD_API = "/api/sold";
+const SOLID_TARGET = 4; // the sold-comp ARV median runs on the best N solid sales; fewer than N trips the thin-comps warning
 const AUTOCOMPLETE_API = "/api/autocomplete";
 
 // Google web search link for any address string
@@ -531,24 +532,43 @@ export default function App() {
     return Math.max(0, gridArv + subjAdjust);
   }, [gridArv, arvOverride, subjAdjust]);
 
-  // Sold-comp summary: apply the SAME junk filter used on the comp grid, then take the median $/sf
-  // from the UNFLAGGED sold comps (so a bad flip can't drag the ARV) × the subject's sq ft.
+  // Sold-comp summary — "best 4" selection:
+  //  1) structural junk filter (same compFlags as the grid: beds/baths/size/age/distance)
+  //  2) price sanity — $/sf more than 25% off the structurally-clean group median gets a "price outlier"
+  //     flag (catches distressed/wholesale sales that are structurally identical; skipped when <3 clean comps
+  //     because the reference median would itself be junk)
+  //  3) the median runs on the TOP {SOLID_TARGET} solid comps (list arrives closest/newest first)
+  //     plus anything manually included; solid comps beyond the top N sit on the bench
+  //  4) fewer than SOLID_TARGET comps in the median → thin flag drives the warning banner
   const soldSummary = useMemo(() => {
     if (!soldData || !soldData.comps || !soldData.comps.length) return null;
-    const flagged = soldData.comps.map((c, i) => {
-      const flags = compFlags(c, subjectInfo, num(sqft));
-      return { ...c, flags, included: flags.length === 0 || !!soldIncluded[i] }; // clean comps always in; flagged ones only if manually included
+    const base = soldData.comps.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, num(sqft))] }));
+    const cleanPpsf = base.filter((c) => c.flags.length === 0 && c.ppsf > 0).map((c) => c.ppsf).sort((a, b) => a - b);
+    if (cleanPpsf.length >= 3) {
+      const m = Math.floor(cleanPpsf.length / 2);
+      const midPpsf = cleanPpsf.length % 2 ? cleanPpsf[m] : (cleanPpsf[m - 1] + cleanPpsf[m]) / 2;
+      base.forEach((c) => {
+        if (c.ppsf > 0 && Math.abs(c.ppsf - midPpsf) / midPpsf > 0.25) {
+          c.flags.push(`price outlier · $${c.ppsf}/sf vs $${Math.round(midPpsf)}/sf group`);
+        }
+      });
+    }
+    const solidIdx = base.filter((c) => c.flags.length === 0).slice(0, SOLID_TARGET).map((c) => c.i);
+    const flagged = base.map((c) => {
+      const manual = !!soldIncluded[c.i];
+      const auto = solidIdx.includes(c.i);
+      return { ...c, manual, included: auto || manual, benched: c.flags.length === 0 && !auto && !manual };
     });
-    const inMedian = flagged.filter((c) => c.included);
-    const pool = inMedian.length ? inMedian : flagged;   // fall back to all if everything got flagged and nothing included
-    const ppsfs = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
+    const pool = flagged.filter((c) => c.included);
+    const use = pool.length ? pool : flagged;             // last-resort fallback so the median never runs on zero comps
+    const ppsfs = use.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
     let medianPpsf = null;
     if (ppsfs.length) {
       const m = Math.floor(ppsfs.length / 2);
       medianPpsf = ppsfs.length % 2 ? ppsfs[m] : Math.round((ppsfs[m - 1] + ppsfs[m]) / 2);
     }
     const arv = medianPpsf && num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null);
-    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv };
+    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET };
   }, [soldData, subjectInfo, sqft, soldIncluded]);
 
   // Label the ARV stat with where the number actually came from — AVM model, recorded sales, blend, or manual.
@@ -838,14 +858,20 @@ export default function App() {
 
           {soldData && soldSummary && (
             <>
+              {soldSummary.thin && (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span><b>Thin comps — only {soldSummary.usedCount} of the {SOLID_TARGET} solid sales this ARV wants.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or lean on the AVM side until you do.</span>
+                </div>
+              )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(soldSummary.arv) : "—"} tone="good" big sub={num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"} />
+                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(soldSummary.arv) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"} />
                 <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps in the median`} />
               </div>
 
               <div className="mt-3 space-y-2">
                 {soldSummary.flagged.map((c, i) => (
-                  <div key={i} className={`rounded-lg border p-2 ${c.flags.length ? "border-amber-300 bg-amber-50/40" : "border-slate-200 bg-slate-50/50"}`}>
+                  <div key={i} className={`rounded-lg border p-2 ${c.flags.length ? "border-amber-300 bg-amber-50/40" : c.benched ? "border-slate-200 bg-slate-50/50 opacity-60" : "border-slate-200 bg-slate-50/50"}`}>
                     <div className="flex items-center gap-2">
                       <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
                       <span className="flex-1 truncate text-xs font-medium text-slate-700">{c.address || "(address withheld)"}</span>
@@ -856,13 +882,16 @@ export default function App() {
                         </a>
                       )}
                     </div>
-                    {c.flags.length > 0 && (
+                    {(c.flags.length > 0 || c.benched || c.manual) && (
                       <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
                         {c.flags.map((f, k) => (
                           <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
                             <AlertTriangle className="h-2.5 w-2.5" /> {f}
                           </span>
                         ))}
+                        {(c.benched || (c.manual && c.flags.length === 0)) && (
+                          <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
+                        )}
                         {c.included ? (
                           <>
                             <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
@@ -895,7 +924,7 @@ export default function App() {
                 ))}
               </div>
               <div className="mt-2 text-[10px] italic text-slate-400">
-                Flagged comps (amber) are dropped from the ARV median unless you hit <b className="text-slate-500">include</b> — same junk filter as the comp grid above. Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
+                The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group. Flagged (amber) and benched comps are dropped unless you hit <b className="text-slate-500">include</b>. Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
               </div>
             </>
           )}
