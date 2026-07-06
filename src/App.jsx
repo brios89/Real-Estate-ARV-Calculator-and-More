@@ -833,7 +833,10 @@ export default function App() {
             </div>
           )}
             <div className="mt-1 text-[10px] text-slate-400">
-              Auto-comp pulls the 8 most-similar sold comps — last 12 months, within ±250 sq ft of the subject, sizes adjusted to the subject. The average runs on the <b className="text-slate-500">included comps</b>. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). (RentCast's estimate model — different from the recorded closings below.)
+              RentCast's estimate-model comparables — the 8 most-similar sales and listings, last 12 months, within ±250 sq ft of the subject, sizes adjusted to the subject. Average of adjusted prices. (Different from the recorded closings below, which are actual deed prices.)
+            </div>
+            <div className="mt-2 text-[10px] italic text-slate-400">
+              The AVM average runs on the <b className="text-slate-500">included comps</b>. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition).
             </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
