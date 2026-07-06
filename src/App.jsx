@@ -41,19 +41,30 @@ const compFlags = (c, subj, subjSqft) => {
   return flags;
 };
 
-// Group-level price sanity, shared by the sold panel and the comp grid: flags any comp whose $/sf strays
-// more than PRICE_OUTLIER_PCT from the structurally-clean group median. Needs 3+ clean comps so a junk
-// reference median can't flag good comps. Mutates each item's flags array in place; items = [{ ppsf, flags }].
+// Median of a list of positive numbers (used for the group's typical $/sf and the auto size-adjust rate).
+const cleanMedian = (vals) => {
+  const v = vals.filter((x) => x > 0).sort((a, b) => a - b);
+  if (!v.length) return 0;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+};
+
+// Group-level price sanity, shared by both comp sections — now tail-aware and run on SIZE-ADJUSTED $/sf
+// (items = [{ appsf, flags }]). Needs 3+ structurally-clean comps so a junk reference median can't flag
+// good comps. LOW tail reads like a distressed sale (bank sale / big fixer / family deal) — leave out.
+// HIGH tail reads like a renovated resale — which is literally what "after repair" means, so the label
+// coaches: verify on Google, and include it if it's truly remodeled.
 const PRICE_OUTLIER_PCT = 0.25;
 const flagPriceOutliers = (items) => {
-  const clean = items.filter((c) => c.flags.length === 0 && c.ppsf > 0).map((c) => c.ppsf).sort((a, b) => a - b);
+  const clean = items.filter((c) => c.flags.length === 0 && c.appsf > 0).map((c) => c.appsf).sort((a, b) => a - b);
   if (clean.length < 3) return;
   const m = Math.floor(clean.length / 2);
   const mid = clean.length % 2 ? clean[m] : (clean[m - 1] + clean[m]) / 2;
   items.forEach((c) => {
-    if (c.ppsf > 0 && Math.abs(c.ppsf - mid) / mid > PRICE_OUTLIER_PCT) {
-      c.flags.push(`price outlier · $${Math.round(c.ppsf)}/sf vs $${Math.round(mid)}/sf group`);
-    }
+    if (!(c.appsf > 0)) return;
+    const dev = (c.appsf - mid) / mid;
+    if (dev < -PRICE_OUTLIER_PCT) c.flags.push(`possible distressed sale · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
+    else if (dev > PRICE_OUTLIER_PCT) c.flags.push(`possible renovated resale · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
   });
 };
 // All RentCast dates are midnight-UTC ISO strings ("2026-01-22T00:00:00.000Z"). Every formatter pins
@@ -336,6 +347,7 @@ export default function App() {
   const [sqft, setSqft] = useState("");
   const [comps, setComps] = useState([]); // read-only grid: filled by Auto-comp, curated with include/exclude
   const [arvOverride, setArvOverride] = useState("");
+  const [marginalPsf, setMarginalPsf] = useState("");   // size-adjust rate ($ per sq ft of size difference); blank = auto (half the group's typical $/sf)
   const [rentcastArv, setRentcastArv] = useState(null); // RentCast's own AVM, kept as a reference only
   // --- rental ---
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
@@ -530,11 +542,19 @@ export default function App() {
   // comps auto-included, and every valid card carries an include/exclude override.
   // gridIncluded: true = force in, false = force out, undefined = automatic.
   const gridSummary = useMemo(() => {
-    const items = comps.map((c, i) => ({
-      i,
-      ppsf: num(c.sqft) > 0 && num(c.price) > 0 ? num(c.price) / num(c.sqft) : 0,
-      flags: [...compFlags(c, subjectInfo, num(sqft))],
-    }));
+    const sf = num(sqft);
+    const items = comps.map((c, i) => {
+      const price = num(c.price), csf = num(c.sqft);
+      return { i, price, csf, ppsf: csf > 0 && price > 0 ? price / csf : 0, flags: [...compFlags(c, subjectInfo, sf)] };
+    });
+    // Size adjustment (appraiser-style): move each comp's PRICE up/down as if it were the subject's size,
+    // at the marginal $/sf — the user's rate, or auto = half the group's typical $/sf.
+    const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(items.filter((c) => c.flags.length === 0).map((c) => c.ppsf)) / 2);
+    items.forEach((c) => {
+      const canAdj = sf > 0 && c.csf > 0 && c.price > 0 && marginalUsed > 0;
+      c.adjPrice = canAdj ? Math.max(0, c.price + (sf - c.csf) * marginalUsed) : c.price;
+      c.appsf = sf > 0 && c.adjPrice > 0 ? c.adjPrice / sf : c.ppsf;   // adjusted $/sf (falls back to raw when no subject sf)
+    });
     flagPriceOutliers(items);
     const rows = items.map((it) => {
       const o = gridIncluded[it.i];
@@ -543,10 +563,9 @@ export default function App() {
       return { ...it, valid, included, manual: o !== undefined };
     });
     const pool = rows.filter((r) => r.included);
-    const avg = pool.length ? pool.reduce((a, r) => a + r.ppsf, 0) / pool.length : 0;
-    const sf = num(sqft);
-    return { rows, usedCount: pool.length, validCount: rows.filter((r) => r.valid).length, avgPsf: avg, gridArv: avg > 0 && sf > 0 ? avg * sf : 0 };
-  }, [comps, subjectInfo, sqft, gridIncluded]);
+    const avg = pool.length ? pool.reduce((a, r) => a + r.appsf, 0) / pool.length : 0;
+    return { rows, usedCount: pool.length, validCount: rows.filter((r) => r.valid).length, avgPsf: avg, gridArv: avg > 0 && sf > 0 ? avg * sf : 0, marginalUsed };
+  }, [comps, subjectInfo, sqft, gridIncluded, marginalPsf]);
   // Same consumers as before (the arv memo, arvStat, the picker) read these derived constants.
   const gridArv = gridSummary.gridArv;
   const avgPsf = gridSummary.avgPsf;
@@ -567,7 +586,15 @@ export default function App() {
   //  4) fewer than SOLID_TARGET comps in the median → thin flag drives the warning banner
   const soldSummary = useMemo(() => {
     if (!soldData || !soldData.comps || !soldData.comps.length) return null;
-    const base = soldData.comps.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, num(sqft))] }));
+    const sf = num(sqft);
+    const base = soldData.comps.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, sf)] }));
+    // Same size adjustment as the AVM grid: each sale's price, moved to the subject's size at the marginal rate.
+    const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(base.filter((c) => c.flags.length === 0).map((c) => c.ppsf || 0)) / 2);
+    base.forEach((c) => {
+      const canAdj = sf > 0 && c.sqft > 0 && c.salePrice > 0 && marginalUsed > 0;
+      c.adjPrice = canAdj ? Math.max(0, c.salePrice + (sf - c.sqft) * marginalUsed) : c.salePrice;
+      c.appsf = sf > 0 && c.adjPrice > 0 ? c.adjPrice / sf : (c.ppsf || 0);
+    });
     flagPriceOutliers(base);
     const solidIdx = base.filter((c) => c.flags.length === 0 && soldIncluded[c.i] !== false).slice(0, SOLID_TARGET).map((c) => c.i);
     const flagged = base.map((c) => {
@@ -577,15 +604,25 @@ export default function App() {
       return { ...c, manual: o !== undefined, included, benched: c.flags.length === 0 && o === undefined && !auto };
     });
     const pool = flagged.filter((c) => c.included);
-    const ppsfs = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
-    let medianPpsf = null;
-    if (ppsfs.length) {
-      const m = Math.floor(ppsfs.length / 2);
-      medianPpsf = ppsfs.length % 2 ? ppsfs[m] : Math.round((ppsfs[m - 1] + ppsfs[m]) / 2);
+    let medianPpsf = null, arv = null;
+    if (pool.length && sf > 0) {
+      const prices = pool.map((c) => c.adjPrice).filter((x) => x > 0).sort((a, b) => a - b);
+      if (prices.length) {
+        const m = Math.floor(prices.length / 2);
+        const medPrice = prices.length % 2 ? prices[m] : (prices[m - 1] + prices[m]) / 2;
+        arv = Math.round(medPrice);                       // median of size-adjusted sale prices = the sold-comp ARV
+        medianPpsf = Math.round(medPrice / sf);
+      }
+    } else if (pool.length) {
+      const pp = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
+      if (pp.length) {
+        const m = Math.floor(pp.length / 2);
+        medianPpsf = Math.round(pp.length % 2 ? pp[m] : (pp[m - 1] + pp[m]) / 2);
+        arv = soldData.soldArv || null;                   // no subject sq ft: fall back to the server's number
+      }
     }
-    const arv = medianPpsf ? (num(sqft) > 0 ? Math.round(medianPpsf * num(sqft)) : (soldData.soldArv || null)) : null;
-    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET };
-  }, [soldData, subjectInfo, sqft, soldIncluded]);
+    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET, marginalUsed };
+  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf]);
 
   // Label the ARV stat with where the number actually came from — AVM model, recorded sales, blend, or manual.
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
@@ -602,7 +639,7 @@ export default function App() {
       else { label = "Manual ARV"; src = "manual override"; }
     } else {
       label = "AVM comp";
-      src = avmVal ? "avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
+      src = avmVal ? "size-adjusted avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
     }
     const sub = subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
     return { label, sub };
@@ -755,9 +792,23 @@ export default function App() {
 
         {/* AVM COMPS — own section, split from the property card */}
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <SectionTitle>Sold comps (YLHB method: avg $/sf × subject sf)</SectionTitle>
+          <SectionTitle>Sold comps (AVM)</SectionTitle>
             <div className="mt-1 text-[10px] text-slate-400">
               Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject. Flagged comps are dropped from the average unless you hit include — same system as the sold panel below.
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Size adjustment</span>
+              <div className="w-28"><PlainInput value={marginalPsf} onChange={setMarginalPsf} placeholder="auto" suffix="$/sf" /></div>
+              <span className="text-[10px] text-slate-400">
+                {num(marginalPsf) > 0
+                  ? `using your $${Math.round(num(marginalPsf))}/sf — both comp sections`
+                  : gridSummary.marginalUsed > 0
+                    ? `auto · $${gridSummary.marginalUsed}/sf = half the group's typical $/sf — both comp sections`
+                    : "auto — kicks in once comps are pulled"}
+              </span>
+            </div>
+            <div className="mt-1.5 rounded-lg bg-slate-50 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+              <b className="text-slate-600">Plain English for the team:</b> a bigger house costs more — but not for every single foot. Think pizza: a large costs more than a small, but not for every extra inch. So we gently fix each comp's price to pretend it's the exact same size as our house — now every comp runs a fair, same-size race. Comps close to our size barely move. Two tags to know: <b className="text-amber-700">possible distressed sale</b> = it sold way too cheap (bank sale, big fixer) — leave it out. <b className="text-amber-700">possible renovated resale</b> = it sold high because it was already fixed up — that's exactly what "after repair" means, so click its Google button, and if it's remodeled, hit <b className="text-emerald-700">include</b>.
             </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
@@ -806,6 +857,7 @@ export default function App() {
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
                       <span className="font-bold text-slate-700">{usd(num(c.price))}</span>
                       <span className="font-mono text-slate-600">${Math.round(row.ppsf)}/sf</span>
+                      {Math.round(row.appsf) !== Math.round(row.ppsf) && <span className="font-mono text-slate-400">adj ${Math.round(row.appsf)}/sf</span>}
                       <span>{num(c.sqft).toLocaleString()} sf</span>
                       {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
                       {c.listedDate && <span>listed {shortDate(c.listedDate)}</span>}
@@ -831,7 +883,7 @@ export default function App() {
           {comps.length > 0 && (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
-              <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps in the average`} />
+              <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps · size-adjusted`} />
             </div>
           )}
         </div>
@@ -847,7 +899,7 @@ export default function App() {
             )}
           </div>
           <div className="mt-1 text-[10px] text-slate-400">
-            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject. Median $/sf × your subject sq ft. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
+            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, size-adjusted with the setting above. Median of adjusted prices. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
           </div>
 
           {soldMsg && (
@@ -865,8 +917,8 @@ export default function App() {
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `median $/sf × ${num(sqft)} sf` : "enter subject sq ft above"}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
-                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps in the median`} />
+                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `size-adjusted median × ${num(sqft)} sf` : "enter subject sq ft above"}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
+                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps · size-adjusted`} />
               </div>
 
               <div className="mt-3 space-y-2">
@@ -912,6 +964,7 @@ export default function App() {
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
                       <span className="font-bold text-slate-700">{usd(c.salePrice)}</span>
                       <span className="font-mono text-slate-600">${c.ppsf}/sf</span>
+                      {c.appsf > 0 && Math.round(c.appsf) !== Math.round(c.ppsf) && <span className="font-mono text-slate-400">adj ${Math.round(c.appsf)}/sf</span>}
                       <span>{c.sqft.toLocaleString()} sf</span>
                       {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
                       {c.saleDate && <span>sold {mediumDate(c.saleDate)}</span>}
@@ -922,7 +975,7 @@ export default function App() {
                 ))}
               </div>
               <div className="mt-2 text-[10px] italic text-slate-400">
-                The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group. Flagged (amber) and benched comps are dropped unless you hit <b className="text-slate-500">include</b>. Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
+                The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
               </div>
             </>
           )}
