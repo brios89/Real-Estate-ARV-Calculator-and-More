@@ -10,6 +10,16 @@
 // Returns a trimmed, browser-safe payload:
 //   { soldArv, medianPpsf, count, window, subject, comps: [...] }
 
+// Straight-line distance in miles between two lat/lng points (haversine). RentCast's Property Records
+// endpoint doesn't return a distance the way the AVM endpoint does — but it returns coordinates, and the
+// subject itself is usually one of the records, so we compute comp distances ourselves.
+const distMi = (lat1, lon1, lat2, lon2) => {
+  const R = 3958.8, rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1), dLon = rad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
 export default async function handler(req, res) {
   // Lock CORS to same-origin by default. Set ALLOWED_ORIGIN in Vercel if the UI is on another domain.
   const allowed = process.env.ALLOWED_ORIGIN || "";
@@ -69,6 +79,18 @@ export default async function handler(req, res) {
     const now = Date.now();
     const windowDays = Number(saleDateRange) || 365;
 
+    // The subject is usually one of the records (it sits inside its own search radius). Grab its
+    // coordinates so every comp gets a real distance. Fuzzy street-line match is safe here — even a
+    // different unit at the same street address has the right coordinates for distance purposes.
+    const addrLc = address.toLowerCase();
+    const streetLc = addrLc.split(",")[0].trim();
+    const subjRec = records.find((p) => {
+      const a = String(p.formattedAddress || p.addressLine1 || "").trim().toLowerCase();
+      return a === addrLc || (streetLc.length > 3 && a.startsWith(streetLc));
+    });
+    const sLat = subjRec && subjRec.latitude != null ? Number(subjRec.latitude) : NaN;
+    const sLng = subjRec && subjRec.longitude != null ? Number(subjRec.longitude) : NaN;
+
     let comps = records
       .map((p) => {
         const price = Number(p.lastSalePrice) || 0;   // actual RECORDED sale price (off the deed)
@@ -82,7 +104,9 @@ export default async function handler(req, res) {
           baths: p.bathrooms ?? null,
           yearBuilt: p.yearBuilt ?? null,
           propertyType: p.propertyType ?? null,
-          distance: p.distance ?? null,               // miles from subject, when RentCast provides it
+          distance: Number.isFinite(sLat) && Number.isFinite(sLng) && p.latitude != null && p.longitude != null
+            ? Math.round(distMi(sLat, sLng, Number(p.latitude), Number(p.longitude)) * 100) / 100
+            : (p.distance ?? null),                   // computed from coordinates; falls back gracefully
           ppsf: price > 0 && sqft > 0 ? Math.round(price / sqft) : null,
         };
       })

@@ -64,7 +64,7 @@ const flagPriceOutliers = (items) => {
     if (!(c.appsf > 0)) return;
     const dev = (c.appsf - mid) / mid;
     if (dev < -PRICE_OUTLIER_PCT) c.flags.push(`possible distressed sale · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
-    else if (dev > PRICE_OUTLIER_PCT) c.flags.push(`possible renovated resale · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
+    else if (dev > PRICE_OUTLIER_PCT) c.flags.push(`possible renovated resale (flip) · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
   });
 };
 // All RentCast dates are midnight-UTC ISO strings ("2026-01-22T00:00:00.000Z"). Every formatter pins
@@ -346,6 +346,9 @@ export default function App() {
   const [address, setAddress] = useState("");
   const [sqft, setSqft] = useState("");
   const [comps, setComps] = useState([]); // read-only grid: filled by Auto-comp, curated with include/exclude
+  const [manualSold, setManualSold] = useState([]);  // hand-entered recorded sales (merged into the sold panel; cleared on a fresh successful pull)
+  const [gridAdd, setGridAdd] = useState(null);      // null = closed; { address, sqft, price } = the + comp form is open (AVM section)
+  const [soldAdd, setSoldAdd] = useState(null);      // same, for the sold section
   const [arvOverride, setArvOverride] = useState("");
   const [marginalPsf, setMarginalPsf] = useState("");   // size-adjust rate ($ per sq ft of size difference); blank = auto (half the group's typical $/sf)
   const [rentcastArv, setRentcastArv] = useState(null); // RentCast's own AVM, kept as a reference only
@@ -445,6 +448,7 @@ export default function App() {
       if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); setSoldIncluded({}); return; }
       setSoldData(data);
       setSoldIncluded({});
+      setManualSold([]);   // fresh property, fresh slate (a failed pull keeps your hand-entered comps)
       const n = data.count || 0;
       setSoldMsg(n > 0
         ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found. 1 RentCast credit used.` }
@@ -585,9 +589,10 @@ export default function App() {
   //     plus anything manually included; solid comps beyond the top N sit on the bench
   //  4) fewer than SOLID_TARGET comps in the median → thin flag drives the warning banner
   const soldSummary = useMemo(() => {
-    if (!soldData || !soldData.comps || !soldData.comps.length) return null;
+    const src = [...((soldData && soldData.comps) || []), ...manualSold];
+    if (!src.length) return null;
     const sf = num(sqft);
-    const base = soldData.comps.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, sf)] }));
+    const base = src.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, sf)] }));
     // Same size adjustment as the AVM grid: each sale's price, moved to the subject's size at the marginal rate.
     const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(base.filter((c) => c.flags.length === 0).map((c) => c.ppsf || 0)) / 2);
     base.forEach((c) => {
@@ -618,11 +623,11 @@ export default function App() {
       if (pp.length) {
         const m = Math.floor(pp.length / 2);
         medianPpsf = Math.round(pp.length % 2 ? pp[m] : (pp[m - 1] + pp[m]) / 2);
-        arv = soldData.soldArv || null;                   // no subject sq ft: fall back to the server's number
+        arv = (soldData && soldData.soldArv) || null;     // no subject sq ft: fall back to the server's number
       }
     }
     return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET, marginalUsed };
-  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf]);
+  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold]);
 
   // Label the ARV stat with where the number actually came from — AVM model, recorded sales, blend, or manual.
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
@@ -792,23 +797,39 @@ export default function App() {
 
         {/* AVM COMPS — own section, split from the property card */}
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <SectionTitle>Sold comps (AVM)</SectionTitle>
+          <div className="flex items-center justify-between gap-2">
+            <SectionTitle>Sold comps (AVM — Automated Valuation Model)</SectionTitle>
+            {!gridAdd && (
+              <button type="button" onClick={() => setGridAdd({ address: "", sqft: "", price: "" })}
+                className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
+                + comp
+              </button>
+            )}
+          </div>
+          {gridAdd && (
+            <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
+              <div className="min-w-[180px] flex-1">
+                <Field label="Comp address" hint="optional">
+                  <input type="text" value={gridAdd.address} onChange={(e) => setGridAdd((p) => ({ ...p, address: e.target.value }))}
+                    placeholder="123 Main St, City, ST"
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100" />
+                </Field>
+              </div>
+              <div className="w-28"><Field label="Sq ft"><PlainInput value={gridAdd.sqft} onChange={(v) => setGridAdd((p) => ({ ...p, sqft: v }))} placeholder="1500" suffix="sf" /></Field></div>
+              <div className="w-36"><Field label="Sold price"><MoneyInput value={gridAdd.price} onChange={(v) => setGridAdd((p) => ({ ...p, price: v }))} placeholder="200000" /></Field></div>
+              <button type="button" disabled={!(num(gridAdd.sqft) > 0 && num(gridAdd.price) > 0)}
+                onClick={() => { setComps((cs) => [...cs, { sqft: String(num(gridAdd.sqft)), price: String(num(gridAdd.price)), address: gridAdd.address.trim(), manualEntry: true }]); setGridAdd(null); }}
+                className="rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
+                Add
+              </button>
+              <button type="button" onClick={() => setGridAdd(null)}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-50">
+                Cancel
+              </button>
+            </div>
+          )}
             <div className="mt-1 text-[10px] text-slate-400">
-              Auto-comp pulls the 8 most-similar sold comps, filtered to the last 12 months and within ±250 sq ft of the subject. Flagged comps are dropped from the average unless you hit include — same system as the sold panel below.
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Size adjustment</span>
-              <div className="w-28"><PlainInput value={marginalPsf} onChange={setMarginalPsf} placeholder="auto" suffix="$/sf" /></div>
-              <span className="text-[10px] text-slate-400">
-                {num(marginalPsf) > 0
-                  ? `using your $${Math.round(num(marginalPsf))}/sf — both comp sections`
-                  : gridSummary.marginalUsed > 0
-                    ? `auto · $${gridSummary.marginalUsed}/sf = half the group's typical $/sf — both comp sections`
-                    : "auto — kicks in once comps are pulled"}
-              </span>
-            </div>
-            <div className="mt-1.5 rounded-lg bg-slate-50 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
-              <b className="text-slate-600">Plain English for the team:</b> a bigger house costs more — but not for every single foot. Think pizza: a large costs more than a small, but not for every extra inch. So we gently fix each comp's price to pretend it's the exact same size as our house — now every comp runs a fair, same-size race. Comps close to our size barely move. Two tags to know: <b className="text-amber-700">possible distressed sale</b> = it sold way too cheap (bank sale, big fixer) — leave it out. <b className="text-amber-700">possible renovated resale</b> = it sold high because it was already fixed up — that's exactly what "after repair" means, so click its Google button, and if it's remodeled, hit <b className="text-emerald-700">include</b>.
+              Auto-comp pulls the 8 most-similar sold comps — last 12 months, within ±250 sq ft of the subject, sizes adjusted to the subject. The average runs on the <b className="text-slate-500">included comps</b>. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). (RentCast's estimate model — different from the recorded closings below.)
             </div>
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
@@ -835,6 +856,9 @@ export default function App() {
                           <AlertTriangle className="h-2.5 w-2.5" /> {f}
                         </span>
                       ))}
+                      {c.manualEntry && (
+                        <span className="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">manual entry</span>
+                      )}
                       {row.included ? (
                         <>
                           <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
@@ -882,7 +906,7 @@ export default function App() {
           {/* ARV result — hidden until comps are pulled, matching the sold panel's empty state */}
           {comps.length > 0 && (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <Stat label={arvStat.label} value={usd(arv)} tone="default" big sub={arvStat.sub} />
+              <Stat label={arvStat.label} value={usd(arv)} tone="good" big sub={arvStat.sub} />
               <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps · size-adjusted`} />
             </div>
           )}
@@ -892,14 +916,44 @@ export default function App() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
-            {soldLoading && (
-              <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-500">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling…
-              </span>
-            )}
+            <div className="flex shrink-0 items-center gap-2">
+              {soldLoading && (
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling…
+                </span>
+              )}
+              {!soldAdd && (
+                <button type="button" onClick={() => setSoldAdd({ address: "", sqft: "", price: "" })}
+                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
+                  + comp
+                </button>
+              )}
+            </div>
           </div>
+          {soldAdd && (
+            <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
+              <div className="min-w-[180px] flex-1">
+                <Field label="Comp address" hint="optional">
+                  <input type="text" value={soldAdd.address} onChange={(e) => setSoldAdd((p) => ({ ...p, address: e.target.value }))}
+                    placeholder="123 Main St, City, ST"
+                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100" />
+                </Field>
+              </div>
+              <div className="w-28"><Field label="Sq ft"><PlainInput value={soldAdd.sqft} onChange={(v) => setSoldAdd((p) => ({ ...p, sqft: v }))} placeholder="1500" suffix="sf" /></Field></div>
+              <div className="w-36"><Field label="Sale price"><MoneyInput value={soldAdd.price} onChange={(v) => setSoldAdd((p) => ({ ...p, price: v }))} placeholder="200000" /></Field></div>
+              <button type="button" disabled={!(num(soldAdd.sqft) > 0 && num(soldAdd.price) > 0)}
+                onClick={() => { const sf = num(soldAdd.sqft), pr = num(soldAdd.price); setManualSold((ms) => [...ms, { address: soldAdd.address.trim(), salePrice: pr, sqft: sf, ppsf: Math.round(pr / sf), manualEntry: true }]); setSoldAdd(null); }}
+                className="rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
+                Add
+              </button>
+              <button type="button" onClick={() => setSoldAdd(null)}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-50">
+                Cancel
+              </button>
+            </div>
+          )}
           <div className="mt-1 text-[10px] text-slate-400">
-            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, size-adjusted with the setting above. Median of adjusted prices. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
+            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
           </div>
 
           {soldMsg && (
@@ -908,7 +962,7 @@ export default function App() {
             </div>
           )}
 
-          {soldData && soldSummary && (
+          {soldSummary && (
             <>
               {soldSummary.thin && (
                 <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
@@ -942,6 +996,9 @@ export default function App() {
                       ))}
                       {c.benched && (
                         <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
+                      )}
+                      {c.manualEntry && (
+                        <span className="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">manual entry</span>
                       )}
                       {c.included ? (
                         <>
