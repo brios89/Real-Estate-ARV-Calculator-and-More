@@ -79,17 +79,20 @@ export default async function handler(req, res) {
     const now = Date.now();
     const windowDays = Number(saleDateRange) || 365;
 
-    // The subject is usually one of the records (it sits inside its own search radius). Grab its
-    // coordinates so every comp gets a real distance. Fuzzy street-line match is safe here — even a
-    // different unit at the same street address has the right coordinates for distance purposes.
+    // Subject coordinates, best source first:
+    //  1) passed in by the client — captured from the AVM pull's subjectProperty (always present in the
+    //     Auto-comp chain, which is the only thing that triggers this endpoint)
+    //  2) fallback: find the subject in the raw records by address. NOTE: usually misses, because this
+    //     query filters to properties SOLD in the last 12 months — and the subject typically hasn't.
+    const qLat = Number(req.query.subjectLat), qLng = Number(req.query.subjectLng);
     const addrLc = address.toLowerCase();
     const streetLc = addrLc.split(",")[0].trim();
     const subjRec = records.find((p) => {
       const a = String(p.formattedAddress || p.addressLine1 || "").trim().toLowerCase();
       return a === addrLc || (streetLc.length > 3 && a.startsWith(streetLc));
     });
-    const sLat = subjRec && subjRec.latitude != null ? Number(subjRec.latitude) : NaN;
-    const sLng = subjRec && subjRec.longitude != null ? Number(subjRec.longitude) : NaN;
+    const sLat = Number.isFinite(qLat) ? qLat : (subjRec && subjRec.latitude != null ? Number(subjRec.latitude) : NaN);
+    const sLng = Number.isFinite(qLng) ? qLng : (subjRec && subjRec.longitude != null ? Number(subjRec.longitude) : NaN);
 
     let comps = records
       .map((p) => {

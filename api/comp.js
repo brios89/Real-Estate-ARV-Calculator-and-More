@@ -104,6 +104,8 @@ export default async function handler(req, res) {
         propertyType: subj.propertyType ?? null,
         lastSaleDate: subj.lastSaleDate ?? null,     // real recorded sale
         lastSalePrice: subj.lastSalePrice ?? null,
+        lat: subj.latitude ?? null,                  // subject coordinates (RentCast subjectProperty.latitude/longitude)
+        lng: subj.longitude ?? null,                 // — handed to /api/sold so comp distances can be computed
       },
       meta: { sqftBand, keepCount, daysOld, subjectSqft: subjSqft || null },
       comps,

@@ -393,6 +393,8 @@ export default function App() {
         yearBuilt: data.subject.yearBuilt,
         lastSaleDate: data.subject.lastSaleDate,
         lastSalePrice: data.subject.lastSalePrice,
+        lat: data.subject.lat,
+        lng: data.subject.lng,
       });
       // Fill the comp grid (address + sqft + price + details), pad to at least 3 rows
       const incoming = (data.comps || []).map((c) => ({
@@ -420,7 +422,7 @@ export default function App() {
       // One click, both pulls: chain the sold-comps fetch with the subject details we JUST got
       // (passed directly — the state setters above aren't visible to this call yet). Not awaited,
       // so the comp grid renders immediately while the sold panel loads on its own spinner.
-      pullSold({ sqft: data.subject?.sqft || num(sqft), propertyType: data.subject?.propertyType });
+      pullSold({ sqft: data.subject?.sqft || num(sqft), propertyType: data.subject?.propertyType, lat: data.subject?.lat, lng: data.subject?.lng });
       const n = (data.comps || []).length;
       setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps above — include/exclude comps and it recalculates.` });
     } catch (e) {
@@ -443,6 +445,8 @@ export default function App() {
       if (sf > 0) params.set("subjectSqft", String(sf));
       const ptype = fresh?.propertyType || subjectInfo?.propertyType;
       if (ptype) params.set("propertyType", ptype);
+      const sLat = Number(fresh?.lat ?? subjectInfo?.lat), sLng = Number(fresh?.lng ?? subjectInfo?.lng);
+      if (Number.isFinite(sLat) && Number.isFinite(sLng)) { params.set("subjectLat", String(sLat)); params.set("subjectLng", String(sLng)); }
       const r = await fetch(`${SOLD_API}?${params.toString()}`);
       const data = await r.json();
       if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); setSoldIncluded({}); return; }
