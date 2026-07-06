@@ -455,7 +455,7 @@ export default function App() {
       setManualSold([]);   // fresh property, fresh slate (a failed pull keeps your hand-entered comps)
       const n = data.count || 0;
       setSoldMsg(n > 0
-        ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found. 1 RentCast credit used.` }
+        ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found.` }
         : { type: "err", text: "No recorded sales matched — widen the radius/date range, or the county may be light on recorded prices. You can enter your ARV directly in the picker below." });
     } catch (e) {
       setSoldMsg({ type: "err", text: "Couldn't reach the sold-comps service. Is the proxy deployed?" });
@@ -957,7 +957,11 @@ export default function App() {
             </div>
           )}
           <div className="mt-1 text-[10px] text-slate-400">
-            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. One RentCast credit per pull. (Different from Auto-comp above, which uses RentCast's estimate model.)
+            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. (Different from Auto-comp above, which uses RentCast's estimate model.)
+          </div>
+
+          <div className="mt-2 text-[10px] italic text-slate-400">
+            The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
           </div>
 
           {soldMsg && (
@@ -1034,9 +1038,6 @@ export default function App() {
                     </div>
                   </div>
                 ))}
-              </div>
-              <div className="mt-2 text-[10px] italic text-slate-400">
-                The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
               </div>
             </>
           )}
@@ -1205,7 +1206,7 @@ function InstructionsButton() {
     ["Read the verdict", "Green means it pencils, amber means it's tight, red means walk. Hover the ⓘ icons for what any field means."],
     ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this contract' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
     ["See the rate's worth", "The Rate Savings and amortization sliders show what a below-market loan saves over time and how the payment shifts from interest to principal."],
-    ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Hit Generate next to Monthly rent to pull a RentCast estimate — only do that once the deal's under contract, since it uses a credit."],
+    ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Hit Generate next to Monthly rent to pull a RentCast estimate."],
     ["Send it to buyers", "Hit 'Download buyer deck' on any creative tab to generate a branded YLHB PowerPoint for your buyers list. Fill the required fields and it builds the slides."],
     ["Learn as you go", "Every tab has a plain-English explainer at the bottom, plus free Pace Morby videos on that structure."],
   ];
