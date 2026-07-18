@@ -898,68 +898,65 @@ export default function App() {
                 onToggle={(i) => setGridIncluded((p) => ({ ...p, [i]: !gridSummary.rows[i]?.included }))}
               />
             )}
-            <div className="mt-2 space-y-2">
+            <div className="mt-2 grid gap-3 sm:grid-cols-2">
               {comps.map((c, i) => {
                 const row = gridSummary.rows[i] || { flags: [], valid: false, included: false, manual: false };
                 if (!row.valid) return null;   // read-only grid: only real pulled comps render
                 const flags = row.flags;
+                const stats = [
+                  (c.beds != null || c.baths != null) ? `${c.beds ?? "?"} bd · ${c.baths ?? "?"} ba` : null,
+                  `${num(c.sqft).toLocaleString()} sqft`,
+                  c.yearBuilt ? String(c.yearBuilt) : null,
+                  `$${Math.round(row.ppsf)}/sf`,
+                  Math.round(row.appsf) !== Math.round(row.ppsf) ? `adj $${Math.round(row.appsf)}/sf` : null,
+                ].filter(Boolean).join(" · ");
                 return (
-                  <div key={i} className={`rounded-lg border p-2 ${flags.length ? "border-amber-300 bg-amber-50/40" : !row.included ? "border-slate-200 bg-slate-50/50 opacity-60" : "border-slate-200 bg-slate-50/50"}`}>
-                    {/* address row — static, same as the sold panel */}
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
-                      <span className="flex-1 truncate text-xs font-medium text-slate-700">{c.address || "(address withheld)"}</span>
-                      {c.address && (
-                        <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer"
-                          className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
-                          <Search className="h-3 w-3" /> Google
-                        </a>
-                      )}
+                  <div key={i} className={`rounded-xl border-2 bg-white p-3 ${row.included ? "border-emerald-400" : "border-slate-200"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: !row.included }))} className="flex items-center gap-2">
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-md font-mono text-[10px] font-bold text-white ${row.included ? "bg-emerald-600" : flags.length ? "bg-amber-500" : "bg-slate-400"}`}>{i + 1}</span>
+                        <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${row.included ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-transparent"}`}>✓</span>
+                        <span className="text-xs font-semibold text-slate-700">Include in ARV</span>
+                      </button>
+                      <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "AVM"}</span>
                     </div>
-                    {/* junk-comp flags + include/exclude — same system as the sold panel */}
-                    <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
-                      {flags.map((f, k) => (
-                        <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                          <AlertTriangle className="h-2.5 w-2.5" /> {f}
-                        </span>
-                      ))}
-                      {c.manualEntry && (
-                        <span className="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">manual entry</span>
-                      )}
-                      {row.included ? (
-                        <>
-                          <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
-                          <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: false }))}
-                            className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
-                            exclude
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
-                          <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: true }))}
-                            className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
-                            include
-                          </button>
-                        </>
-                      )}
+                    <div className="mt-2 flex gap-3">
+                      <div className="flex h-20 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                        <Building2 className="h-7 w-7 text-slate-300" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(num(c.price))}</span>
+                          {c.distance != null && <span className="shrink-0 font-mono text-[11px] text-slate-500">{Number(c.distance).toFixed(2)} mi</span>}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {c.listedDate && <span>listed {shortDate(c.listedDate)}</span>}
+                          {(c.removedDate || c.lastSeenDate) && c.status && c.status.toLowerCase() !== "active"
+                            ? <span>{c.listedDate ? " · " : ""}off market {shortDate(c.removedDate || c.lastSeenDate)}</span>
+                            : (c.removedDate || c.lastSeenDate) && !c.listedDate
+                              ? <span>seen {shortDate(c.removedDate || c.lastSeenDate)}</span>
+                              : null}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                          <span className="truncate">{c.address || "(address withheld)"}</span>
+                          {c.address && (
+                            <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[11px] font-semibold text-emerald-600 hover:underline">
+                              Google
+                            </a>
+                          )}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-slate-500">{stats}</div>
+                      </div>
                     </div>
-                    {/* numbers — static, same as the sold panel */}
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
-                      <span className="font-bold text-slate-700">{usd(num(c.price))}</span>
-                      <span className="font-mono text-slate-600">${Math.round(row.ppsf)}/sf</span>
-                      {Math.round(row.appsf) !== Math.round(row.ppsf) && <span className="font-mono text-slate-400">adj ${Math.round(row.appsf)}/sf</span>}
-                      <span>{num(c.sqft).toLocaleString()} sf</span>
-                      {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
-                      {c.listedDate && <span>listed {shortDate(c.listedDate)}</span>}
-                      {(c.removedDate || c.lastSeenDate) && c.status && c.status.toLowerCase() !== "active"
-                        ? <span>off market {shortDate(c.removedDate || c.lastSeenDate)}</span>
-                        : (c.removedDate || c.lastSeenDate) && !c.listedDate
-                          ? <span>seen {shortDate(c.removedDate || c.lastSeenDate)}</span>
-                          : null}
-                      {c.yearBuilt && <span>built {c.yearBuilt}</span>}
-                      {c.distance != null && <span>{Number(c.distance).toFixed(2)} mi</span>}
-                    </div>
+                    {flags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1">
+                        {flags.map((f, k) => (
+                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1053,59 +1050,58 @@ export default function App() {
                 <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps · size-adjusted`} />
               </div>
 
-              <div className="mt-3 space-y-2">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {soldSummary.flagged.map((c, i) => (
-                  <div key={i} className={`rounded-lg border p-2 ${c.flags.length ? "border-amber-300 bg-amber-50/40" : c.benched ? "border-slate-200 bg-slate-50/50 opacity-60" : "border-slate-200 bg-slate-50/50"}`}>
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 text-center text-xs font-bold text-slate-300">{i + 1}</span>
-                      <span className="flex-1 truncate text-xs font-medium text-slate-700">{c.address || "(address withheld)"}</span>
-                      {c.address && (
-                        <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer"
-                          className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
-                          <Search className="h-3 w-3" /> Google
-                        </a>
-                      )}
+                  <div key={i} className={`rounded-xl border-2 bg-white p-3 ${c.included ? "border-emerald-400" : "border-slate-200"}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: !c.included }))} className="flex items-center gap-2">
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-md font-mono text-[10px] font-bold text-white ${c.included ? "bg-emerald-600" : c.flags.length ? "bg-amber-500" : "bg-slate-400"}`}>{i + 1}</span>
+                        <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${c.included ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-transparent"}`}>✓</span>
+                        <span className="text-xs font-semibold text-slate-700">Include in ARV</span>
+                      </button>
+                      <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "DEED"}</span>
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1 pl-7">
-                      {c.flags.map((f, k) => (
-                        <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                          <AlertTriangle className="h-2.5 w-2.5" /> {f}
-                        </span>
-                      ))}
-                      {c.benched && (
-                        <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
-                      )}
-                      {c.manualEntry && (
-                        <span className="inline-flex items-center rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">manual entry</span>
-                      )}
-                      {c.included ? (
-                        <>
-                          <span className="text-[10px] italic text-emerald-600">— included in ARV</span>
-                          <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: false }))}
-                            className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">
-                            exclude
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-[10px] italic text-amber-600">— excluded from ARV</span>
-                          <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: true }))}
-                            className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100">
-                            include
-                          </button>
-                        </>
-                      )}
+                    <div className="mt-2 flex gap-3">
+                      <div className="flex h-20 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                        <Building2 className="h-7 w-7 text-slate-300" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(c.salePrice)}</span>
+                          {c.distance != null && <span className="shrink-0 font-mono text-[11px] text-slate-500">{Number(c.distance).toFixed(2)} mi</span>}
+                        </div>
+                        {c.saleDate && <div className="text-[11px] text-slate-400">sold {mediumDate(c.saleDate)}</div>}
+                        <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                          <span className="truncate">{c.address || "(address withheld)"}</span>
+                          {c.address && (
+                            <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[11px] font-semibold text-emerald-600 hover:underline">
+                              Google
+                            </a>
+                          )}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-slate-500">
+                          {[
+                            (c.beds != null || c.baths != null) ? `${c.beds ?? "?"} bd · ${c.baths ?? "?"} ba` : null,
+                            `${c.sqft.toLocaleString()} sqft`,
+                            c.yearBuilt ? String(c.yearBuilt) : null,
+                            `$${c.ppsf}/sf`,
+                            c.appsf > 0 && Math.round(c.appsf) !== Math.round(c.ppsf) ? `adj $${Math.round(c.appsf)}/sf` : null,
+                          ].filter(Boolean).join(" · ")}
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-7 text-[11px] text-slate-500">
-                      <span className="font-bold text-slate-700">{usd(c.salePrice)}</span>
-                      <span className="font-mono text-slate-600">${c.ppsf}/sf</span>
-                      {c.appsf > 0 && Math.round(c.appsf) !== Math.round(c.ppsf) && <span className="font-mono text-slate-400">adj ${Math.round(c.appsf)}/sf</span>}
-                      <span>{c.sqft.toLocaleString()} sf</span>
-                      {(c.beds != null || c.baths != null) && <span>{c.beds ?? "?"}bd / {c.baths ?? "?"}ba</span>}
-                      {c.saleDate && <span>sold {mediumDate(c.saleDate)}</span>}
-                      {c.distance != null && <span>{Number(c.distance).toFixed(2)} mi</span>}
-                      {c.yearBuilt && <span>built {c.yearBuilt}</span>}
-                    </div>
+                    {(c.flags.length > 0 || c.benched) && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1">
+                        {c.flags.map((f, k) => (
+                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
+                          </span>
+                        ))}
+                        {c.benched && (
+                          <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
