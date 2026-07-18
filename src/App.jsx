@@ -921,8 +921,13 @@ export default function App() {
                       <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "AVM"}</span>
                     </div>
                     <div className="mt-2 flex gap-3">
-                      <div className="flex h-20 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                      <div className="relative flex h-20 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
                         <Building2 className="h-7 w-7 text-slate-300" />
+                        {c.address && (
+                          <img src={`/api/photo?address=${encodeURIComponent(c.address)}`} alt="" loading="lazy"
+                            className="absolute inset-0 h-full w-full object-cover"
+                            onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline justify-between gap-2">
@@ -1062,8 +1067,13 @@ export default function App() {
                       <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "DEED"}</span>
                     </div>
                     <div className="mt-2 flex gap-3">
-                      <div className="flex h-20 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                      <div className="relative flex h-20 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100">
                         <Building2 className="h-7 w-7 text-slate-300" />
+                        {c.address && (
+                          <img src={`/api/photo?address=${encodeURIComponent(c.address)}`} alt="" loading="lazy"
+                            className="absolute inset-0 h-full w-full object-cover"
+                            onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                        )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline justify-between gap-2">
