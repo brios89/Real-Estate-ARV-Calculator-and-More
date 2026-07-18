@@ -341,53 +341,73 @@ const SectionTitle = ({ children }) => (
 );
 
 // ---------- main ----------
-// Interactive comp map (Leaflet, loaded from CDN in index.html). Subject = red ★; comps = numbered pins:
-// emerald = in the ARV, amber = flagged out, slate = out for other reasons. Clicking a pin toggles it
-// in/out of that section's ARV — same effect as the include/exclude buttons on the cards.
+// Interactive comp map — Google Maps JS API (key served by /api/config; restrict it in Google console
+// to Street View Static + Places + Maps JavaScript API, with daily quota caps). Subject = red ★;
+// comps = numbered pins: emerald = in the ARV, amber = flagged out, slate = out for other reasons.
+// Clicking a pin toggles it in/out of that section's ARV — same effect as the card checkboxes.
+let gmapsPromise = null;
+const loadGmaps = () => {
+  if (window.google && window.google.maps) return Promise.resolve();
+  if (gmapsPromise) return gmapsPromise;
+  gmapsPromise = fetch("/api/config").then((r) => r.json()).then(({ mapsKey }) => new Promise((resolve, reject) => {
+    if (!mapsKey) { reject(new Error("no maps key")); return; }
+    const s = document.createElement("script");
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${mapsKey}`;
+    s.async = true;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  }));
+  return gmapsPromise;
+};
 const CompMap = ({ subject, pins, onToggle }) => {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
+  const markersRef = useRef([]);
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    if (!boxRef.current || mapRef.current) return;
-    let tries = 0;
     let cancelled = false;
-    const boot = () => {
-      if (cancelled) return;
-      const L = window.L;
-      if (!L) { if (tries++ < 40) setTimeout(boot, 150); return; }   // wait for the CDN script
-      const m = L.map(boxRef.current, { scrollWheelZoom: false });
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
-      mapRef.current = { m, layer: L.layerGroup().addTo(m) };
+    loadGmaps().then(() => {
+      if (cancelled || !boxRef.current || mapRef.current) return;
+      mapRef.current = new window.google.maps.Map(boxRef.current, {
+        mapTypeControl: false, streetViewControl: true, fullscreenControl: false, scrollwheel: false,
+      });
       setReady(true);
-    };
-    boot();
-    return () => { cancelled = true; if (mapRef.current) { mapRef.current.m.remove(); mapRef.current = null; } };
+    }).catch(() => {});
+    return () => { cancelled = true; mapRef.current = null; };
   }, []);
   useEffect(() => {
-    const L = window.L;
-    if (!ready || !L || !mapRef.current) return;
-    const { m, layer } = mapRef.current;
-    layer.clearLayers();
-    const pts = [];
-    const dot = (bg, txt, size = 24, fs = 11) => L.divIcon({
-      className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-      html: `<div style="background:${bg};color:#fff;border-radius:9999px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${fs}px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${txt}</div>`,
+    const g = window.google && window.google.maps;
+    if (!ready || !g || !mapRef.current) return;
+    markersRef.current.forEach((m) => m.setMap(null));
+    markersRef.current = [];
+    const bounds = new g.LatLngBounds();
+    const mk = (lat, lng, bg, txt, big) => new g.Marker({
+      map: mapRef.current, position: { lat: Number(lat), lng: Number(lng) },
+      icon: { path: g.SymbolPath.CIRCLE, scale: big ? 14 : 12, fillColor: bg, fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
+      label: { text: txt, color: "#ffffff", fontSize: big ? "12px" : "11px", fontWeight: "700" },
     });
     if (subject && subject.lat != null && subject.lng != null) {
-      L.marker([subject.lat, subject.lng], { icon: dot("#dc2626", "★", 28, 13), zIndexOffset: 1000 })
-        .addTo(layer).bindTooltip(subject.label || "Subject");
-      pts.push([subject.lat, subject.lng]);
+      const m = mk(subject.lat, subject.lng, "#dc2626", "★", true);
+      m.setTitle(subject.label || "Subject");
+      m.setZIndex(1000);
+      markersRef.current.push(m);
+      bounds.extend(m.getPosition());
     }
     pins.forEach((p) => {
       if (p.lat == null || p.lng == null) return;
-      const bg = p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
-      const mk = L.marker([p.lat, p.lng], { icon: dot(bg, String(p.n)) }).addTo(layer);
-      mk.bindTooltip(`#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
-      if (onToggle) mk.on("click", () => onToggle(p.i));
-      pts.push([p.lat, p.lng]);
+      const m = mk(p.lat, p.lng, p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8", String(p.n), false);
+      m.setTitle(`#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
+      if (onToggle) m.addListener("click", () => onToggle(p.i));
+      markersRef.current.push(m);
+      bounds.extend(m.getPosition());
     });
-    if (pts.length) { m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
+    if (!bounds.isEmpty()) {
+      mapRef.current.fitBounds(bounds, 28);
+      window.google.maps.event.addListenerOnce(mapRef.current, "idle", () => {
+        if (mapRef.current && mapRef.current.getZoom() > 16) mapRef.current.setZoom(16);
+      });
+    }
   }, [ready, subject, pins, onToggle]);
   return <div ref={boxRef} className="relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200" />;
 };
@@ -413,6 +433,26 @@ export default function App() {
   const [rentFetchedFor, setRentFetchedFor] = useState(""); // address we last pulled rent for (lazy-load guard)
   const [tab, setTab] = useState("cash");
   const [subjectInfo, setSubjectInfo] = useState(null);
+  // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
+  const [subjDetail, setSubjDetail] = useState(null);
+  const [subjDetailOpen, setSubjDetailOpen] = useState(false);
+  const [subjDetailLoading, setSubjDetailLoading] = useState(false);
+  const [subjTab, setSubjTab] = useState("Property");
+  async function openSubjDetail() {
+    if (subjDetailOpen) { setSubjDetailOpen(false); return; }
+    setSubjDetailOpen(true);
+    if (subjDetail || subjDetailLoading) return;
+    const a = address.trim();
+    if (!a) return;
+    setSubjDetailLoading(true);
+    try {
+      const r = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
+      const data = await r.json();
+      if (r.ok && data.sections) { setSubjDetail(data); setSubjTab(Object.keys(data.sections)[0] || "Property"); }
+      else setSubjDetail({ sections: {}, error: data.error || "No record found." });
+    } catch { setSubjDetail({ sections: {}, error: "Lookup failed." }); }
+    finally { setSubjDetailLoading(false); }
+  }
   // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
   const [adjBeds, setAdjBeds] = useState(0);
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
@@ -470,6 +510,7 @@ export default function App() {
       // Keep RentCast's own AVM as a REFERENCE only — do NOT shove it into the override,
       // or the comps would stop driving the ARV (removing comps would do nothing).
       setGridIncluded({});  // fresh pull, fresh include/exclude slate for the grid
+      setSubjDetail(null); setSubjDetailOpen(false);   // new address = stale details
       setRentcastArv(data.arv || null);
       setArvOverride("");   // let the comps drive the ARV live
       // One click, both pulls: chain the sold-comps fetch with the subject details we JUST got
@@ -850,6 +891,44 @@ export default function App() {
               For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are conservative appraiser count-adjustments ($10K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
+        </div>
+
+        {/* SUBJECT DETAILS — on-demand deep dive from the property record */}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <button type="button" onClick={openSubjDetail} className="flex w-full items-center justify-between gap-2">
+            <SectionTitle>Subject property details</SectionTitle>
+            <span className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
+              {subjDetailOpen ? "hide" : subjDetail ? "show" : "load details"}
+            </span>
+          </button>
+          {subjDetailOpen && (
+            subjDetailLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-[11px] font-semibold text-slate-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling the property record…
+              </div>
+            ) : subjDetail && subjDetail.error ? (
+              <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-rose-700">{subjDetail.error}</div>
+            ) : subjDetail && (
+              <>
+                <div className="mt-3 flex flex-wrap gap-1.5 border-b border-slate-100 pb-2">
+                  {Object.keys(subjDetail.sections).map((t) => (
+                    <button key={t} type="button" onClick={() => setSubjTab(t)}
+                      className={`rounded-md px-2.5 py-1 text-[11px] font-semibold ${subjTab === t ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                  {(subjDetail.sections[subjTab] || []).map(([label, value], k) => (
+                    <div key={k} className={`rounded-lg border p-2.5 ${String(value).includes("ABSENTEE") ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/50"}`}>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                      <div className="mt-0.5 text-xs font-semibold text-slate-800">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )
+          )}
         </div>
 
         {/* AVM COMPS — own section, split from the property card */}
