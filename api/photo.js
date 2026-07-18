@@ -10,7 +10,8 @@ export default async function handler(req, res) {
     const loc = encodeURIComponent(address);
     const meta = await fetch(`https://maps.googleapis.com/maps/api/streetview/metadata?location=${loc}&key=${key}`).then((r) => r.json());
     if (!meta || meta.status !== "OK") { res.status(404).end(); return; }
-    const r = await fetch(`https://maps.googleapis.com/maps/api/streetview?size=240x200&location=${loc}&key=${key}`);
+    const size = /^\d{2,3}x\d{2,3}$/.test(String(req.query.size || "")) ? String(req.query.size) : "240x200";
+    const r = await fetch(`https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${loc}&key=${key}`);
     if (!r.ok) { res.status(404).end(); return; }
     const buf = Buffer.from(await r.arrayBuffer());
     res.setHeader("Content-Type", r.headers.get("content-type") || "image/jpeg");

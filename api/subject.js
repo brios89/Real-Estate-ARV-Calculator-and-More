@@ -53,7 +53,21 @@ export default async function handler(req, res) {
       ]),
     };
     Object.keys(sections).forEach((k) => { if (!sections[k].length) delete sections[k]; });
-    return res.status(200).json({ address: p.formattedAddress || address, sections });
+    return res.status(200).json({
+      address: p.formattedAddress || address,
+      sections,
+      // Raw machine-readable subject fields — the Auto-comp chain uses these to fill the subject
+      // sq ft, run structural comp flags, and compute distances (same response, no extra credit).
+      raw: {
+        sqft: p.squareFootage ? Math.round(Number(p.squareFootage)) : null,
+        beds: p.bedrooms ?? null,
+        baths: p.bathrooms ?? null,
+        yearBuilt: p.yearBuilt ?? null,
+        propertyType: p.propertyType ?? null,
+        lat: p.latitude ?? null,
+        lng: p.longitude ?? null,
+      },
+    });
   } catch (e) {
     return res.status(500).json({ error: "Lookup failed." });
   }

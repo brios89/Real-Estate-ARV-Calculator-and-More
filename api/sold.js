@@ -47,7 +47,7 @@ export default async function handler(req, res) {
   const propertyType = (req.query.propertyType || "").toString().trim();
   const subjectSqft = Number(req.query.subjectSqft || 0);
   const sqftBand = Number(req.query.sqftBand || 250);
-  const keepCount = Number(req.query.keepCount || 8);
+  const keepCount = Number(req.query.keepCount || 12);
 
   // One request, up to 500 records = 1 RentCast credit regardless of how many come back.
   const params = new URLSearchParams({ address, radius, saleDateRange, limit: "500" });
@@ -109,6 +109,19 @@ export default async function handler(req, res) {
           lat: p.latitude ?? null,                    // coordinates for the comp map
           lng: p.longitude ?? null,
           propertyType: p.propertyType ?? null,
+          // Extra record detail for the comp pop-up — all of this rides the SAME /properties response
+          // we already paid for; nothing here costs an extra RentCast credit. Every field is defensive:
+          // when RentCast doesn't have it, it comes through null and the pop-up simply doesn't show it.
+          lotSize: p.lotSize ?? null,
+          ownerOccupied: typeof p.ownerOccupied === "boolean" ? p.ownerOccupied : null,
+          heating: (p.features && (p.features.heatingType || (p.features.heating === true ? "Yes" : null))) || null,
+          cooling: (p.features && (p.features.coolingType || (p.features.cooling === true ? "Yes" : null))) || null,
+          garage: (p.features && (p.features.garageType || (p.features.garage === true ? (p.features.garageSpaces ? `${p.features.garageSpaces}-car` : "Yes") : null))) || null,
+          saleHistory: Object.entries(p.history || {})
+            .map(([k, v]) => (v && v.event && String(v.event).toLowerCase().includes("sale") ? { date: v.date || k, price: Number(v.price) || null } : null))
+            .filter((e) => e && e.date)
+            .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+            .slice(0, 12),
           distance: Number.isFinite(sLat) && Number.isFinite(sLng) && p.latitude != null && p.longitude != null
             ? Math.round(distMi(sLat, sLng, Number(p.latitude), Number(p.longitude)) * 100) / 100
             : (p.distance ?? null),                   // computed from coordinates; falls back gracefully
@@ -125,6 +138,54 @@ export default async function handler(req, res) {
       })
       // 3) drop the subject itself if it slipped into the results (same address)
       .filter((c) => c.address.trim().toLowerCase() !== address.toLowerCase());
+
+    // ---- MLS cross-check (1 extra RentCast request, /listings/sale) ----
+    // A recorded deed tells you a property CLOSED; it doesn't tell you it was marketed. Off-market
+    // transfers (family deals, wholesale assignments, foreclosure deeds) pollute an ARV. So we pull
+    // the INACTIVE sale listings in the same radius and match them to the sold comps by address:
+    // a match whose removal date lines up with the deed date = a real arm's-length MLS sale.
+    // Best-effort by design — if this call fails, comps still return, just without MLS badges.
+    let mlsChecked = false;
+    try {
+      const lp = new URLSearchParams({ address, radius, status: "Inactive", limit: "500", daysOld: "545" });
+      if (propertyType) lp.set("propertyType", propertyType);
+      const lr = await fetch(`https://api.rentcast.io/v1/listings/sale?${lp.toString()}`, {
+        headers: { "X-Api-Key": key, Accept: "application/json" },
+      });
+      if (lr.ok) {
+        const ldata = await lr.json();
+        const listings = Array.isArray(ldata) ? ldata : (ldata.listings || ldata.results || []);
+        const norm = (x) => String(x || "").trim().toLowerCase().replace(/\s+/g, " ");
+        const byAddr = new Map();
+        for (const l of listings) {
+          const k = norm(l.formattedAddress || l.addressLine1);
+          if (!k) continue;
+          const prev = byAddr.get(k);
+          if (!prev || String(l.removedDate || l.lastSeenDate || "") > String(prev.removedDate || prev.lastSeenDate || "")) byAddr.set(k, l);
+        }
+        for (const c of comps) {
+          const l = byAddr.get(norm(c.address));
+          if (!l) continue;
+          // The listing must line up with THIS sale: removed from market up to ~8 months before the
+          // deed date (closings lag listings) or 60 days after. No dates = no MLS claim made.
+          const rd = Date.parse(l.removedDate || l.lastSeenDate || "");
+          const sd = Date.parse(c.saleDate || "");
+          if (isNaN(rd) || isNaN(sd)) continue;
+          const lagDays = (sd - rd) / 86400000;
+          if (lagDays < -60 || lagDays > 240) continue;
+          c.mls = {
+            name: l.mlsName || null,
+            number: l.mlsNumber || null,
+            listPrice: Number(l.price) || null,
+            listedDate: l.listedDate || null,
+            removedDate: l.removedDate || null,
+            daysOnMarket: l.daysOnMarket ?? null,
+            listingType: l.listingType || null,
+          };
+        }
+        mlsChecked = true;
+      }
+    } catch { /* keep going — MLS badges are a bonus, not a dependency */ }
 
     // Split by the ±sqft band around the subject; in-band comps are the clean ones for the ARV.
     const near = (c) => subjectSqft > 0 && Math.abs(c.sqft - subjectSqft) <= sqftBand;
@@ -162,6 +223,7 @@ export default async function handler(req, res) {
       soldArv,                    // median sold $/sqft × subject sqft — an ARV backed by real closings
       medianPpsf,                 // median $/sqft across the kept sold comps
       count: comps.length,
+      mlsChecked,             // true = the /listings/sale cross-check ran; comps that matched carry a .mls object
       window: { radius: Number(radius), saleDateRange: windowDays, sqftBand, keepCount },
       subject: { sqft: subjectSqft || null, propertyType: propertyType || null },
       comps,

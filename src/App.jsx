@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
-const COMP_API = "/api/comp";
 const RENT_API = "/api/rent";
 const SOLD_API = "/api/sold";
 const SOLID_TARGET = 4; // the sold-comp ARV median runs on the best N solid sales; fewer than N trips the thin-comps warning
@@ -341,88 +340,159 @@ const SectionTitle = ({ children }) => (
 );
 
 // ---------- main ----------
-// Interactive comp map — Google Maps JS API (key served by /api/config; restrict it in Google console
-// to Street View Static + Places + Maps JavaScript API, with daily quota caps). Subject = red ★;
-// comps = numbered pins: emerald = in the ARV, amber = flagged out, slate = out for other reasons.
-// Clicking a pin toggles it in/out of that section's ARV — same effect as the card checkboxes.
-let gmapsPromise = null;
-const loadGmaps = () => {
-  if (window.google && window.google.maps) return Promise.resolve();
-  if (gmapsPromise) return gmapsPromise;
-  gmapsPromise = fetch("/api/config").then((r) => r.json()).then(({ mapsKey }) => new Promise((resolve, reject) => {
-    if (!mapsKey) { reject(new Error("no maps key")); return; }
-    const s = document.createElement("script");
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${mapsKey}`;
-    s.async = true;
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  }));
-  return gmapsPromise;
-};
+// Interactive comp map (Leaflet, loaded from CDN in index.html). Subject = red ★; comps = numbered pins:
+// emerald = in the ARV, amber = flagged out, slate = out for other reasons. Clicking a pin toggles it
+// in/out of that section's ARV — same effect as the include/exclude buttons on the cards.
 const CompMap = ({ subject, pins, onToggle }) => {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
   const [ready, setReady] = useState(false);
   useEffect(() => {
+    if (!boxRef.current || mapRef.current) return;
+    let tries = 0;
     let cancelled = false;
-    loadGmaps().then(() => {
-      if (cancelled || !boxRef.current || mapRef.current) return;
-      mapRef.current = new window.google.maps.Map(boxRef.current, {
-        mapTypeControl: false, streetViewControl: true, fullscreenControl: false, scrollwheel: false,
-      });
+    const boot = () => {
+      if (cancelled) return;
+      const L = window.L;
+      if (!L) { if (tries++ < 40) setTimeout(boot, 150); return; }   // wait for the CDN script
+      const m = L.map(boxRef.current, { scrollWheelZoom: false });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
+      mapRef.current = { m, layer: L.layerGroup().addTo(m) };
       setReady(true);
-    }).catch(() => {});
-    return () => { cancelled = true; mapRef.current = null; };
+    };
+    boot();
+    return () => { cancelled = true; if (mapRef.current) { mapRef.current.m.remove(); mapRef.current = null; } };
   }, []);
   useEffect(() => {
-    const g = window.google && window.google.maps;
-    if (!ready || !g || !mapRef.current) return;
-    markersRef.current.forEach((m) => m.setMap(null));
-    markersRef.current = [];
-    const bounds = new g.LatLngBounds();
-    const mk = (lat, lng, bg, txt, big) => new g.Marker({
-      map: mapRef.current, position: { lat: Number(lat), lng: Number(lng) },
-      icon: { path: g.SymbolPath.CIRCLE, scale: big ? 14 : 12, fillColor: bg, fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2 },
-      label: { text: txt, color: "#ffffff", fontSize: big ? "12px" : "11px", fontWeight: "700" },
+    const L = window.L;
+    if (!ready || !L || !mapRef.current) return;
+    const { m, layer } = mapRef.current;
+    layer.clearLayers();
+    const pts = [];
+    const dot = (bg, txt, size = 24, fs = 11) => L.divIcon({
+      className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+      html: `<div style="background:${bg};color:#fff;border-radius:9999px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${fs}px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${txt}</div>`,
     });
     if (subject && subject.lat != null && subject.lng != null) {
-      const m = mk(subject.lat, subject.lng, "#dc2626", "★", true);
-      m.setTitle(subject.label || "Subject");
-      m.setZIndex(1000);
-      markersRef.current.push(m);
-      bounds.extend(m.getPosition());
+      L.marker([subject.lat, subject.lng], { icon: dot("#dc2626", "★", 28, 13), zIndexOffset: 1000 })
+        .addTo(layer).bindTooltip(subject.label || "Subject");
+      pts.push([subject.lat, subject.lng]);
     }
     pins.forEach((p) => {
       if (p.lat == null || p.lng == null) return;
-      const m = mk(p.lat, p.lng, p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8", String(p.n), false);
-      m.setTitle(`#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
-      if (onToggle) m.addListener("click", () => onToggle(p.i));
-      markersRef.current.push(m);
-      bounds.extend(m.getPosition());
+      const bg = p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
+      const mk = L.marker([p.lat, p.lng], { icon: dot(bg, String(p.n)) }).addTo(layer);
+      mk.bindTooltip(`#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
+      if (onToggle) mk.on("click", () => onToggle(p.i));
+      pts.push([p.lat, p.lng]);
     });
-    if (!bounds.isEmpty()) {
-      mapRef.current.fitBounds(bounds, 28);
-      window.google.maps.event.addListenerOnce(mapRef.current, "idle", () => {
-        if (mapRef.current && mapRef.current.getZoom() > 16) mapRef.current.setZoom(16);
-      });
-    }
+    if (pts.length) { m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
   }, [ready, subject, pins, onToggle]);
   return <div ref={boxRef} className="relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200" />;
+};
+
+// Street View links for a comp: interactive pano when we have coordinates, place search otherwise.
+const svLink = (c) => (c.lat != null && c.lng != null
+  ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lng}`
+  : `https://www.google.com/maps/place/${encodeURIComponent(c.address || "")}`);
+
+// Lot size: RentCast reports square feet; read it like an appraiser (acres once it's big enough to think in acres).
+const fmtLot = (sf) => {
+  const n = Number(sf);
+  if (!n || n <= 0) return null;
+  return n >= 8712 ? `${(n / 43560).toFixed(2)} acres` : `${Math.round(n).toLocaleString()} sf`;
+};
+
+// Comp detail pop-up — opens when a comp card's photo is clicked. Shows everything RentCast already
+// sent with the pull (zero extra API credits). The big photo clicks through to interactive Street
+// View, and the Include button is the exact same toggle as the card's checkbox and the map pin.
+const DetailTile = ({ label, value, amber }) => (value == null || value === "" ? null : (
+  <div className={`rounded-lg border p-2.5 ${amber ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/50"}`}>
+    <div className={`text-[10px] font-semibold uppercase tracking-wide ${amber ? "text-amber-600" : "text-slate-400"}`}>{label}</div>
+    <div className={`mt-0.5 text-sm font-semibold ${amber ? "text-amber-800" : "text-slate-800"}`}>{value}</div>
+  </div>
+));
+
+const CompDetailModal = ({ data, onClose, onToggle }) => {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if (!data) return null;
+  const d = data;
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-3 sm:p-6" onClick={onClose}>
+      <div className="mx-auto my-4 w-full max-w-2xl rounded-2xl bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Comp #{d.n} · {d.source}</div>
+            <div className="mt-0.5 truncate text-sm font-bold text-slate-900">{d.address || "(address withheld)"}</div>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+        </div>
+        {d.address && (
+          <a href={d.sv} target="_blank" rel="noopener noreferrer" title="Open interactive Street View"
+            className="relative mt-3 block h-52 w-full overflow-hidden rounded-xl bg-slate-100 sm:h-64">
+            <span className="absolute inset-0 flex items-center justify-center"><Building2 className="h-10 w-10 text-slate-300" /></span>
+            <img src={`/api/photo?size=640x360&address=${encodeURIComponent(d.address)}`} alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+              onError={(e) => { e.currentTarget.style.display = "none"; }} />
+            <span className="absolute bottom-2 right-2 rounded bg-slate-900/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">Street View — click to explore</span>
+          </a>
+        )}
+        {d.flags.length > 0 && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+            <span>{d.flags.join(" · ")}</span>
+          </div>
+        )}
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {d.tiles.map((t, ix) => <DetailTile key={ix} {...t} />)}
+        </div>
+        {d.history && d.history.length > 0 && (
+          <div className="mt-4">
+            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Recorded sale history</div>
+            <div className="mt-1.5 overflow-hidden rounded-lg border border-slate-200">
+              <table className="w-full text-left text-[11px]">
+                <thead><tr className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-400"><th className="px-2.5 py-1.5 font-semibold">Date</th><th className="px-2.5 py-1.5 font-semibold">Price</th><th className="px-2.5 py-1.5 font-semibold">$ / sqft</th></tr></thead>
+                <tbody>
+                  {d.history.map((h, ix) => (
+                    <tr key={ix} className="border-t border-slate-100">
+                      <td className="px-2.5 py-1.5 font-mono text-slate-600">{mediumDate(h.date)}</td>
+                      <td className="px-2.5 py-1.5 font-mono font-bold text-slate-800">{h.price ? usd(h.price) : "—"}</td>
+                      <td className="px-2.5 py-1.5 font-mono text-slate-500">{h.price && d.sqftNum > 0 ? `$${Math.round(h.price / d.sqftNum)}` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-1 text-[10px] text-slate-400">County-recorded sales only — MLS listing history and price changes aren't in RentCast's data.</div>
+          </div>
+        )}
+        <div className="mt-4 flex items-center justify-between gap-2">
+          <button type="button" onClick={onToggle}
+            className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-bold ${d.included ? "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
+            <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${d.included ? "border-white bg-white/20 text-white" : "border-slate-300 text-transparent"}`}>✓</span>
+            {d.included ? "In the ARV — click to remove" : "Out of the ARV — click to include"}
+          </button>
+          {d.address && (
+            <a href={gsearch(d.address)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold text-emerald-600 hover:underline">Google this property</a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default function App() {
   // property + ARV
   const [address, setAddress] = useState("");
   const [sqft, setSqft] = useState("");
-  const [comps, setComps] = useState([]); // read-only grid: filled by Auto-comp, curated with include/exclude
   const [manualSold, setManualSold] = useState([]);  // hand-entered recorded sales (merged into the sold panel; cleared on a fresh successful pull)
-  const [gridAdd, setGridAdd] = useState(null);      // null = closed; { address, sqft, price } = the + comp form is open (AVM section)
   const [soldAdd, setSoldAdd] = useState(null);      // same, for the sold section
   const [arvOverride, setArvOverride] = useState("");
   const [marginalPsf, setMarginalPsf] = useState("");   // size-adjust rate ($ per sq ft of size difference); blank = auto (half the group's typical $/sf)
-  const [rentcastArv, setRentcastArv] = useState(null); // RentCast's own AVM, kept as a reference only
   // --- rental ---
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
   const [rentLow, setRentLow] = useState(null);
@@ -464,71 +534,38 @@ export default function App() {
   const [soldLoading, setSoldLoading] = useState(false);
   const [soldMsg, setSoldMsg] = useState(null);
   const [soldIncluded, setSoldIncluded] = useState({}); // manual "include" overrides for flagged sold comps, keyed by comp index (reset on each pull)
-  const [gridIncluded, setGridIncluded] = useState({}); // AVM grid overrides: true = force in, false = force out, undefined = auto (reset on each Auto-comp)
+  const [mlsOnly, setMlsOnly] = useState(true); // show only MLS-verified sales (applies only when the MLS cross-check ran)
+  const [compDetail, setCompDetail] = useState(null); // { i } — which sold comp's detail pop-up is open (opened by clicking a card photo)
 
   async function autoComp() {
     const a = address.trim();
     if (!a) { setCompMsg({ type: "err", text: "Type the subject address first." }); return; }
     setCompLoading(true); setCompMsg(null);
     try {
-      const r = await fetch(`${COMP_API}?address=${encodeURIComponent(a)}`);
-      const data = await r.json();
-      if (!r.ok) { setCompMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); return; }
-      // Always refresh subject sqft for the new address (fixes stale-sqft glitch)
-      if (data.subject?.sqft) setSqft(String(data.subject.sqft));
-      // Capture subject property details
-      if (data.subject) setSubjectInfo({
-        propertyType: data.subject.propertyType,
-        beds: data.subject.beds,
-        baths: data.subject.baths,
-        yearBuilt: data.subject.yearBuilt,
-        lastSaleDate: data.subject.lastSaleDate,
-        lastSalePrice: data.subject.lastSalePrice,
-        lat: data.subject.lat,
-        lng: data.subject.lng,
-      });
-      // Fill the comp grid (address + sqft + price + details), pad to at least 3 rows
-      const incoming = (data.comps || []).map((c) => ({
-        sqft: String(c.sqft),
-        price: String(c.price),
-        address: c.address || "",
-        propertyType: c.propertyType,
-        beds: c.beds,
-        baths: c.baths,
-        yearBuilt: c.yearBuilt,
-        distance: c.distance,
-        listedDate: c.listedDate,
-        removedDate: c.removedDate,
-        lastSeenDate: c.lastSeenDate,
-        status: c.status,
-        lat: c.lat ?? null,
-        lng: c.lng ?? null,
-      }));
-      if (incoming.length) {
-        setComps(incoming);
-      }
-      // Keep RentCast's own AVM as a REFERENCE only — do NOT shove it into the override,
-      // or the comps would stop driving the ARV (removing comps would do nothing).
-      setGridIncluded({});  // fresh pull, fresh include/exclude slate for the grid
-      setSubjDetail(null); setSubjDetailOpen(false);   // new address = stale details
-      setRentcastArv(data.arv || null);
-      setArvOverride("");   // let the comps drive the ARV live
-      // One click, both pulls: chain the sold-comps fetch with the subject details we JUST got
-      // (passed directly — the state setters above aren't visible to this call yet). Not awaited,
-      // so the comp grid renders immediately while the sold panel loads on its own spinner.
-      pullSold({ sqft: data.subject?.sqft || num(sqft), propertyType: data.subject?.propertyType, lat: data.subject?.lat, lng: data.subject?.lng });
-      const n = (data.comps || []).length;
-      setCompMsg({ type: "ok", text: `Pulled ${n} comp${n === 1 ? "" : "s"}${data.arv ? ` · RentCast AVM ${usd(data.arv)} (reference)` : ""}. ARV is averaged from the comps above — include/exclude comps and it recalculates.` });
-    } catch (e) {
+      // 1) Subject record first (exact-address lookup, 1 credit): fills the sq ft, beds/baths and
+      //    coordinates, and pre-loads the Subject property details panel off the same response.
+      let hints = { sqft: num(sqft), propertyType: subjectInfo?.propertyType, lat: subjectInfo?.lat, lng: subjectInfo?.lng };
+      try {
+        const sr = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
+        const sd = await sr.json().catch(() => null);
+        if (sr.ok && sd) {
+          if (sd.sections) setSubjDetail(sd);
+          const raw = sd.raw || {};
+          if (raw.sqft) setSqft(String(raw.sqft));
+          setSubjectInfo({ propertyType: raw.propertyType ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
+          hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
+        }
+      } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
+      // 2) Recorded sold comps + MLS cross-check (the server makes both RentCast calls in one go)
+      await pullSold(hints);
+      setCompMsg({ type: "ok", text: "Pulled the subject record and recorded sold comps. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
+    } catch {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
       setCompLoading(false);
     }
   }
 
-  // Pull ACTUAL recorded sold comps from RentCast's Property Records endpoint (1 credit per pull).
-  // `fresh` = { sqft, propertyType } — lets autoComp chain this immediately with values it JUST fetched,
-  // because the setSqft/setSubjectInfo calls above it won't be visible to React state until the next render.
   async function pullSold(fresh) {
     const a = address.trim();
     if (!a) { setSoldMsg({ type: "err", text: "Type the subject address first." }); return; }
@@ -635,51 +672,16 @@ export default function App() {
   const [novCostFactor, setNovCostFactor] = useState("8");
 
   // ---- ARV ----
-  // Record-correction dollars: rides on TOP of whatever ARV source is driving (comps, AVM, sold, average, or manual),
+  // Record-correction dollars: rides on TOP of whichever ARV is driving (sold-comp median or manual override),
   // because a bedroom the county missed is missing from every one of those sources equally.
   const subjAdjust = Math.round(adjBeds * num(bedAdjAmt) + adjBaths * num(bathAdjAmt));
 
-  // The AVM comp grid, unified with the sold panel's system: structural flags + the shared price-outlier
+  // Structural flags + the shared price-outlier rule for the sold panel: flagged comps sit out of the
   // rule; flagged comps are auto-EXCLUDED from the average (averages bruise easier than medians), clean
   // comps auto-included, and every valid card carries an include/exclude override.
-  // gridIncluded: true = force in, false = force out, undefined = automatic.
-  const gridSummary = useMemo(() => {
-    const sf = num(sqft);
-    const items = comps.map((c, i) => {
-      const price = num(c.price), csf = num(c.sqft);
-      return { i, price, csf, ppsf: csf > 0 && price > 0 ? price / csf : 0, flags: [...compFlags(c, subjectInfo, sf)] };
-    });
-    // Size adjustment (appraiser-style): move each comp's PRICE up/down as if it were the subject's size,
-    // at the marginal $/sf — the user's rate, or auto = half the group's typical $/sf.
-    const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(items.filter((c) => c.flags.length === 0).map((c) => c.ppsf)) / 2);
-    items.forEach((c) => {
-      const canAdj = sf > 0 && c.csf > 0 && c.price > 0 && marginalUsed > 0;
-      c.adjPrice = canAdj ? Math.max(0, c.price + (sf - c.csf) * marginalUsed) : c.price;
-      c.appsf = sf > 0 && c.adjPrice > 0 ? c.adjPrice / sf : c.ppsf;   // adjusted $/sf (falls back to raw when no subject sf)
-    });
-    flagPriceOutliers(items);
-    const rows = items.map((it) => {
-      const o = gridIncluded[it.i];
-      const valid = it.ppsf > 0;
-      const included = valid && (o === true || (o === undefined && it.flags.length === 0));
-      return { ...it, valid, included, manual: o !== undefined };
-    });
-    const pool = rows.filter((r) => r.included);
-    const avg = pool.length ? pool.reduce((a, r) => a + r.appsf, 0) / pool.length : 0;
-    return { rows, usedCount: pool.length, validCount: rows.filter((r) => r.valid).length, avgPsf: avg, gridArv: avg > 0 && sf > 0 ? avg * sf : 0, marginalUsed };
-  }, [comps, subjectInfo, sqft, gridIncluded, marginalPsf]);
-  // Same consumers as before (the arv memo, arvStat, the picker) read these derived constants.
-  const gridArv = gridSummary.gridArv;
-  const avgPsf = gridSummary.avgPsf;
-
-  const arv = useMemo(() => {
-    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
-    if (gridArv <= 0) return 0;
-    return Math.max(0, gridArv + subjAdjust);
-  }, [gridArv, arvOverride, subjAdjust]);
 
   // Sold-comp summary — "best 4" selection:
-  //  1) structural junk filter (same compFlags as the grid: beds/baths/size/age/distance)
+  //  1) structural junk filter (compFlags: beds/baths/size/age/distance)
   //  2) price sanity — $/sf more than 25% off the structurally-clean group median gets a "price outlier"
   //     flag (catches distressed/wholesale sales that are structurally identical; skipped when <3 clean comps
   //     because the reference median would itself be junk)
@@ -689,9 +691,11 @@ export default function App() {
   const soldSummary = useMemo(() => {
     const src = [...((soldData && soldData.comps) || []), ...manualSold];
     if (!src.length) return null;
+    const mlsChecked = !!(soldData && soldData.mlsChecked);
+    const pool0 = mlsChecked && mlsOnly ? src.filter((c) => c.manualEntry || c.mls) : src;
     const sf = num(sqft);
-    const base = src.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, sf)] }));
-    // Same size adjustment as the AVM grid: each sale's price, moved to the subject's size at the marginal rate.
+    const base = pool0.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, sf)] }));
+    // Size adjustment (appraiser-style): each sale's price, moved to the subject's size at the marginal rate.
     const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(base.filter((c) => c.flags.length === 0).map((c) => c.ppsf || 0)) / 2);
     base.forEach((c) => {
       const canAdj = sf > 0 && c.sqft > 0 && c.salePrice > 0 && marginalUsed > 0;
@@ -724,29 +728,27 @@ export default function App() {
         arv = (soldData && soldData.soldArv) || null;     // no subject sq ft: fall back to the server's number
       }
     }
-    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET, marginalUsed };
-  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold]);
+    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET, marginalUsed, mlsChecked, mlsCount: src.filter((c) => c.mls).length, srcTotal: src.length };
+  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold, mlsOnly]);
 
-  // Label the ARV stat with where the number actually came from — AVM model, recorded sales, blend, or manual.
+  // Label the ARV stat with where the number actually came from — recorded sales or a manual override.
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
+  // The deal-driving ARV: manual override wins; otherwise the sold-comp median. Record corrections ride on top.
+  const arv = useMemo(() => {
+    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
+    const soldVal = soldSummary && soldSummary.arv > 0 ? soldSummary.arv : 0;
+    if (soldVal <= 0) return 0;
+    return Math.max(0, soldVal + subjAdjust);
+  }, [soldSummary, arvOverride, subjAdjust]);
+
   const arvStat = useMemo(() => {
     const o = num(arvOverride);
-    const avmVal = rentcastArv > 0 && gridArv > 0 ? Math.round(gridArv) : null;
     const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;
-    const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;
-    let label, src;
-    if (o > 0) {
-      if (avmVal && o === avmVal) { label = "AVM comp"; src = "RentCast AVM · model estimate, not recorded sales"; }
-      else if (soldVal && o === soldVal) { label = "ARV"; src = "sold-comp ARV · actual recorded sales"; }
-      else if (avgVal && o === avgVal) { label = "AVM / ARV average"; src = "average of AVM + sold-comp ARV"; }
-      else { label = "Manual ARV"; src = "manual override"; }
-    } else {
-      label = "AVM comp";
-      src = avmVal ? "size-adjusted avg $/sf × subject sf · comps from the AVM pull" : "avg $/sf × subject sf";
-    }
-    const sub = subjAdjust !== 0 ? `${src} · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : src;
+    let label = "ARV", sub = "sold-comp ARV · actual recorded sales";
+    if (o > 0 && (!soldVal || o !== soldVal)) { label = "Manual ARV"; sub = "typed in — overrides the sold comps"; }
+    if (subjAdjust !== 0) sub += ` · includes ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction`;
     return { label, sub };
-  }, [arvOverride, rentcastArv, soldSummary, subjAdjust, gridArv]);
+  }, [arvOverride, soldSummary, subjAdjust]);
 
   // ---- repairs ----
   const repairPsf = rehabLevel === "cosmetic" ? 15 : rehabLevel === "moderate" ? 30 : rehabLevel === "gut" ? 50 : num(customPsf);
@@ -781,7 +783,6 @@ export default function App() {
     { id: "nov", label: "Novation", Icon: RefreshCw },
   ];
 
-  const validCompCount = comps.filter((c) => num(c.sqft) > 0 && num(c.price) > 0).length;
   const deckCommon = {
     address, arv, repairs,
     subjectLine: propLine(subjectInfo),
@@ -789,8 +790,8 @@ export default function App() {
     askingDefault: num(askingPrice),
     contractDefault: num(askingPrice),
     fee: num(wholesaleFee),
-    compCount: num(arvOverride) > 0 ? 0 : validCompCount,
-    avgPpsf: num(arvOverride) > 0 ? 0 : avgPsf,
+    compCount: num(arvOverride) > 0 ? 0 : (soldSummary ? soldSummary.usedCount : 0),
+    avgPpsf: num(arvOverride) > 0 ? 0 : (soldSummary && soldSummary.medianPpsf ? soldSummary.medianPpsf : 0),
   };
 
   return (
@@ -844,6 +845,58 @@ export default function App() {
               <Field label="Subject sq ft">
                 <PlainInput value={sqft} onChange={setSqft} placeholder="1500" suffix="sf" />
               </Field>
+              {num(sqft) <= 0 && (
+                <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-800">
+                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
+                  <span><b>Needs a number before comps can run right.</b> The ARV math is built on it — Auto-comp fills it for most addresses, but if it stays blank after a pull, look it up and type it in.</span>
+                </div>
+              )}
+              {compDetail && (() => {
+                const c = soldSummary ? soldSummary.flagged.find((x) => x.i === compDetail.i) : null;
+                if (!c) return null;
+                const adj = Math.round(c.adjPrice || 0);
+                const tiles = [
+                  adj > 0 && adj !== Math.round(c.salePrice) ? { label: "Size-adjusted value", value: usd(adj) } : null,
+                  { label: "Recorded sale price", value: usd(c.salePrice) },
+                  c.ppsf > 0 ? { label: "Price / sq ft", value: `$${Math.round(c.ppsf)}` } : null,
+                  c.beds != null ? { label: "Beds", value: String(c.beds) } : null,
+                  c.baths != null ? { label: "Baths", value: String(c.baths) } : null,
+                  num(c.sqft) > 0 ? { label: "Sq ft", value: num(c.sqft).toLocaleString() } : null,
+                  c.yearBuilt ? { label: "Year built", value: String(c.yearBuilt) } : null,
+                  fmtLot(c.lotSize) ? { label: "Lot size", value: fmtLot(c.lotSize) } : null,
+                  c.distance != null ? { label: "Distance", value: `${Number(c.distance).toFixed(2)} mi` } : null,
+                  c.saleDate ? { label: "Sale date", value: mediumDate(c.saleDate) } : null,
+                  c.propertyType ? { label: "Type", value: String(c.propertyType) } : null,
+                  c.ownerOccupied != null ? { label: "Occupancy", value: c.ownerOccupied ? "Owner occupied" : "Absentee owner", amber: !c.ownerOccupied } : null,
+                  c.heating ? { label: "Heating", value: String(c.heating) } : null,
+                  c.cooling ? { label: "A/C", value: String(c.cooling) } : null,
+                  c.garage ? { label: "Garage", value: String(c.garage) } : null,
+                  c.mls && c.mls.number ? { label: "MLS #", value: String(c.mls.number) } : null,
+                  c.mls && c.mls.name ? { label: "MLS", value: String(c.mls.name) } : null,
+                  c.mls && c.mls.listPrice ? { label: "Last list price", value: usd(c.mls.listPrice) } : null,
+                  c.mls && c.mls.daysOnMarket != null ? { label: "Days on market", value: String(c.mls.daysOnMarket) } : null,
+                  c.mls && c.mls.listedDate ? { label: "Listed", value: mediumDate(c.mls.listedDate) } : null,
+                  c.mls && c.mls.removedDate ? { label: "Off market", value: mediumDate(c.mls.removedDate) } : null,
+                  c.mls && c.mls.listingType && c.mls.listingType !== "Standard" ? { label: "Listing type", value: String(c.mls.listingType), amber: true } : null,
+                ].filter(Boolean);
+                return (
+                  <CompDetailModal
+                    data={{
+                      n: c.i + 1,
+                      source: c.manualEntry ? "MANUAL" : c.mls ? "MLS SALE" : "DEED",
+                      address: c.address || "",
+                      sv: svLink(c),
+                      flags: c.flags || [],
+                      included: !!c.included,
+                      tiles,
+                      history: c.saleHistory || [],
+                      sqftNum: num(c.sqft),
+                    }}
+                    onClose={() => setCompDetail(null)}
+                    onToggle={() => setSoldIncluded((p) => ({ ...p, [compDetail.i]: !c.included }))}
+                  />
+                );
+              })()}
               <div className="mt-2 flex items-center gap-2">
                 <button onClick={autoComp} disabled={compLoading}
                   className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
@@ -931,137 +984,6 @@ export default function App() {
           )}
         </div>
 
-        {/* AVM COMPS — own section, split from the property card */}
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="flex items-center justify-between gap-2">
-            <SectionTitle>Sold comps (AVM — Automated Valuation Model)</SectionTitle>
-            {!gridAdd && (
-              <button type="button" onClick={() => setGridAdd({ address: "", sqft: "", price: "" })}
-                className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
-                + comp
-              </button>
-            )}
-          </div>
-          {gridAdd && (
-            <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
-              <div className="min-w-[180px] flex-1">
-                <Field label="Comp address" hint="optional">
-                  <input type="text" value={gridAdd.address} onChange={(e) => setGridAdd((p) => ({ ...p, address: e.target.value }))}
-                    placeholder="123 Main St, City, ST"
-                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100" />
-                </Field>
-              </div>
-              <div className="w-28"><Field label="Sq ft"><PlainInput value={gridAdd.sqft} onChange={(v) => setGridAdd((p) => ({ ...p, sqft: v }))} placeholder="1500" suffix="sf" /></Field></div>
-              <div className="w-36"><Field label="Sold price"><MoneyInput value={gridAdd.price} onChange={(v) => setGridAdd((p) => ({ ...p, price: v }))} placeholder="200000" /></Field></div>
-              <button type="button" disabled={!(num(gridAdd.sqft) > 0 && num(gridAdd.price) > 0)}
-                onClick={() => { setComps((cs) => [...cs, { sqft: String(num(gridAdd.sqft)), price: String(num(gridAdd.price)), address: gridAdd.address.trim(), manualEntry: true }]); setGridAdd(null); }}
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
-                Add
-              </button>
-              <button type="button" onClick={() => setGridAdd(null)}
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-50">
-                Cancel
-              </button>
-            </div>
-          )}
-            <div className="mt-1 text-[10px] text-slate-400">
-              RentCast's estimate-model comparables — the 8 most-similar sales and listings, last 12 months, within ±250 sq ft of the subject, sizes adjusted to the subject. Average of adjusted prices. (Different from the recorded closings below, which are actual deed prices.)
-            </div>
-            <div className="mt-2 text-[10px] italic text-slate-400">
-              The AVM average runs on the <b className="text-slate-500">included comps</b>. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition).
-            </div>
-            {subjectInfo?.lat != null && comps.some((c) => c.lat != null) && (
-              <CompMap
-                subject={{ lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }}
-                pins={comps.map((c, i) => ({ i, n: i + 1, lat: c.lat ?? null, lng: c.lng ?? null, price: num(c.price), included: !!gridSummary.rows[i]?.included, flagged: (gridSummary.rows[i]?.flags || []).length > 0 })).filter((p) => p.lat != null && p.lng != null)}
-                onToggle={(i) => setGridIncluded((p) => ({ ...p, [i]: !gridSummary.rows[i]?.included }))}
-              />
-            )}
-            <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              {comps.map((c, i) => {
-                const row = gridSummary.rows[i] || { flags: [], valid: false, included: false, manual: false };
-                if (!row.valid) return null;   // read-only grid: only real pulled comps render
-                const flags = row.flags;
-                const stats = [
-                  (c.beds != null || c.baths != null) ? `${c.beds ?? "?"} bd · ${c.baths ?? "?"} ba` : null,
-                  `${num(c.sqft).toLocaleString()} sqft`,
-                  c.yearBuilt ? String(c.yearBuilt) : null,
-                  `$${Math.round(row.ppsf)}/sf`,
-                  Math.round(row.appsf) !== Math.round(row.ppsf) ? `adj $${Math.round(row.appsf)}/sf` : null,
-                ].filter(Boolean).join(" · ");
-                return (
-                  <div key={i} className={`rounded-xl border-2 bg-white p-3 ${row.included ? "border-emerald-400" : "border-slate-200"}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <button type="button" onClick={() => setGridIncluded((p) => ({ ...p, [i]: !row.included }))} className="flex items-center gap-2">
-                        <span className={`flex h-5 w-5 items-center justify-center rounded-md font-mono text-[10px] font-bold text-white ${row.included ? "bg-emerald-600" : flags.length ? "bg-amber-500" : "bg-slate-400"}`}>{i + 1}</span>
-                        <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${row.included ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-transparent"}`}>✓</span>
-                        <span className="text-xs font-semibold text-slate-700">Include in ARV</span>
-                      </button>
-                      <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "AVM"}</span>
-                    </div>
-                    <div className="mt-2 flex gap-3">
-                      <a href={c.lat != null && c.lng != null ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lng}` : `https://www.google.com/maps/place/${encodeURIComponent(c.address || "")}`}
-                        target="_blank" rel="noopener noreferrer" title="Open Street View"
-                        className="relative flex h-20 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100 transition hover:ring-2 hover:ring-emerald-300">
-                        <Building2 className="h-7 w-7 text-slate-300" />
-                        {c.address && (
-                          <img src={`/api/photo?address=${encodeURIComponent(c.address)}`} alt="" loading="lazy"
-                            className="absolute inset-0 h-full w-full object-cover"
-                            onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                        )}
-                      </a>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(num(c.price))}</span>
-                          {c.distance != null && <span className="shrink-0 font-mono text-[11px] text-slate-500">{Number(c.distance).toFixed(2)} mi</span>}
-                        </div>
-                        <div className="text-[11px] text-slate-400">
-                          {c.listedDate && <span>listed {shortDate(c.listedDate)}</span>}
-                          {(c.removedDate || c.lastSeenDate) && c.status && c.status.toLowerCase() !== "active"
-                            ? <span>{c.listedDate ? " · " : ""}off market {shortDate(c.removedDate || c.lastSeenDate)}</span>
-                            : (c.removedDate || c.lastSeenDate) && !c.listedDate
-                              ? <span>seen {shortDate(c.removedDate || c.lastSeenDate)}</span>
-                              : null}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                          <span className="truncate">{c.address || "(address withheld)"}</span>
-                          {c.address && (
-                            <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[11px] font-semibold text-emerald-600 hover:underline">
-                              Google
-                            </a>
-                          )}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">{stats}</div>
-                      </div>
-                    </div>
-                    {flags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap items-center gap-1">
-                        {flags.map((f, k) => (
-                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {compMsg && (
-              <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${compMsg.type === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
-                {compMsg.text}
-              </div>
-            )}
-
-          {/* ARV result — hidden until comps are pulled, matching the sold panel's empty state */}
-          {comps.length > 0 && (
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <Stat label={arvStat.label} value={usd(arv)} tone="good" big sub={arvStat.sub} />
-              <Stat label="Avg $/sf" value={avgPsf ? `$${avgPsf.toFixed(0)}` : "—"} sub={`${gridSummary.usedCount} of ${gridSummary.validCount} comps · size-adjusted`} />
-            </div>
-          )}
-        </div>
-
         {/* ACTUAL SOLD COMPS (recorded closings) */}
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
@@ -1071,6 +993,13 @@ export default function App() {
                 <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-500">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling…
                 </span>
+              )}
+              {soldData?.mlsChecked && (
+                <button type="button" onClick={() => setMlsOnly((v) => !v)}
+                  title="Only show recorded sales we matched to an MLS listing (arm's-length, marketed sales)"
+                  className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${mlsOnly ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                  {mlsOnly ? "✓ MLS sales only" : "MLS sales only"}
+                </button>
               )}
               {!soldAdd && (
                 <button type="button" onClick={() => setSoldAdd({ address: "", sqft: "", price: "" })}
@@ -1128,7 +1057,7 @@ export default function App() {
               {soldSummary.thin && (
                 <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span><b>Thin comps — only {soldSummary.usedCount} of the {SOLID_TARGET} solid sales this ARV wants.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or lean on the AVM side until you do.</span>
+                  <span><b>Thin comps — only {soldSummary.usedCount} of the {SOLID_TARGET} solid sales this ARV wants.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp.</span>
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -1145,11 +1074,10 @@ export default function App() {
                         <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${c.included ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-transparent"}`}>✓</span>
                         <span className="text-xs font-semibold text-slate-700">Include in ARV</span>
                       </button>
-                      <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "DEED"}</span>
+                      <span className="flex shrink-0 items-center gap-1">{c.mls && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-700" title={c.mls.number ? `MLS # ${c.mls.number}` : "Matched to an MLS listing"}>MLS</span>}<span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "DEED"}</span></span>
                     </div>
                     <div className="mt-2 flex gap-3">
-                      <a href={c.lat != null && c.lng != null ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lng}` : `https://www.google.com/maps/place/${encodeURIComponent(c.address || "")}`}
-                        target="_blank" rel="noopener noreferrer" title="Open Street View"
+                      <button type="button" onClick={() => setCompDetail({ panel: "sold", i: c.i })} title="Open comp details"
                         className="relative flex h-20 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100 transition hover:ring-2 hover:ring-emerald-300">
                         <Building2 className="h-7 w-7 text-slate-300" />
                         {c.address && (
@@ -1157,7 +1085,7 @@ export default function App() {
                             className="absolute inset-0 h-full w-full object-cover"
                             onError={(e) => { e.currentTarget.style.display = "none"; }} />
                         )}
-                      </a>
+                      </button>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(c.salePrice)}</span>
@@ -1203,45 +1131,17 @@ export default function App() {
         </div>
 
         {/* ARV SOURCE PICKER — which valuation drives the deal */}
-        {(() => {
-          const avmVal = rentcastArv > 0 && gridArv > 0 ? Math.round(gridArv) : null;              // the AVM-path ARV — same number as the After-Repair Value card
-          const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;  // ARV from actual recorded sales
-          const avgVal = avmVal && soldVal ? Math.round((avmVal + soldVal) / 2) : null;             // reconciled blend of the two
-          const cur = num(arvOverride);
-          const pickBtn = (val, label, sub, missing) => (
-            <button type="button" disabled={!val} onClick={() => setArvOverride(String(val))}
-              title={!val ? missing : `Set the deal's ARV to ${usd(Math.max(0, val + subjAdjust))}`}
-              className={`rounded-xl border px-3 py-2.5 text-left transition ${!val
-                ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-50"
-                : cur === val
-                  ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200"
-                  : "border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40"}`}>
-              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}{val && cur === val ? " ✓" : ""}</div>
-              <div className="font-mono text-lg font-bold tabular-nums text-slate-800">{val ? usd(Math.max(0, val + subjAdjust)) : "—"}</div>
-              <div className="text-[10px] leading-tight text-slate-400">{val ? sub : missing}</div>
-            </button>
-          );
-          return (
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-              <SectionTitle>Which number drives the deal?</SectionTitle>
-              <div className="mt-1 grid gap-3 sm:grid-cols-3">
-                {pickBtn(avmVal, "Use AVM number", "RentCast model estimate", "Run Auto-comp above to get the AVM")}
-                {pickBtn(soldVal, "Use ARV number", "sold-comp ARV · recorded sales", "Run Auto-comp above to get this")}
-                {pickBtn(avgVal, "Use average of both", "AVM + sold-comp ARV, split down the middle", "Needs both the AVM and sold comps")}
-              </div>
-              {subjAdjust !== 0 && (
-                <div className="mt-2 text-[10px] text-slate-400">
-                  All three include your {subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(subjAdjust))} bed/bath record correction from up top.
-                </div>
-              )}
-              <div className="mt-3">
-                <Field label="Or enter ARV directly" hint="overrides comps">
-                  <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
-                </Field>
-              </div>
-            </div>
-          );
-        })()}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <SectionTitle>ARV override</SectionTitle>
+          <div className="mt-1 text-[11px] leading-snug text-slate-500">
+            The deal math runs on the sold-comp ARV automatically{subjAdjust !== 0 ? " (your bed/bath record correction rides on top)" : ""}. Type a number here only when you want to overrule the comps.
+          </div>
+          <div className="mt-3">
+            <Field label="Enter ARV directly" hint="overrides comps">
+              <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
+            </Field>
+          </div>
+        </div>
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
