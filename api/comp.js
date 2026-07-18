@@ -81,6 +81,8 @@ export default async function handler(req, res) {
         yearBuilt: c.yearBuilt ?? null,
         propertyType: c.propertyType ?? null,
         distance: c.distance ?? null,
+        lat: c.latitude ?? null,              // coordinates for the comp map
+        lng: c.longitude ?? null,
         daysOnMarket: c.daysOnMarket ?? null,
         daysOld: c.daysOld ?? null,
         listedDate: c.listedDate ?? null,     // when it hit the market

@@ -106,6 +106,8 @@ export default async function handler(req, res) {
           beds: p.bedrooms ?? null,
           baths: p.bathrooms ?? null,
           yearBuilt: p.yearBuilt ?? null,
+          lat: p.latitude ?? null,                    // coordinates for the comp map
+          lng: p.longitude ?? null,
           propertyType: p.propertyType ?? null,
           distance: Number.isFinite(sLat) && Number.isFinite(sLng) && p.latitude != null && p.longitude != null
             ? Math.round(distMi(sLat, sLng, Number(p.latitude), Number(p.longitude)) * 100) / 100

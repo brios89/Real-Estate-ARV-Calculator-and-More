@@ -341,6 +341,57 @@ const SectionTitle = ({ children }) => (
 );
 
 // ---------- main ----------
+// Interactive comp map (Leaflet, loaded from CDN in index.html). Subject = red ★; comps = numbered pins:
+// emerald = in the ARV, amber = flagged out, slate = out for other reasons. Clicking a pin toggles it
+// in/out of that section's ARV — same effect as the include/exclude buttons on the cards.
+const CompMap = ({ subject, pins, onToggle }) => {
+  const boxRef = useRef(null);
+  const mapRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!boxRef.current || mapRef.current) return;
+    let tries = 0;
+    let cancelled = false;
+    const boot = () => {
+      if (cancelled) return;
+      const L = window.L;
+      if (!L) { if (tries++ < 40) setTimeout(boot, 150); return; }   // wait for the CDN script
+      const m = L.map(boxRef.current, { scrollWheelZoom: false });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
+      mapRef.current = { m, layer: L.layerGroup().addTo(m) };
+      setReady(true);
+    };
+    boot();
+    return () => { cancelled = true; if (mapRef.current) { mapRef.current.m.remove(); mapRef.current = null; } };
+  }, []);
+  useEffect(() => {
+    const L = window.L;
+    if (!ready || !L || !mapRef.current) return;
+    const { m, layer } = mapRef.current;
+    layer.clearLayers();
+    const pts = [];
+    const dot = (bg, txt, size = 24, fs = 11) => L.divIcon({
+      className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+      html: `<div style="background:${bg};color:#fff;border-radius:9999px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${fs}px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${txt}</div>`,
+    });
+    if (subject && subject.lat != null && subject.lng != null) {
+      L.marker([subject.lat, subject.lng], { icon: dot("#dc2626", "★", 28, 13), zIndexOffset: 1000 })
+        .addTo(layer).bindTooltip(subject.label || "Subject");
+      pts.push([subject.lat, subject.lng]);
+    }
+    pins.forEach((p) => {
+      if (p.lat == null || p.lng == null) return;
+      const bg = p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
+      const mk = L.marker([p.lat, p.lng], { icon: dot(bg, String(p.n)) }).addTo(layer);
+      mk.bindTooltip(`#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
+      if (onToggle) mk.on("click", () => onToggle(p.i));
+      pts.push([p.lat, p.lng]);
+    });
+    if (pts.length) { m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
+  }, [ready, subject, pins, onToggle]);
+  return <div ref={boxRef} className="relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200" />;
+};
+
 export default function App() {
   // property + ARV
   const [address, setAddress] = useState("");
@@ -410,6 +461,8 @@ export default function App() {
         removedDate: c.removedDate,
         lastSeenDate: c.lastSeenDate,
         status: c.status,
+        lat: c.lat ?? null,
+        lng: c.lng ?? null,
       }));
       if (incoming.length) {
         setComps(incoming);
@@ -838,6 +891,13 @@ export default function App() {
             <div className="mt-2 text-[10px] italic text-slate-400">
               The AVM average runs on the <b className="text-slate-500">included comps</b>. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition).
             </div>
+            {subjectInfo?.lat != null && comps.some((c) => c.lat != null) && (
+              <CompMap
+                subject={{ lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }}
+                pins={comps.map((c, i) => ({ i, n: i + 1, lat: c.lat ?? null, lng: c.lng ?? null, price: num(c.price), included: !!gridSummary.rows[i]?.included, flagged: (gridSummary.rows[i]?.flags || []).length > 0 })).filter((p) => p.lat != null && p.lng != null)}
+                onToggle={(i) => setGridIncluded((p) => ({ ...p, [i]: !gridSummary.rows[i]?.included }))}
+              />
+            )}
             <div className="mt-2 space-y-2">
               {comps.map((c, i) => {
                 const row = gridSummary.rows[i] || { flags: [], valid: false, included: false, manual: false };
@@ -966,6 +1026,13 @@ export default function App() {
           <div className="mt-2 text-[10px] italic text-slate-400">
             The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
           </div>
+          {subjectInfo?.lat != null && soldSummary && soldSummary.flagged.some((c) => c.lat != null) && (
+            <CompMap
+              subject={{ lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }}
+              pins={soldSummary.flagged.map((c) => ({ i: c.i, n: c.i + 1, lat: c.lat ?? null, lng: c.lng ?? null, price: c.salePrice, included: !!c.included, flagged: c.flags.length > 0 })).filter((p) => p.lat != null && p.lng != null)}
+              onToggle={(i) => { const cur = soldSummary.flagged.find((x) => x.i === i); setSoldIncluded((p) => ({ ...p, [i]: !(cur && cur.included) })); }}
+            />
+          )}
 
           {soldMsg && (
             <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${soldMsg.type === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
