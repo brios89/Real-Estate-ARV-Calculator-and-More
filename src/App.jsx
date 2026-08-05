@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle } from "lucide-react";
+import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle, Phone, ChevronRight, ChevronLeft, Lightbulb } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
 const RENT_API = "/api/rent";
@@ -485,6 +485,369 @@ const CompDetailModal = ({ data, onClose, onToggle }) => {
   );
 };
 
+// ============================== OFFER CALL MODE ==============================
+// A guided walk through YLHB's Acquisitions Script + SOP for the Offer Call.
+// Stages follow the script; answers captured here drive the strategy engine, which
+// ranks Cash / Sub-To / Hybrid / Seller Finance / Novation and hands the rep the
+// exact script language to pitch it. Scoring thresholds live in scoreStrategies —
+// tune them there. Compliance: no guarantees, ever (SOP Step 10).
+
+const INITIAL_CALL = {
+  sellerName: "", bookedBy: "",
+  motivation: "", motivNotes: "",
+  occupancy: "", condition: "", loan: "", balance: "", payment: "", rate: "", behind: "",
+  timeline: "", others: "",
+  ask: "", priceBasis: "",
+  terms: "",
+};
+
+const PILLARS = [
+  { id: "motivation", label: "Motivation", done: (c) => !!c.motivation },
+  { id: "condition", label: "Condition", done: (c) => !!c.condition },
+  { id: "timeline", label: "Timeline", done: (c) => !!c.timeline },
+  { id: "price", label: "Price", done: (c) => num(c.ask) > 0 },
+];
+
+const REBUTTALS = [
+  { t: "“There's a similar house listed for this much.”", a: "“The only person that determines the price is a ready, willing and able buyer.”" },
+  { t: "“Zillow says it's worth this much.”", a: "“Let me ask you this — has an employee of Zillow ever gone into your house to take pictures and analyze how much work it needs or doesn't need? Zillow takes the average sales price of houses sold on the MLS, and most of those are retail ready — updated, no work needed.”" },
+  { t: "“My house appraised for this much.”", a: "“Here's the thing with appraisals — the appraiser isn't the one buying the house. It's only worth what a buyer will pay. And right now average days on market is 60 to 90 days. A lot can happen in that time.”" },
+];
+
+// The engine. Inputs: what the rep captured + live deal numbers from the calculator.
+// Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
+function scoreStrategies(c, deal) {
+  const ask = num(c.ask);
+  const maxCash = deal.maxCash > 0 ? deal.maxCash : 0;
+  const arv = deal.arv > 0 ? deal.arv : 0;
+  const bal = num(c.balance);
+  const gap = ask > 0 && maxCash > 0 ? ask - maxCash : null;
+  const equity = c.loan === "yes" && ask > 0 && bal > 0 ? ask - bal : null;
+  const eqPct = equity != null && ask > 0 ? equity / ask : null;
+  const M = (q, why) => ({ q, why });
+  const out = [];
+
+  // ---- CASH ----
+  {
+    let sc = 45; const rs = [], warn = [], miss = [];
+    if (gap != null && gap <= maxCash * 0.05) { sc += 30; rs.push("Their number is at or under your max cash offer — just close it."); }
+    if (gap != null && gap > maxCash * 0.15) { sc -= 35; warn.push("Their number is well above cash — pitch cash to anchor, then pivot creative."); }
+    if (c.condition === "heavy") { sc += 10; rs.push("Heavy rehab — classic cash / wholesale profile."); }
+    if (c.timeline === "asap") { sc += 8; rs.push("They need speed, and cash closes fastest."); }
+    if (c.behind === "yes") { sc += 8; rs.push("Behind on payments — a fast close stops the bleeding."); }
+    if (ask <= 0) miss.push(M("“If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”", "Their number sets the whole strategy."));
+    if (maxCash <= 0) miss.push(M("Run Auto-comp up top so the ARV and max cash offer are live.", "Without ARV there's no cash number to compare."));
+    out.push({ id: "cash", label: "Cash offer", tab: "cash", sc, rs, warn, miss,
+      pitch: ["“We use lenders and private capital to buy houses, but flips come with risk, repairs, contractors, holding costs, commissions, and market fluctuations — so we have to buy at a number that still makes sense for us.”"] });
+  }
+
+  // ---- SUB-TO ----
+  {
+    let sc = 0; const rs = [], warn = [], miss = [];
+    if (c.loan !== "yes") {
+      warn.push(c.loan === "no" ? "No loan on the property — nothing to take over. Look at Seller Finance." : "Find out if there's a loan first.");
+      if (!c.loan) miss.push(M("“Do you still owe anything on it?”", "No loan = no Sub-To; free and clear = Seller Finance territory."));
+    } else {
+      sc = 40; rs.push("There's a loan in place to take over.");
+      if (eqPct != null && eqPct <= 0.15) { sc += 20; rs.push("Low equity — their ask sits close to the balance, so a payment takeover solves it."); }
+      if (c.behind === "yes") { sc += 15; rs.push("Behind on payments — take over + reinstate arrears is the classic Sub-To save."); }
+      if (c.terms === "yes" || c.terms === "maybe") { sc += 8; rs.push("They're open to something other than a cash lump sum."); }
+      if (c.timeline === "asap") { sc += 8; rs.push("Sub-To moves fast — no new loan to originate."); }
+      if (c.condition === "heavy") { sc -= 10; warn.push("Heavy rehab on a Sub-To puts repair risk on you — price it in."); }
+      if (bal <= 0) miss.push(M("“Do you still owe anything on it?” — get the rough balance.", "Balance vs. ask decides Sub-To vs. Hybrid."));
+      if (num(c.payment) <= 0) miss.push(M("“What's your current payment?”", "The payment IS the deal — it sets your monthly basis."));
+    }
+    out.push({ id: "subto", label: "Subject-To", tab: "subto", sc, rs, warn, miss,
+      pitch: ["“What if I just took over your existing payments?”", "Get the payment, rate, and whether they're current — then run the Sub-To tab live."] });
+  }
+
+  // ---- SELLER FINANCE ----
+  {
+    let sc = 0; const rs = [], warn = [], miss = [];
+    if (c.loan === "yes" && ask > 0 && bal > ask * 0.1) {
+      warn.push("Not free and clear — with a real balance, Hybrid is the seller-carry play.");
+    } else {
+      sc = 20;
+      if (c.loan === "no") { sc += 25; rs.push("Free and clear — the textbook seller-finance setup."); }
+      if (gap != null && gap > 0) { sc += 18; rs.push("They want more than cash allows — terms can bridge the price gap."); }
+      if (c.terms === "yes") { sc += 12; rs.push("They're open to becoming the bank."); }
+      else if (c.terms === "maybe") { sc += 6; rs.push("Lukewarm on terms — worth the pitch."); }
+      if (c.timeline === "flexible") { sc += 8; rs.push("No rush — room for a terms conversation."); }
+      if (!c.loan) miss.push(M("“Do you still owe anything on it?”", "Seller finance wants free-and-clear (or close to it)."));
+      if (!c.terms) miss.push(M("“What kind of terms would make you excited about seller financing?”", "Their answer tells you if the door is open."));
+    }
+    out.push({ id: "sf", label: "Seller finance", tab: "sf", sc, rs, warn, miss,
+      pitch: ["“Sometimes becoming the bank creates a better overall solution.”", "“What kind of terms would make you excited about seller financing?”"] });
+  }
+
+  // ---- HYBRID ----
+  {
+    let sc = 0; const rs = [], warn = [], miss = [];
+    if (c.loan !== "yes") {
+      warn.push("No loan — that's straight Seller Finance, not a hybrid.");
+    } else if (eqPct != null && eqPct <= 0.15) {
+      sc = 10; warn.push("Equity's thin — plain Sub-To is likely cleaner.");
+    } else {
+      sc = 40; rs.push("A loan to take over AND real equity — Sub-To the loan, seller carries the difference.");
+      if (gap != null && gap > 0) { sc += 15; rs.push("Bridges their price without more cash out of pocket."); }
+      if (c.terms === "yes" || c.terms === "maybe") { sc += 10; rs.push("They're open to payments over time on the equity."); }
+      if (bal <= 0) miss.push(M("Get the loan balance — the equity above it is what the seller carries.", "Ask − balance = the carried piece."));
+    }
+    out.push({ id: "hybrid", label: "Hybrid (Sub-To + carry)", tab: "hybrid", sc, rs, warn, miss,
+      pitch: ["Take over the existing payments, and the seller carries the equity above the balance as a note — their price, your structure."] });
+  }
+
+  // ---- NOVATION ----
+  {
+    let sc = 15; const rs = [], warn = [], miss = [];
+    if (c.condition === "light") { sc += 22; rs.push("Light condition — it can sell retail without a full rehab."); }
+    else if (c.condition === "moderate") { sc += 8; rs.push("Moderate condition — retail is possible with cosmetic touch-ups."); }
+    else if (c.condition === "heavy") { sc -= 18; warn.push("Heavy rehab kills the retail buyer — novation is a stretch here."); }
+    if (c.timeline === "flexible") { sc += 15; rs.push("They can wait out a retail sale (figure 60–90 days on market)."); }
+    else if (c.timeline === "asap") { sc -= 12; warn.push("A retail timeline won't fit their urgency."); }
+    if (gap != null && gap > 0 && arv > 0 && ask <= arv * 0.9 - deal.repairs) { sc += 12; rs.push("Their number fits under a retail sale with room for the spread."); }
+    if (c.occupancy === "tenant") { sc -= 10; warn.push("Tenant in place makes retail showings hard."); }
+    if (c.occupancy === "vacant") { sc += 6; rs.push("Vacant — easy access for showings and photos."); }
+    if (!c.condition) miss.push(M("“What can you tell me about the current condition?”", "Condition decides if a retail buyer will touch it."));
+    if (!c.timeline) miss.push(M("“How soon are you hoping to close?”", "Novation needs a seller who can wait."));
+    out.push({ id: "nov", label: "Novation", tab: "nov", sc, rs, warn, miss,
+      pitch: ["“We prepare and sell it retail on your behalf — you get closer to the retail number, we handle the work and the buyers, and you get paid at closing.”"] });
+  }
+
+  for (const o of out) o.sc = Math.max(0, Math.min(100, Math.round(o.sc)));
+  out.sort((a, b) => b.sc - a.sc);
+  return { ranked: out, gap, equity };
+}
+
+// ---- tiny self-contained inputs so the drawer has zero dependencies on App-scoped components ----
+const WChips = ({ value, onChange, opts }) => (
+  <div className="mt-1.5 flex flex-wrap gap-1.5">
+    {opts.map(([v, l]) => (
+      <button key={v} type="button" onClick={() => onChange(value === v ? "" : v)}
+        className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${value === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+        {l}
+      </button>
+    ))}
+  </div>
+);
+const WField = ({ label, children }) => (
+  <div className="mt-3">
+    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</div>
+    {children}
+  </div>
+);
+const WText = ({ value, onChange, placeholder, money }) => (
+  <div className="relative mt-1.5">
+    {money && <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">$</span>}
+    <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} inputMode={money ? "numeric" : "text"}
+      className={`w-full rounded-md border border-slate-200 bg-white py-1.5 pr-2.5 font-mono text-xs text-slate-800 outline-none focus:border-emerald-400 ${money ? "pl-6" : "pl-2.5"}`} />
+  </div>
+);
+const Line = ({ children }) => (
+  <div className="mt-2 rounded-lg border-l-4 border-emerald-500 bg-emerald-50/60 px-3 py-2 text-[12px] leading-snug text-slate-700">{children}</div>
+);
+const Hint = ({ children }) => (
+  <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+    <Lightbulb className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+    <span>{children}</span>
+  </div>
+);
+
+const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Price", "Numbers", "Strategy", "Close"];
+
+const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) => {
+  const [stage, setStage] = useState(0);
+  useEffect(() => { if (open) setStage((v) => v); }, [open]);
+  if (!open) return null;
+  const strat = scoreStrategies(cs, deal);
+  const name = cs.sellerName.trim();
+  const nm = name || "John";
+  const canPrev = stage > 0, canNext = stage < CALL_STAGES.length - 1;
+  return (
+    <div className="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-slate-200 bg-white shadow-2xl sm:w-[470px]">
+      {/* header */}
+      <div className="border-b border-slate-100 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Phone className="h-4 w-4 text-emerald-600" /> Offer Call</div>
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">New call</button>
+            <button type="button" onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+          </div>
+        </div>
+        {/* four pillars */}
+        <div className="mt-2 flex items-center gap-1.5">
+          {PILLARS.map((p) => (
+            <span key={p.id} className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${p.done(cs) ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
+              {p.done(cs) ? <CheckCircle2 className="h-3 w-3" /> : <MinusCircle className="h-3 w-3" />}{p.label}
+            </span>
+          ))}
+        </div>
+        {/* stage pips */}
+        <div className="mt-2 flex flex-wrap gap-1">
+          {CALL_STAGES.map((t, i) => (
+            <button key={t} type="button" onClick={() => setStage(i)}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${i === stage ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>{t}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* body */}
+      <div className="flex-1 overflow-y-auto p-3 pb-4">
+        {stage === 0 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Before you dial (SOP Step 1)</div>
+          <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
+          <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
+          <WField label="Seller first name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John" /></WField>
+          <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
+          <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-500">“People do not care how much you know, until they know how much you care.”</div>
+        </div>)}
+
+        {stage === 1 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Opening</div>
+          <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and my partner {cs.bookedBy.trim() || "Mary"} scheduled a call for us today because you were looking to sell your property on ____. Is that right?”</Line>
+          <Line>Or simply: “Hi {nm}, my name is ____ and I'm partners with {cs.bookedBy.trim() || "Mary"}. How are you doing today?”</Line>
+          <Hint>Acknowledge their surroundings and mirror their energy. Slow it down — comfort first, authority second, numbers later.</Hint>
+        </div>)}
+
+        {stage === 2 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Rapport &amp; motivation</div>
+          <Line>“Catch me up to speed — what's going on with the house?”</Line>
+          <Line>“What has you thinking about selling?”</Line>
+          <Line>“How were you hoping we could help?”</Line>
+          <Hint>Don't interrogate — keep it natural. Probe with “What's that been like?” · “How long has that been going on?” · “What happens next once you sell?”</Hint>
+          <WField label="Main motivator (the 3 from the script)">
+            <WChips value={cs.motivation} onChange={(v) => upd("motivation", v)} opts={[["distress", "Property distress"], ["hardship", "Financial hardship"], ["urgency", "Urgency"]]} />
+          </WField>
+          <WField label="Notes — their why, in their words"><WText value={cs.motivNotes} onChange={(v) => upd("motivNotes", v)} placeholder="tired landlord, moving to FL for grandkids…" /></WField>
+        </div>)}
+
+        {stage === 3 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Property discovery</div>
+          <Line>“What have you done to the property since you bought it?” · “What can you tell me about the current condition?”</Line>
+          <Hint>Skip the roof/HVAC interrogation — you want the overall rehab level and their perception, not an inspection.</Hint>
+          <WField label="Condition (drives repairs in the calculator)">
+            <WChips value={cs.condition} onChange={(v) => { upd("condition", v); onCondition(v); }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
+          </WField>
+          <WField label="Occupancy">
+            <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
+          </WField>
+          <Line>“Do you still owe anything on it?”</Line>
+          <Hint>Ask it exactly that casually. If yes, follow with “What's your current payment?” — the payment and balance quietly decide Sub-To vs Hybrid vs Seller Finance.</Hint>
+          <WField label="Loan on the property?">
+            <WChips value={cs.loan} onChange={(v) => upd("loan", v)} opts={[["yes", "Yes"], ["no", "Free & clear"]]} />
+          </WField>
+          {cs.loan === "yes" && (<>
+            <div className="grid grid-cols-2 gap-2">
+              <WField label="Approx. balance"><WText money value={cs.balance} onChange={(v) => upd("balance", v)} placeholder="148000" /></WField>
+              <WField label="Monthly payment"><WText money value={cs.payment} onChange={(v) => upd("payment", v)} placeholder="1150" /></WField>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <WField label="Rate (if they know)"><WText value={cs.rate} onChange={(v) => upd("rate", v)} placeholder="3.25%" /></WField>
+              <WField label="Behind on payments?"><WChips value={cs.behind} onChange={(v) => upd("behind", v)} opts={[["yes", "Yes"], ["no", "Current"]]} /></WField>
+            </div>
+          </>)}
+        </div>)}
+
+        {stage === 4 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Timeline</div>
+          <Line>“How soon are you hoping to close?”</Line>
+          <Line>“Is there anyone else involved in the decision?”</Line>
+          <Line>“In a perfect world, what would this situation look like for you?”</Line>
+          <WField label="Timeline">
+            <WChips value={cs.timeline} onChange={(v) => upd("timeline", v)} opts={[["asap", "ASAP (≤ 2 wks)"], ["soon", "30–60 days"], ["flexible", "Flexible"]]} />
+          </WField>
+          <WField label="Other decision makers"><WText value={cs.others} onChange={(v) => upd("others", v)} placeholder="spouse, sibling on title…" /></WField>
+        </div>)}
+
+        {stage === 5 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Price discovery</div>
+          <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>
+          <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
+          <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
+          <WField label="“How did you come up with that number?”"><WText value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
+          <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Rebuttals — tap to open</div>
+          {REBUTTALS.map((r, i) => (
+            <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">{r.t}</summary>
+              <div className="mt-1.5 text-[11px] leading-snug text-slate-600">{r.a}</div>
+            </details>
+          ))}
+        </div>)}
+
+        {stage === 6 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Run the numbers</div>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">ARV</div><div className="font-mono text-sm font-bold text-slate-800">{deal.arv > 0 ? usd(deal.arv) : "—"}</div></div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Max cash</div><div className="font-mono text-sm font-bold text-slate-800">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div></div>
+            <div className={`rounded-lg border p-2 ${strat.gap != null && strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Gap</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? (strat.gap > 0 ? "+" : "") + usd(strat.gap) : "—"}</div></div>
+          </div>
+          {deal.maxCash <= 0 && <Hint>No ARV yet — hit <b>Auto-comp</b> up top. The strategy stage needs the max cash number to rank against their ask.</Hint>}
+          <Line>Value framing: “What Zillow doesn't know is the actual condition of the property.” · “We buy houses as-is. No repairs, no commissions, no inspections, and no showings.” · “We can close quickly and make this process simple.”</Line>
+          <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
+          <Hint>Negotiation anchor, script-style: “In a perfect world, we would probably need to be somewhere in the low ____s. Now obviously the world isn't perfect — but how close could you get me to that?” Anchor a bit under your max cash so there's room to move.</Hint>
+          <Line>Takeaway close if they hold firm: “If that's truly what you need to accomplish your goal, then honestly listing it with an agent might make more sense.”</Line>
+          <WField label="Open to payments over time? (sets up creative)">
+            <WChips value={cs.terms} onChange={(v) => upd("terms", v)} opts={[["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]]} />
+          </WField>
+        </div>)}
+
+        {stage === 7 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Strategy — best fit first</div>
+          {strat.gap != null && strat.gap > 0 && (
+            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-[11px] leading-snug text-slate-700">
+              <b>The Concierge transition (their number beats cash):</b> “It sounds like you like everything about what we discussed other than the price… probably 9 out of 10 homeowners we talk with feel the same way. So what we did was develop a way to offer sellers more money and still have it make sense for us — our Concierge Program. If I could get you closer to your number, would you like to go over the details, or should we just part ways now?”
+            </div>
+          )}
+          {strat.ranked.map((o, i) => (
+            <div key={o.id} className={`mt-2 rounded-xl border p-3 ${i === 0 && o.sc > 0 ? "border-emerald-400 bg-emerald-50/40" : "border-slate-200 bg-white"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-[12px] font-bold text-slate-800">
+                  {o.label}
+                  {i === 0 && o.sc > 0 && <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">Best fit</span>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[11px] font-bold text-slate-500">{o.sc}</span>
+                  <button type="button" onClick={() => onTab(o.tab)} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">Open tab</button>
+                </div>
+              </div>
+              {o.rs.map((r, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-slate-600"><CheckCircle2 className="mt-px h-3 w-3 shrink-0 text-emerald-500" />{r}</div>)}
+              {o.warn.map((w, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-amber-700"><AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}</div>)}
+              {o.miss.length > 0 && (
+                <div className="mt-1.5 rounded-md bg-slate-50 px-2.5 py-1.5">
+                  <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">To sharpen this — ask:</div>
+                  {o.miss.map((m, k) => <div key={k} className="mt-1 text-[11px] leading-snug text-slate-600"><span className="font-semibold">{m.q}</span> <span className="text-slate-400">— {m.why}</span></div>)}
+                </div>
+              )}
+              {i === 0 && o.sc > 0 && o.pitch.map((p, k) => <Line key={k}>{p}</Line>)}
+            </div>
+          ))}
+        </div>)}
+
+        {stage === 8 && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Close it out</div>
+          <Line>Commitment close: “If we can make the numbers work, are you ready to move forward today?”</Line>
+          <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+            <b>Never send agreements without walking through them live on the phone.</b> Verify seller info → send the agreement → review it line-by-line together → confirm signatures while you're still on the call.
+          </div>
+          <Line>Stress test (after signing): “When someone asks you why you decided to sell the house to us, what are you going to tell them?” — you want THEIR reason, not your pitch back. Coach if needed: “Would you say it helps you get closer to ___? It saves you time, energy, and money?”</Line>
+          <Line>Next steps: “Within the next few days we'll likely need access for photos, walkthroughs, or contractors.”</Line>
+          <Line>End in rapport: “It was great getting to know you.” · “Congratulations on getting this process started.” · “So what's the next chapter for you after this?”</Line>
+          <Hint>Compliance (SOP): no guarantees, no legal advice, approved contracts only. Then: submit to the TC same day, title open within 1 business day, notify Dispositions.</Hint>
+        </div>)}
+      </div>
+
+      {/* footer nav */}
+      <div className="flex items-center justify-between border-t border-slate-100 p-2.5">
+        <button type="button" disabled={!canPrev} onClick={() => setStage((v) => Math.max(0, v - 1))}
+          className="flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 disabled:opacity-40 hover:bg-slate-50"><ChevronLeft className="h-3.5 w-3.5" /> Back</button>
+        <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{CALL_STAGES[stage]}</div>
+        <button type="button" disabled={!canNext} onClick={() => setStage((v) => Math.min(CALL_STAGES.length - 1, v + 1))}
+          className="flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40 hover:bg-slate-700">Next <ChevronRight className="h-3.5 w-3.5" /></button>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   // property + ARV
   const [address, setAddress] = useState("");
@@ -502,6 +865,8 @@ export default function App() {
   const [rentMsg, setRentMsg] = useState(null);
   const [rentFetchedFor, setRentFetchedFor] = useState(""); // address we last pulled rent for (lazy-load guard)
   const [tab, setTab] = useState("cash");
+  const [callOpen, setCallOpen] = useState(false); // Offer Call drawer (acquisitions script walkthrough)
+  const [callState, setCallState] = useState(INITIAL_CALL);
   const [subjectInfo, setSubjectInfo] = useState(null);
   // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
   const [subjDetail, setSubjDetail] = useState(null);
@@ -897,6 +1262,23 @@ export default function App() {
                   />
                 );
               })()}
+              {/* ---- Offer Call: launch pill + guided drawer ---- */}
+              {!callOpen && (
+                <button type="button" onClick={() => setCallOpen(true)}
+                  className="fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-xl hover:bg-emerald-700">
+                  <Phone className="h-4 w-4" /> Offer Call
+                </button>
+              )}
+              <OfferCall
+                open={callOpen}
+                onClose={() => setCallOpen(false)}
+                cs={callState}
+                upd={(k, v) => setCallState((p) => ({ ...p, [k]: v }))}
+                reset={() => setCallState(INITIAL_CALL)}
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs }}
+                onTab={(t) => setTab(t)}
+                onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
+              />
               <div className="mt-2 flex items-center gap-2">
                 <button onClick={autoComp} disabled={compLoading}
                   className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
@@ -963,6 +1345,15 @@ export default function App() {
               <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-rose-700">{subjDetail.error}</div>
             ) : subjDetail && (
               <>
+                <a href={svLink({ lat: subjDetail.raw?.lat ?? subjectInfo?.lat, lng: subjDetail.raw?.lng ?? subjectInfo?.lng, address: subjDetail.address })}
+                  target="_blank" rel="noopener noreferrer" title="Open interactive Street View"
+                  className="relative mt-3 block h-48 w-full max-w-2xl overflow-hidden rounded-xl bg-slate-100 sm:h-56">
+                  <span className="absolute inset-0 flex items-center justify-center"><Building2 className="h-10 w-10 text-slate-300" /></span>
+                  <img src={`/api/photo?size=640x360&address=${encodeURIComponent(subjDetail.address)}`} alt=""
+                    className="absolute inset-0 h-full w-full object-cover"
+                    onError={(e) => { e.currentTarget.style.display = "none"; }} />
+                  <span className="absolute bottom-2 right-2 rounded bg-slate-900/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">Street View — click to explore</span>
+                </a>
                 <div className="mt-3 flex flex-wrap gap-1.5 border-b border-slate-100 pb-2">
                   {Object.keys(subjDetail.sections).map((t) => (
                     <button key={t} type="button" onClick={() => setSubjTab(t)}
