@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle, Phone, ChevronRight, ChevronLeft, Lightbulb } from "lucide-react";
+import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle, Phone, ChevronRight, ChevronLeft, Lightbulb, Minus } from "lucide-react";
 
 // Where the proxies live. Same-origin by default on Vercel.
 const RENT_API = "/api/rent";
@@ -671,7 +671,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Phone className="h-4 w-4 text-emerald-600" /> Offer Call</div>
           <div className="flex items-center gap-1.5">
             <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">New call</button>
-            <button type="button" onClick={onClose} className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+            <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
           </div>
         </div>
         {/* four pillars */}
@@ -891,7 +891,7 @@ export default function App() {
   // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
   const [adjBeds, setAdjBeds] = useState(0);
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
-  const [bedAdjAmt, setBedAdjAmt] = useState("10000");   // $ per bedroom — appraiser count-adjustment (same sqft), not an addition
+  const [bedAdjAmt, setBedAdjAmt] = useState("15000");   // $ per bedroom — appraiser count-adjustment (same sqft), not an addition
   const [bathAdjAmt, setBathAdjAmt] = useState("10000"); // $ per FULL bath; a half bath = 0.5 × this
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
@@ -914,7 +914,7 @@ export default function App() {
         const sr = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
         const sd = await sr.json().catch(() => null);
         if (sr.ok && sd) {
-          if (sd.sections) setSubjDetail(sd);
+          if (sd.sections) { setSubjDetail(sd); setSubjDetailOpen(true); } // auto-show the panel — no extra click
           const raw = sd.raw || {};
           if (raw.sqft) setSqft(String(raw.sqft));
           setSubjectInfo({ propertyType: raw.propertyType ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
@@ -1266,7 +1266,7 @@ export default function App() {
               {!callOpen && (
                 <button type="button" onClick={() => setCallOpen(true)}
                   className="fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-xl hover:bg-emerald-700">
-                  <Phone className="h-4 w-4" /> Offer Call
+                  <Phone className="h-4 w-4" /> {Object.entries(callState).some(([k, v]) => v !== INITIAL_CALL[k]) ? "Resume call" : "Offer Call"}
                 </button>
               )}
               <OfferCall
@@ -1301,7 +1301,7 @@ export default function App() {
                 <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
                 <span className="text-[10px] text-slate-400">×</span>
-                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="10000" /></div>
+                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="15000" /></div>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-slate-500">Baths</span>
@@ -1323,7 +1323,7 @@ export default function App() {
               )}
             </div>
             <div className="mt-1 text-[10px] text-slate-400">
-              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are conservative appraiser count-adjustments ($10K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
+              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are conservative appraiser count-adjustments ($15K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
         </div>
