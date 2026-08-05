@@ -114,6 +114,7 @@ export default async function handler(req, res) {
           // when RentCast doesn't have it, it comes through null and the pop-up simply doesn't show it.
           lotSize: p.lotSize ?? null,
           ownerOccupied: typeof p.ownerOccupied === "boolean" ? p.ownerOccupied : null,
+          architecture: (p.features && p.features.architectureType) || null,
           heating: (p.features && (p.features.heatingType || (p.features.heating === true ? "Yes" : null))) || null,
           cooling: (p.features && (p.features.coolingType || (p.features.cooling === true ? "Yes" : null))) || null,
           garage: (p.features && (p.features.garageType || (p.features.garage === true ? (p.features.garageSpaces ? `${p.features.garageSpaces}-car` : "Yes") : null))) || null,

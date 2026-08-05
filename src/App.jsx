@@ -24,6 +24,17 @@ const propLine = (info) => {
 
 // Junk-comp check (flag-only): compare a comp to the subject and return reasons it may be a weak comp.
 // Tolerances: >1 bed, >1 bath, >15 yrs build age, >250 sq ft, or >0.5 mi away.
+// Build-type classifier: collapses architecture/property-type strings into families that actually
+// price differently. Style differences (ranch vs colonial) do NOT flag — attached vs detached does.
+const archClass = (arch, ptype) => {
+  const t = `${arch || ""} ${ptype || ""}`.toLowerCase();
+  if (/town\s?house|town\s?home|row\s?house|rowhome|attached/.test(t)) return "attached";
+  if (/condo/.test(t)) return "condo";
+  if (/manufactured|mobile|modular/.test(t)) return "manufactured";
+  if (/duplex|triplex|fourplex|multi/.test(t)) return "multi";
+  return "detached";
+};
+
 const compFlags = (c, subj, subjSqft) => {
   const flags = [];
   if (!c) return flags;
@@ -38,6 +49,11 @@ const compFlags = (c, subj, subjSqft) => {
   if (cs && ss && Math.abs(cs - ss) > 250) flags.push(`${Math.abs(cs - ss).toLocaleString()} sf off`);
   const cd = nOr(c.distance);
   if (cd != null && cd > 0.5) flags.push(`${cd.toFixed(1)} mi away`);
+  // different build type = different market — a townhouse can't price a detached house
+  if ((c.architecture || c.propertyType) && (subj?.architecture || subj?.propertyType)) {
+    const ca = archClass(c.architecture, c.propertyType), sa = archClass(subj.architecture, subj.propertyType);
+    if (ca !== sa) flags.push(`${ca} vs ${sa} build`);
+  }
   return flags;
 };
 
@@ -918,7 +934,7 @@ export default function App() {
           if (sd.sections) { setSubjDetail(sd); setSubjDetailOpen(true); } // auto-show the panel — no extra click
           const raw = sd.raw || {};
           if (raw.sqft) setSqft(String(raw.sqft));
-          setSubjectInfo({ propertyType: raw.propertyType ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
+          setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
         }
       } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
@@ -1233,6 +1249,7 @@ export default function App() {
                   c.distance != null ? { label: "Distance", value: `${Number(c.distance).toFixed(2)} mi` } : null,
                   c.saleDate ? { label: "Sale date", value: mediumDate(c.saleDate) } : null,
                   c.propertyType ? { label: "Type", value: String(c.propertyType) } : null,
+                  c.architecture ? { label: "Architecture", value: String(c.architecture) } : null,
                   c.ownerOccupied != null ? { label: "Occupancy", value: c.ownerOccupied ? "Owner occupied" : "Absentee owner", amber: !c.ownerOccupied } : null,
                   c.heating ? { label: "Heating", value: String(c.heating) } : null,
                   c.cooling ? { label: "A/C", value: String(c.cooling) } : null,
