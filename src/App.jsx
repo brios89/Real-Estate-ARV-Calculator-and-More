@@ -660,6 +660,10 @@ const WText = ({ value, onChange, placeholder, money }) => (
       className={`w-full rounded-md border border-slate-200 bg-white py-1.5 pr-2.5 font-mono text-xs text-slate-800 outline-none focus:border-emerald-400 ${money ? "pl-6" : "pl-2.5"}`} />
   </div>
 );
+const WArea = ({ value, onChange, placeholder }) => (
+  <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={3}
+    className="mt-1.5 w-full resize-y rounded-md border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs leading-relaxed text-slate-800 outline-none focus:border-emerald-400" />
+);
 const Line = ({ children }) => (
   <div className="mt-2 rounded-lg border-l-4 border-emerald-500 bg-emerald-50/60 px-3 py-2 text-[12px] leading-snug text-slate-700">{children}</div>
 );
@@ -669,6 +673,60 @@ const Hint = ({ children }) => (
     <span>{children}</span>
   </div>
 );
+
+// Builds a self-contained HTML report of the whole call — every captured input, the live deal
+// numbers, and the strategy ranking at the moment of download. Opens anywhere, prints to PDF clean.
+const buildCallReport = (cs, deal, strat) => {
+  const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+  const lbl = { light: "Light rehab", moderate: "Moderate rehab", heavy: "Heavy rehab", vacant: "Vacant", owner: "Owner occupied", tenant: "Tenant occupied", yes: "Yes", no: "No", maybe: "Maybe", asap: "ASAP (2 weeks or less)", soon: "30-60 days", flexible: "Flexible", distress: "Property distress", hardship: "Financial hardship", urgency: "Urgency" };
+  const v = (x, money) => (x === "" || x == null ? "&mdash;" : money ? esc(usd(num(x))) : esc(lbl[x] || x));
+  const row = (k, val) => `<tr><td>${k}</td><td>${val}</td></tr>`;
+  const pillars = PILLARS.map((p) => `<span class="pill ${p.done(cs) ? "on" : ""}">${p.label}</span>`).join("");
+  const stratRows = strat.ranked.map((o, i) => `
+    <div class="strat ${i === 0 && o.sc > 0 ? "best" : ""}">
+      <div class="strathead"><b>${i + 1}. ${esc(o.label)}</b><span>${i === 0 && o.sc > 0 ? "BEST FIT &middot; " : ""}score ${o.sc}</span></div>
+      ${o.rs.map((r) => `<div class="why">&#10003; ${esc(r)}</div>`).join("")}
+      ${o.warn.map((w) => `<div class="warn">&#9888; ${esc(w)}</div>`).join("")}
+      ${o.miss.map((m) => `<div class="miss">Still to ask: ${esc(m.q)}</div>`).join("")}
+    </div>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>YLHB Offer Call Report</title><style>
+    body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 16px;font-size:13px;line-height:1.45}
+    h1{font-size:18px;margin:0;color:#065f46}.sub{color:#64748b;font-size:11px;margin-top:2px}
+    h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#94a3b8;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin:22px 0 8px}
+    table{width:100%;border-collapse:collapse}td{padding:4px 6px;border-bottom:1px solid #f1f5f9;vertical-align:top}td:first-child{width:220px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+    .pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;background:#f1f5f9;color:#94a3b8;margin-right:6px}.pill.on{background:#d1fae5;color:#047857}
+    .strat{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-top:8px}.strat.best{border-color:#059669;background:#ecfdf5}
+    .strathead{display:flex;justify-content:space-between;font-size:13px}.strathead span{color:#64748b;font-size:11px}
+    .why{color:#334155;margin-top:3px}.warn{color:#b45309;margin-top:3px}.miss{color:#64748b;font-style:italic;margin-top:3px}
+    .foot{margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:10px}
+    @media print{body{margin:0}}
+  </style></head><body>
+    <h1>YLHB &mdash; Offer Call Report</h1>
+    <div class="sub">${esc(deal.address || "No address entered")} &middot; ${new Date().toLocaleString()}</div>
+    <div style="margin-top:10px">${pillars}</div>
+    <h2>Call basics</h2><table>
+      ${row("Seller", v(cs.sellerName))}${row("Booked by (lead manager)", v(cs.bookedBy))}
+      ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}
+    </table>
+    <h2>Property</h2><table>
+      ${row("Condition", v(cs.condition))}${row("Occupancy", v(cs.occupancy))}
+      ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
+    </table>
+    <h2>Timeline &amp; price</h2><table>
+      ${row("Timeline", v(cs.timeline))}${row("Other decision makers", v(cs.others))}
+      ${row("Their number", v(cs.ask, true))}${row("How they got that number", v(cs.priceBasis))}
+      ${row("Open to payments over time", v(cs.terms))}
+    </table>
+    <h2>Deal numbers at download</h2><table>
+      ${row("ARV (After Repair Value)", deal.arv > 0 ? esc(usd(deal.arv)) : "&mdash;")}
+      ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) : "&mdash;")}
+      ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
+      ${row("Gap (ask &minus; MAO)", strat.gap != null ? (strat.gap > 0 ? "+" : "") + esc(usd(strat.gap)) : "&mdash;")}
+    </table>
+    <h2>Strategy ranking</h2>${stratRows}
+    <div class="foot">Internal working document generated by the YLHB Deal Desk. Figures are estimates for analysis only &mdash; not an appraisal, not an offer, and no outcome is promised or guaranteed.</div>
+  </body></html>`;
+};
 
 const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Price", "Numbers", "Strategy", "Close"];
 
@@ -687,6 +745,18 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Phone className="h-4 w-4 text-emerald-600" /> Offer Call</div>
           <div className="flex items-center gap-1.5">
+            <button type="button" title="Download an HTML report of everything captured on this call"
+              onClick={() => {
+                const html = buildCallReport(cs, deal, strat);
+                const blob = new Blob([html], { type: "text/html" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `offer-call-${(deal.address || "report").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report"}-${new Date().toISOString().slice(0, 10)}.html`;
+                document.body.appendChild(a); a.click(); a.remove();
+                URL.revokeObjectURL(url);
+              }}
+              className="flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"><FileDown className="h-3 w-3" /> Report</button>
             <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">New call</button>
             <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
           </div>
@@ -735,7 +805,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <WField label="Main motivator (the 3 from the script)">
             <WChips value={cs.motivation} onChange={(v) => upd("motivation", v)} opts={[["distress", "Property distress"], ["hardship", "Financial hardship"], ["urgency", "Urgency"]]} />
           </WField>
-          <WField label="Notes — their why, in their words"><WText value={cs.motivNotes} onChange={(v) => upd("motivNotes", v)} placeholder="tired landlord, moving to FL for grandkids…" /></WField>
+          <WField label="Notes — their why, in their words"><WArea value={cs.motivNotes} onChange={(v) => upd("motivNotes", v)} placeholder="tired landlord, moving to FL for grandkids…" /></WField>
         </div>)}
 
         {stage === 3 && (<div>
@@ -773,7 +843,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <WField label="Timeline">
             <WChips value={cs.timeline} onChange={(v) => upd("timeline", v)} opts={[["asap", "ASAP (≤ 2 wks)"], ["soon", "30–60 days"], ["flexible", "Flexible"]]} />
           </WField>
-          <WField label="Other decision makers"><WText value={cs.others} onChange={(v) => upd("others", v)} placeholder="spouse, sibling on title…" /></WField>
+          <WField label="Other decision makers"><WArea value={cs.others} onChange={(v) => upd("others", v)} placeholder="spouse, sibling on title…" /></WField>
         </div>)}
 
         {stage === 5 && (<div>
@@ -781,7 +851,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>
           <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
           <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
-          <WField label="“How did you come up with that number?” (optional)"><WText value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
+          <WField label="“How did you come up with that number?” (optional)"><WArea value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
           <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Rebuttals — tap to open</div>
           {REBUTTALS.map((r, i) => (
             <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -1293,7 +1363,7 @@ export default function App() {
                 cs={callState}
                 upd={(k, v) => setCallState((p) => ({ ...p, [k]: v }))}
                 reset={() => setCallState(INITIAL_CALL)}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs }}
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
@@ -2313,7 +2383,7 @@ function CashTab(props) {
     const spread = activeInvestorMao - ask;
     if (ask <= activeInvestorMao) {
       status = "go"; headline = "WHOLESALE — lock it";
-      detail = `At ${usd(ask)} you're under your investor MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
+      detail = `At ${usd(ask)} you're under your MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
     } else if (ask <= activeRuleMao) {
       status = "maybe"; headline = "FLIP margin — thin for an assignment";
       detail = `Works as a flip at the ${activePct}% rule, but ${usd(ask - activeInvestorMao)} over your wholesale MAO. Renegotiate or shrink the fee.`;
@@ -2328,7 +2398,7 @@ function CashTab(props) {
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <SectionTitle>Your wholesale numbers</SectionTitle>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your Investor MAO, and added on top for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
+          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
           <Field label="Seller asking price" hint="negotiations & final contract price" info="One price for both jobs: it grades the deal while you negotiate, and prints on the buyer deck as your contract price (plus your wholesale fee). Just update it to your locked number once you're under contract."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
         </div>
       </div>
@@ -2354,7 +2424,7 @@ function CashTab(props) {
               <CRow label="= Wholesale price" a={usd(ruleMaoUnder)} b={usd(ruleMaoOver)} muted />
               <CRow label="− Your fee" a={usd(num(wholesaleFee))} b={usd(num(wholesaleFee))} />
               <tr className="border-t-2 border-slate-200">
-                <td className="py-2 font-sans text-[11px] font-bold uppercase tracking-wide text-slate-500">Investor MAO</td>
+                <td className="py-2 font-sans text-[11px] font-bold uppercase tracking-wide text-slate-500">MAO (Max Allowable Offer)</td>
                 <td className={`py-2 text-right text-base font-bold ${!isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoUnder)}</td>
                 <td className={`py-2 text-right text-base font-bold ${isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoOver)}</td>
               </tr>
@@ -2364,7 +2434,7 @@ function CashTab(props) {
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Stat label={`${activePct}% Rule MAO`} value={usd(activeRuleMao)} tone={activeRuleMao > 0 ? "default" : "bad"} big sub="ARV × band − repairs" />
-          <Stat label="Investor MAO" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
+          <Stat label="MAO (Max Allowable Offer)" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
         </div>
       </div>
@@ -2379,7 +2449,7 @@ function CashTab(props) {
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Optional</span>
             </div>
             <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-              A second, optional way to find your max offer — back into it from your <b className="font-semibold text-slate-600">end buyer's</b> costs and target profit (the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not you</b>). You don't have to fill this in — the Rule and Investor MAO above already work. When you do, the number on the right updates the instant you change a field on the left.
+              A second, optional way to find your max offer — back into it from your <b className="font-semibold text-slate-600">end buyer's</b> costs and target profit (the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not you</b>). You don't have to fill this in — the Rule and MAO (Max Allowable Offer) above already work. When you do, the number on the right updates the instant you change a field on the left.
             </p>
           </div>
         </div>
