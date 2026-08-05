@@ -23,7 +23,7 @@ const propLine = (info) => {
 };
 
 // Junk-comp check (flag-only): compare a comp to the subject and return reasons it may be a weak comp.
-// Tolerances: >1 bed, >1 bath, >15 yrs build age, >250 sq ft, or >0.5 mi away.
+// Tolerances: >1 bed, >1 bath, >15 yrs build age, >250 sq ft, or >1 mi away.
 // Build-type classifier: collapses architecture/property-type strings into families that actually
 // price differently. Style differences (ranch vs colonial) do NOT flag — attached vs detached does.
 const archClass = (arch, ptype) => {
@@ -48,7 +48,7 @@ const compFlags = (c, subj, subjSqft) => {
   const cs = nOr(c.sqft), ss = subjSqft;
   if (cs && ss && Math.abs(cs - ss) > 250) flags.push(`${Math.abs(cs - ss).toLocaleString()} sf off`);
   const cd = nOr(c.distance);
-  if (cd != null && cd > 0.5) flags.push(`${cd.toFixed(1)} mi away`);
+  if (cd != null && cd > 1.0) flags.push(`${cd.toFixed(1)} mi away`); // 1 mi = normal appraiser reach in suburban markets (per B, Aug 5)
   // different build type = different market — a townhouse can't price a detached house
   if ((c.architecture || c.propertyType) && (subj?.architecture || subj?.propertyType)) {
     const ca = archClass(c.architecture, c.propertyType), sa = archClass(subj.architecture, subj.propertyType);
@@ -1466,7 +1466,7 @@ export default function App() {
               {soldSummary.thin && (
                 <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span><b>Thin comps — only {soldSummary.usedCount} of the {MIN_SOLID} solid sales this ARV needs at minimum.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp.</span>
+                  <span><b>Thin comps — only {soldSummary.usedCount} of the {MIN_SOLID} solid sales this ARV needs at minimum.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp. Appraiser\u2019s order when comps run thin: <b>go wider before you go older</b> \u2014 stretch the distance before you ever reach past the 12-month window. And YLHB\u2019s rule while you widen: <b>don\u2019t cross major roads, highways, or train tracks</b> \u2014 those lines are market boundaries, and the buyer pool changes on the other side.</span>
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
