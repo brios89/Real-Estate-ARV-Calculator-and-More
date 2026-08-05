@@ -1452,7 +1452,7 @@ export default function App() {
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Stat label="Sold-comp ARV" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `size-adjusted median × ${num(sqft)} sf` : "enter subject sq ft above"}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
+                <Stat label="Sold-comp ARV (After Repair Value)" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `size-adjusted median × ${num(sqft)} sf` : "enter subject sq ft above"}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
                 <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps · size-adjusted`} />
               </div>
 
