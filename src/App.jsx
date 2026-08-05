@@ -1466,7 +1466,7 @@ export default function App() {
               {soldSummary.thin && (
                 <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span><b>Thin comps — only {soldSummary.usedCount} of the {MIN_SOLID} solid sales this ARV needs at minimum.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp. Appraiser\u2019s order when comps run thin: <b>go wider before you go older</b> \u2014 stretch the distance before you ever reach past the 12-month window. And YLHB\u2019s rule while you widen: <b>don\u2019t cross major roads, highways, or train tracks</b> \u2014 those lines are market boundaries, and the buyer pool changes on the other side.</span>
+                  <span><b>Thin comps — only {soldSummary.usedCount} of the {MIN_SOLID} solid sales this ARV needs at minimum.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp. When comps run thin, do what appraisers do: <b>go wider before you go older</b> — stretch the distance before you reach past the 12-month window. And YLHB’s rule while you widen: <b>don’t cross major roads, highways, or train tracks</b> — those are market boundaries, and the buyer pool changes on the other side.</span>
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
