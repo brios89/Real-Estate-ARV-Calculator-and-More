@@ -764,7 +764,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>
           <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
           <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
-          <WField label="“How did you come up with that number?”"><WText value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
+          <WField label="“How did you come up with that number?” (optional)"><WText value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
           <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Rebuttals — tap to open</div>
           {REBUTTALS.map((r, i) => (
             <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -1276,7 +1276,7 @@ export default function App() {
                 upd={(k, v) => setCallState((p) => ({ ...p, [k]: v }))}
                 reset={() => setCallState(INITIAL_CALL)}
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs }}
-                onTab={(t) => setTab(t)}
+                onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
               <div className="mt-2 flex items-center gap-2">
@@ -1604,7 +1604,7 @@ export default function App() {
         </div>
 
         {/* TABS */}
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div id="deal-tabs" className="mt-5 flex flex-wrap gap-2 scroll-mt-3">
           {tabs.map((t) => {
             const Icon = t.Icon;
             return (
