@@ -4,7 +4,8 @@ import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, Chec
 // Where the proxies live. Same-origin by default on Vercel.
 const RENT_API = "/api/rent";
 const SOLD_API = "/api/sold";
-const SOLID_TARGET = 4; // the sold-comp ARV median runs on the best N solid sales; fewer than N trips the thin-comps warning
+const SOLID_TARGET = 4; // the sold-comp ARV median runs on the best N solid sales when available
+const MIN_SOLID = 2;    // fewer than this many solid sales in the median trips the thin-comps warning (per B, Aug 5)
 const AUTOCOMPLETE_API = "/api/autocomplete";
 
 // Google web search link for any address string
@@ -1052,7 +1053,7 @@ export default function App() {
   //     because the reference median would itself be junk)
   //  3) the median runs on the TOP {SOLID_TARGET} solid comps (list arrives closest/newest first)
   //     plus anything manually included; solid comps beyond the top N sit on the bench
-  //  4) fewer than SOLID_TARGET comps in the median → thin flag drives the warning banner
+  //  4) fewer than MIN_SOLID comps in the median → thin flag drives the warning banner
   const soldSummary = useMemo(() => {
     const src = [...((soldData && soldData.comps) || []), ...manualSold];
     if (!src.length) return null;
@@ -1093,7 +1094,7 @@ export default function App() {
         arv = (soldData && soldData.soldArv) || null;     // no subject sq ft: fall back to the server's number
       }
     }
-    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < SOLID_TARGET, marginalUsed, mlsChecked, mlsCount: src.filter((c) => c.mls).length, srcTotal: src.length };
+    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < MIN_SOLID, marginalUsed, mlsChecked, mlsCount: src.filter((c) => c.mls).length, srcTotal: src.length };
   }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold, mlsOnly]);
 
   // Label the ARV stat with where the number actually came from — recorded sales or a manual override.
@@ -1448,7 +1449,7 @@ export default function App() {
               {soldSummary.thin && (
                 <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span><b>Thin comps — only {soldSummary.usedCount} of the {SOLID_TARGET} solid sales this ARV wants.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp.</span>
+                  <span><b>Thin comps — only {soldSummary.usedCount} of the {MIN_SOLID} solid sales this ARV needs at minimum.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp.</span>
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
