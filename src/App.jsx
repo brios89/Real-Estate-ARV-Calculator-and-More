@@ -676,12 +676,65 @@ const Hint = ({ children }) => (
 
 // Builds a self-contained HTML report of the whole call — every captured input, the live deal
 // numbers, and the strategy ranking at the moment of download. Opens anywhere, prints to PDF clean.
+// Composes the call as flowing CRM-note prose ("Seller is..." style) from whatever was captured.
+// Empty fields are skipped entirely — the narrative never prints placeholders.
+const buildCallNarrative = (cs, deal, strat) => {
+  const money = (x) => usd(num(x));
+  const L = { light: "light", moderate: "moderate", heavy: "heavy", vacant: "vacant", owner: "owner occupied", tenant: "tenant occupied", asap: "ASAP (two weeks or less)", soon: "within 30-60 days", flexible: "flexible on timing", distress: "property distress", hardship: "financial hardship", urgency: "urgency" };
+  const p = [];
+  const s1 = [];
+  s1.push(`Offer call${cs.sellerName.trim() ? ` with ${cs.sellerName.trim()}` : ""}${deal.address ? ` regarding ${deal.address}` : ""}${cs.bookedBy.trim() ? `, booked by ${cs.bookedBy.trim()}` : ""}.`);
+  if (cs.motivation) s1.push(`Seller's main driver is ${L[cs.motivation] || cs.motivation}.`);
+  if (cs.motivNotes.trim()) s1.push(`In their words: "${cs.motivNotes.trim()}".`);
+  p.push(s1.join(" "));
+  const s2 = [];
+  if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
+  else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
+  if (cs.loan === "no") s2.push("Owned free and clear - no loan on the property.");
+  if (cs.loan === "yes") {
+    const bits = [];
+    if (num(cs.balance) > 0) bits.push(`owes approximately ${money(cs.balance)}`);
+    if (num(cs.payment) > 0) bits.push(`monthly payment around ${money(cs.payment)}`);
+    if (cs.rate.trim()) bits.push(`rate ${cs.rate.trim()}`);
+    s2.push(`There is a loan on the property${bits.length ? ` - seller ${bits.join(", ")}` : ""}.`);
+    if (cs.behind === "yes") s2.push("Seller is behind on payments.");
+    if (cs.behind === "no") s2.push("Payments are current.");
+  }
+  if (s2.length) p.push(s2.join(" "));
+  const s3 = [];
+  if (cs.timeline) s3.push(`Timeline is ${L[cs.timeline]}.`);
+  if (cs.others.trim()) s3.push(`Other decision makers: ${cs.others.trim()}.`);
+  if (num(cs.ask) > 0) s3.push(`Seller's number is ${money(cs.ask)}${cs.priceBasis.trim() ? `, based on: "${cs.priceBasis.trim()}"` : ""}.`);
+  if (cs.terms === "yes") s3.push("Seller is open to payments over time.");
+  if (cs.terms === "maybe") s3.push("Seller may be open to payments over time.");
+  if (cs.terms === "no") s3.push("Seller wants cash - not open to payments over time.");
+  if (s3.length) p.push(s3.join(" "));
+  const s4 = [];
+  if (deal.arv > 0 || deal.maxCash > 0) {
+    const bits = [];
+    if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}`);
+    if (deal.repairs > 0) bits.push(`estimated repairs ${usd(deal.repairs)}`);
+    if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`);
+    s4.push(`Deal Desk numbers at the time of the report: ${bits.join(", ")}.`);
+  }
+  if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
+  const top = strat.ranked[0];
+  if (top && top.sc > 0) {
+    s4.push(`Best-fit strategy: ${top.label} (score ${top.sc}).`);
+    if (top.rs.length) s4.push(`Why: ${top.rs.slice(0, 2).join(" ")}`);
+    if (top.miss.length) s4.push(`Still to get: ${top.miss[0].q}`);
+  }
+  if (s4.length) p.push(s4.join(" "));
+  return p.filter(Boolean).join("\n\n").trim() || "No call details captured yet.";
+};
+
 const buildCallReport = (cs, deal, strat) => {
   const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const lbl = { light: "Light rehab", moderate: "Moderate rehab", heavy: "Heavy rehab", vacant: "Vacant", owner: "Owner occupied", tenant: "Tenant occupied", yes: "Yes", no: "No", maybe: "Maybe", asap: "ASAP (2 weeks or less)", soon: "30-60 days", flexible: "Flexible", distress: "Property distress", hardship: "Financial hardship", urgency: "Urgency" };
   const v = (x, money) => (x === "" || x == null ? "&mdash;" : money ? esc(usd(num(x))) : esc(lbl[x] || x));
   const row = (k, val) => `<tr><td>${k}</td><td>${val}</td></tr>`;
   const pillars = PILLARS.map((p) => `<span class="pill ${p.done(cs) ? "on" : ""}">${p.label}</span>`).join("");
+  const narrative = buildCallNarrative(cs, deal, strat);
   const stratRows = strat.ranked.map((o, i) => `
     <div class="strat ${i === 0 && o.sc > 0 ? "best" : ""}">
       <div class="strathead"><b>${i + 1}. ${esc(o.label)}</b><span>${i === 0 && o.sc > 0 ? "BEST FIT &middot; " : ""}score ${o.sc}</span></div>
@@ -699,11 +752,19 @@ const buildCallReport = (cs, deal, strat) => {
     .strathead{display:flex;justify-content:space-between;font-size:13px}.strathead span{color:#64748b;font-size:11px}
     .why{color:#334155;margin-top:3px}.warn{color:#b45309;margin-top:3px}.miss{color:#64748b;font-style:italic;margin-top:3px}
     .foot{margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:10px}
+    .crmbox{position:relative;border:1px solid #a7f3d0;background:#f0fdf4;border-radius:10px;padding:12px 14px;white-space:pre-wrap}
+    .copybtn{float:right;margin:0 0 8px 12px;border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer}
+    @media print{.copybtn{display:none}}
     @media print{body{margin:0}}
   </style></head><body>
     <h1>YLHB &mdash; Offer Call Report</h1>
     <div class="sub">${esc(deal.address || "No address entered")} &middot; ${new Date().toLocaleString()}</div>
     <div style="margin-top:10px">${pillars}</div>
+    <h2>Call summary &mdash; copy &amp; paste into the CRM</h2>
+    <div class="crmbox">
+      <button class="copybtn" onclick="navigator.clipboard.writeText(document.getElementById('crm-sum').innerText).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy summary'},1500)}).catch(()=>{alert('Select the text and copy it manually.')})">Copy summary</button>
+      <div id="crm-sum">${esc(narrative)}</div>
+    </div>
     <h2>Call basics</h2><table>
       ${row("Seller", v(cs.sellerName))}${row("Booked by (lead manager)", v(cs.bookedBy))}
       ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}
@@ -1475,9 +1536,12 @@ export default function App() {
               )}
               {soldData?.mlsChecked && (
                 <button type="button" onClick={() => setMlsOnly((v) => !v)}
-                  title="Only show recorded sales we matched to an MLS listing (arm's-length, marketed sales)"
+                  title={mlsOnly ? "Tap to also show deed-only sales — recorded closings that never matched an MLS listing" : "Tap to show only MLS-verified sales"}
                   className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${mlsOnly ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                  {mlsOnly ? "✓ MLS sales only" : "MLS sales only"}
+                  {(() => {
+                    const h = ((soldData && soldData.comps) || []).filter((x) => !x.mls).length;
+                    return mlsOnly ? (h > 0 ? `✓ MLS sales only · ${h} deed ${h === 1 ? "sale" : "sales"} hidden — tap to show` : "✓ MLS sales only") : "Showing all sales — tap for MLS only";
+                  })()}
                 </button>
               )}
               {!soldAdd && (
