@@ -514,16 +514,19 @@ const CompDetailModal = ({ data, onClose, onToggle }) => {
 // "LAST, FIRST" is read after the comma, otherwise the first token wins. Always prefilled as a
 // suggestion the rep can overwrite — the owner of record isn't always who's on the phone.
 const ENTITY_WORDS = /\b(llc|l\.l\.c|inc|corp|corporation|company|co|trust|trustee|estate|properties|holdings|partners|lp|llp|associates|group|bank|na|ministries|church)\b/i;
-const ownerFirstName = (names) => {
+const titleCase = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+const ownerFullName = (names) => {
   const raw = Array.isArray(names) ? names.filter(Boolean)[0] : names;
   if (!raw) return "";
   const full = String(raw).trim();
   if (!full || ENTITY_WORDS.test(full)) return "";
-  const part = full.includes(",") ? full.split(",")[1] : full; // "LAST, FIRST" -> FIRST
-  const tok = String(part || "").trim().split(/\s+/)[0] || "";
-  const clean = tok.replace(/[^A-Za-z'-]/g, "");
-  if (clean.length < 2) return "";
-  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+  // "LAST, FIRST M" -> "First M Last"; otherwise keep the recorded order.
+  const ordered = full.includes(",")
+    ? `${full.split(",").slice(1).join(" ").trim()} ${full.split(",")[0].trim()}`
+    : full;
+  const parts = ordered.split(/\s+/).map((t) => t.replace(/[^A-Za-z'-]/g, "")).filter((t) => t.length > 0);
+  if (!parts.length) return "";
+  return parts.map(titleCase).join(" ");
 };
 
 const INITIAL_CALL = {
@@ -824,7 +827,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
     URL.revokeObjectURL(url);
   };
   const name = cs.sellerName.trim();
-  const nm = name || "John";
+  const nm = (name.split(/\s+/)[0] || "").trim() || "John"; // script greetings use the first name only, even when the full name is captured
   const canPrev = stage > 0, canNext = stage < CALL_STAGES.length - 1;
   return (
     <div className="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-slate-200 bg-white shadow-2xl sm:w-[470px]">
@@ -860,13 +863,19 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Before you dial (SOP Step 1)</div>
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
-          <WField label="Seller first name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John" /></WField>
+          <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
           {deal.ownerNames && deal.ownerNames.length > 0 && (
             <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
               Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
             </div>
           )}
           <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
+          <WField label="Your wholesale / assignment fee">
+            <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder="15000" />
+          </WField>
+          <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+            Comes off the top of the MAO{deal.maxCash > 0 ? <> — max cash is <span className="font-semibold text-slate-600">{usd(deal.maxCash)}</span> after this fee</> : ""}. Set it before you dial so the number you quote already pays you.
+          </div>
           <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-500">“People do not care how much you know, until they know how much you care.”</div>
         </div>)}
 
@@ -896,6 +905,16 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <WField label="Condition (drives repairs in the calculator)">
             <WChips value={cs.condition} onChange={(v) => { upd("condition", v); onCondition(v); }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
           </WField>
+          <WField label="Estimated repairs">
+            <WText money value={deal.repairOverride} onChange={deal.setRepairOverride} placeholder={deal.repairs > 0 ? String(Math.round(deal.repairs)) : "type a number"} />
+          </WField>
+          <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+            {num(deal.repairOverride) > 0
+              ? <>Using your number: <span className="font-semibold text-slate-600">{usd(num(deal.repairOverride))}</span>. Clear the box to go back to the condition estimate. This drives the MAO.</>
+              : deal.repairs > 0
+                ? <>From the condition chip above: <span className="font-semibold text-slate-600">{usd(deal.repairs)}</span>{deal.repairPsf > 0 ? ` (${usd(deal.repairPsf)}/sf)` : ""}. Type a real number here if you have a contractor bid — it overrides the estimate.</>
+                : <>Pick a condition above, or type a real repair number if you have one.</>}
+          </div>
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
@@ -1092,7 +1111,7 @@ export default function App() {
           const raw = sd.raw || {};
           if (raw.sqft) setSqft(String(raw.sqft));
           setOwnerNames(raw.ownerNames || null);
-          setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFirstName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
+          setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFullName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
           setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
         }
@@ -1452,7 +1471,7 @@ export default function App() {
                 cs={callState}
                 upd={(k, v) => setCallState((p) => ({ ...p, [k]: v }))}
                 reset={() => setCallState(INITIAL_CALL)}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames }}
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
