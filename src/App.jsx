@@ -796,6 +796,16 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
   useEffect(() => { if (open) setStage((v) => v); }, [open]);
   if (!open) return null;
   const strat = scoreStrategies(cs, deal);
+  const downloadReport = () => {
+    const html = buildCallReport(cs, deal, strat);
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `offer-call-${(deal.address || "report").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report"}-${new Date().toISOString().slice(0, 10)}.html`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
   const name = cs.sellerName.trim();
   const nm = name || "John";
   const canPrev = stage > 0, canNext = stage < CALL_STAGES.length - 1;
@@ -806,18 +816,6 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Phone className="h-4 w-4 text-emerald-600" /> Offer Call</div>
           <div className="flex items-center gap-1.5">
-            <button type="button" title="Download an HTML report of everything captured on this call"
-              onClick={() => {
-                const html = buildCallReport(cs, deal, strat);
-                const blob = new Blob([html], { type: "text/html" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `offer-call-${(deal.address || "report").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report"}-${new Date().toISOString().slice(0, 10)}.html`;
-                document.body.appendChild(a); a.click(); a.remove();
-                URL.revokeObjectURL(url);
-              }}
-              className="flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"><FileDown className="h-3 w-3" /> Report</button>
             <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">New call</button>
             <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
           </div>
@@ -981,6 +979,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <Line>Next steps: “Within the next few days we'll likely need access for photos, walkthroughs, or contractors.”</Line>
           <Line>End in rapport: “It was great getting to know you.” · “Congratulations on getting this process started.” · “So what's the next chapter for you after this?”</Line>
           <Hint>Compliance (SOP): no guarantees, no legal advice, approved contracts only. Then: submit to the TC same day, title open within 1 business day, notify Dispositions.</Hint>
+          <button type="button" onClick={downloadReport}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
+            <FileDown className="h-4 w-4" /> Download call report
+          </button>
+          <div className="mt-1.5 text-center text-[10.5px] leading-snug text-slate-400">Everything captured on this call, plus a copy-and-paste summary for the CRM.</div>
         </div>)}
       </div>
 
