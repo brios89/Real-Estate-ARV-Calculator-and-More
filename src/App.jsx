@@ -509,6 +509,23 @@ const CompDetailModal = ({ data, onClose, onToggle }) => {
 // exact script language to pitch it. Scoring thresholds live in scoreStrategies —
 // tune them there. Compliance: no guarantees, ever (SOP Step 10).
 
+// Pull a usable first name out of a county owner record. Records are messy: "Darryl Cook",
+// "COOK DARRYL", "COOK, DARRYL", "SMITH FAMILY TRUST". Entities get skipped (no human to greet),
+// "LAST, FIRST" is read after the comma, otherwise the first token wins. Always prefilled as a
+// suggestion the rep can overwrite — the owner of record isn't always who's on the phone.
+const ENTITY_WORDS = /\b(llc|l\.l\.c|inc|corp|corporation|company|co|trust|trustee|estate|properties|holdings|partners|lp|llp|associates|group|bank|na|ministries|church)\b/i;
+const ownerFirstName = (names) => {
+  const raw = Array.isArray(names) ? names.filter(Boolean)[0] : names;
+  if (!raw) return "";
+  const full = String(raw).trim();
+  if (!full || ENTITY_WORDS.test(full)) return "";
+  const part = full.includes(",") ? full.split(",")[1] : full; // "LAST, FIRST" -> FIRST
+  const tok = String(part || "").trim().split(/\s+/)[0] || "";
+  const clean = tok.replace(/[^A-Za-z'-]/g, "");
+  if (clean.length < 2) return "";
+  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+};
+
 const INITIAL_CALL = {
   sellerName: "", bookedBy: "",
   motivation: "", motivNotes: "",
@@ -844,6 +861,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
           <WField label="Seller first name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John" /></WField>
+          {deal.ownerNames && deal.ownerNames.length > 0 && (
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+              Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
+            </div>
+          )}
           <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
           <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-500">“People do not care how much you know, until they know how much you care.”</div>
         </div>)}
@@ -1018,6 +1040,7 @@ export default function App() {
   const [tab, setTab] = useState("cash");
   const [callOpen, setCallOpen] = useState(false); // Offer Call drawer (acquisitions script walkthrough)
   const [callState, setCallState] = useState(INITIAL_CALL);
+  const [ownerNames, setOwnerNames] = useState(null); // owner of record from the subject pull — prefills the seller name and shows under the field
   const [subjectInfo, setSubjectInfo] = useState(null);
   // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
   const [subjDetail, setSubjDetail] = useState(null);
@@ -1068,6 +1091,8 @@ export default function App() {
           if (sd.sections) { setSubjDetail(sd); setSubjDetailOpen(true); } // auto-show the panel — no extra click
           const raw = sd.raw || {};
           if (raw.sqft) setSqft(String(raw.sqft));
+          setOwnerNames(raw.ownerNames || null);
+          setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFirstName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
           setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
         }
@@ -1427,7 +1452,7 @@ export default function App() {
                 cs={callState}
                 upd={(k, v) => setCallState((p) => ({ ...p, [k]: v }))}
                 reset={() => setCallState(INITIAL_CALL)}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address }}
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />

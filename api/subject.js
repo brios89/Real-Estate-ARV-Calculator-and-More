@@ -64,6 +64,7 @@ export default async function handler(req, res) {
         baths: p.bathrooms ?? null,
         yearBuilt: p.yearBuilt ?? null,
         propertyType: p.propertyType ?? null,
+        ownerNames: (p.owner && Array.isArray(p.owner.names)) ? p.owner.names : null,
         architecture: (p.features && p.features.architectureType) || null,
         lat: p.latitude ?? null,
         lng: p.longitude ?? null,
