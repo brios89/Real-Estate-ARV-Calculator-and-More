@@ -860,6 +860,7 @@ const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Pric
 const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, save }) => {
   const [stage, setStage] = useState(0);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [showCode, setShowCode] = useState(false);
   const [idDraft, setIdDraft] = useState(() => ({ ...save.syncId }));
   useEffect(() => { setIdDraft({ ...save.syncId }); }, [save.syncId]);
   if (!open) return null;
@@ -934,8 +935,22 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             </div>
             <input value={idDraft.name} onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} placeholder="Your name"
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-400" />
-            <input value={idDraft.code} onChange={(e) => setIdDraft({ ...idDraft, code: e.target.value })} placeholder="Team passcode" type="password"
-              className="mt-1.5 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-400" />
+            <div className="relative mt-1.5">
+              <input value={idDraft.code} onChange={(e) => setIdDraft({ ...idDraft, code: e.target.value })} placeholder="Team passcode"
+                type={showCode ? "text" : "password"} autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 pr-14 text-xs text-slate-800 outline-none focus:border-emerald-400" />
+              <button type="button" onClick={() => setShowCode((v) => !v)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+                {showCode ? "hide" : "show"}
+              </button>
+            </div>
+            {/* A pasted passcode often drags a trailing space along, which fails silently. Flag it. */}
+            {idDraft.code !== idDraft.code.trim() && (
+              <div className="mt-1 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
+                There is a space at the start or end of that passcode. It will be trimmed when you save.
+              </div>
+            )}
             <div className="mt-2 flex gap-1.5">
               <button type="button" onClick={() => { save.setIdentity({ name: idDraft.name.trim(), code: idDraft.code.trim() }); setSyncOpen(false); }}
                 className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700">Save</button>
@@ -948,6 +963,30 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
       {/* body */}
       <div className="flex-1 overflow-y-auto p-3 pb-4">
+        {/* Loud, unmissable warning when this call is NOT reaching the team. Silent isolation is the
+            real risk here: a rep works all week and nobody else ever sees a single call. */}
+        {save.savable && (save.sync.status === "denied" || save.sync.status === "error" || save.sync.status === "off") && (
+          <div className="mb-3 rounded-xl border-2 border-red-400 bg-red-50 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+              <div>
+                <div className="text-[12px] font-bold text-red-800">
+                  {save.sync.status === "denied" ? "Wrong team passcode — your team cannot see this call." : save.sync.status === "off" ? "Team sync is not set up — your team cannot see this call." : "Cannot reach the team right now — your team cannot see this call."}
+                </div>
+                <div className="mt-0.5 text-[11px] leading-snug text-red-700">
+                  Your work is safe in this browser and nothing is lost. But it is not being shared, so the next person on this address will see an empty call.
+                  {save.sync.status === "denied" ? " Fix the passcode below and it will sync from here on." : save.sync.status === "off" ? " Turn it on below." : " It will keep retrying as you type."}
+                </div>
+                {save.sync.status !== "error" && (
+                  <button type="button" onClick={() => setSyncOpen(true)}
+                    className="mt-2 rounded-md bg-red-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-red-700">
+                    {save.sync.status === "denied" ? "Fix passcode" : "Set up team sync"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {stage === 0 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Before you dial (SOP Step 1)</div>
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
