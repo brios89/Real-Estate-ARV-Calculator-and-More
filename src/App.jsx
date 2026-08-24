@@ -773,10 +773,21 @@ const buildCallReport = (cs, deal, strat) => {
     .why{color:#334155;margin-top:3px}.warn{color:#b45309;margin-top:3px}.miss{color:#64748b;font-style:italic;margin-top:3px}
     .foot{margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:10px}
     .crmbox{position:relative;border:1px solid #a7f3d0;background:#f0fdf4;border-radius:10px;padding:12px 14px;white-space:pre-wrap}
+    .bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #e2e8f0}
+    .pdfbtn{border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer}
+    .pdfbtn:hover{background:#047857}
+    .barhint{color:#94a3b8;font-size:11px}
+    .howto{margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;background:#f8fafc;font-size:12px}
+    .howto b{color:#334155}.howto ol{margin:6px 0 0;padding-left:18px}.howto li{margin-bottom:4px;color:#475569}
+    .howto .note{margin-top:6px;color:#94a3b8;font-size:10.5px}
     .copybtn{float:right;margin:0 0 8px 12px;border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer}
-    @media print{.copybtn{display:none}}
+    @media print{.copybtn{display:none}.howto{display:none}.bar{display:none}}
     @media print{body{margin:0}}
   </style></head><body>
+    <div class="bar">
+      <button class="pdfbtn" onclick="window.print()">Save as PDF</button>
+      <span class="barhint">Opens your print box &mdash; set Destination to &ldquo;Save as PDF&rdquo;, then Save.</span>
+    </div>
     <h1>YLHB &mdash; Offer Call Report</h1>
     <div class="sub">${esc(deal.address || "No address entered")} &middot; ${new Date().toLocaleString()}</div>
     <div style="margin-top:10px">${pillars}</div>
@@ -784,6 +795,16 @@ const buildCallReport = (cs, deal, strat) => {
     <div class="crmbox">
       <button class="copybtn" onclick="navigator.clipboard.writeText(document.getElementById('crm-sum').innerText).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy summary'},1500)}).catch(()=>{alert('Select the text and copy it manually.')})">Copy summary</button>
       <div id="crm-sum">${esc(narrative)}</div>
+    </div>
+    <div class="howto">
+      <b>Filing this in Closer Control</b>
+      <ol>
+        <li><b>Paste the summary.</b> Hit Copy summary above, open the seller's contact in Closer Control, and paste it into the conversation or notes. This is the part teammates actually read, so do it even if you skip the rest.</li>
+        <li><b>Save this page as a PDF.</b> Click the green Save as PDF button at the top of this page, then set Destination to Save as PDF and click Save. It is already named with the property address.</li>
+        <li><b>Attach it to the contact.</b> In that contact's record, open the Documents panel, choose Add, and upload the PDF you just saved.</li>
+        <li><b>Then follow the SOP:</b> submit to the TC same day, title open within one business day, and notify Dispositions.</li>
+      </ol>
+      <div class="note">Closer Control moves buttons around from time to time, so if a label does not match, look for the upload or attach control inside the contact's Documents area.</div>
     </div>
     <h2>Call basics</h2><table>
       ${row("Seller", v(cs.sellerName))}${row("Booked by (lead manager)", v(cs.bookedBy))}
