@@ -1154,77 +1154,6 @@ export default function App() {
   const [syncId, setSyncId] = useState(readSyncId);       // { name, code } — this browser's rep identity
   const [syncState, setSyncState] = useState({ status: "idle", by: null, at: null, msg: "" });
   const syncTimer = useRef(null);                         // debounce so we do not POST on every keystroke
-  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
-  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
-  useEffect(() => {
-    if (!addressSavable(address)) return;
-    const k = callStoreKey(address);
-    if (k === callKeyRef.current) return;
-    callKeyRef.current = k;
-    const local = readSavedCall(address);
-    const applyRecord = (rec, from) => {
-      setCallState({ ...INITIAL_CALL, ...rec.call });
-      if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
-      if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
-      setCallLoadedAt(rec.at || null);
-      setCallSavedAt(rec.at || null);
-      if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
-    };
-    if (local && local.call) applyRecord(local, "local"); else { setCallLoadedAt(null); setCallSavedAt(null); }
-
-    // Then ask the team store. Whichever copy is newer wins, so a teammate's later work
-    // is never overwritten by a stale local copy sitting in this browser.
-    const id = syncId;
-    if (!id.code) return;
-    let live = true;
-    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { headers: { "x-ylhb-key": id.code } })
-      .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
-      .then((d) => {
-        if (!live || !d) return;
-        if (d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
-        if (d.found && d.record && d.record.call) {
-          const remoteNewer = !local || !local.at || String(d.record.at || "") > String(local.at || "");
-          if (remoteNewer) applyRecord(d.record, "team");
-          else setSyncState((p) => ({ ...p, status: "synced", by: d.record.by || null, at: d.record.at || null, msg: "" }));
-        } else {
-          setSyncState({ status: "synced", by: null, at: null, msg: "" });
-        }
-      })
-      .catch((e) => { if (live) setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }); });
-    return () => { live = false; };
-  }, [address, syncId]);
-
-  // Autosave. Skips empty calls so simply opening the drawer never creates a record.
-  useEffect(() => {
-    if (!addressSavable(address)) return;
-    const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
-    if (untouched) return;
-    const at = new Date().toISOString();
-    try {
-      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, at }));
-      setCallSavedAt(at);
-    } catch { /* private mode or full storage — the call still works, it just will not persist */ }
-
-    // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
-    if (!syncId.code) return;
-    if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(() => {
-      setSyncState((p) => ({ ...p, status: "saving" }));
-      fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
-        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, by: syncId.name, address }),
-      })
-        .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
-        .then((d) => {
-          if (d && d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
-          if (d && d.error) { setSyncState({ status: "error", by: null, at: null, msg: "" }); return; }
-          setSyncState({ status: "synced", by: syncId.name || null, at: (d && d.record && d.record.at) || at, msg: "" });
-        })
-        .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
-    }, 1200);
-  }, [callState, repairOverride, wholesaleFee, address, syncId]);
-
   const [ownerNames, setOwnerNames] = useState(null); // owner of record from the subject pull — prefills the seller name and shows under the field
   const [subjectInfo, setSubjectInfo] = useState(null);
   // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
@@ -1360,6 +1289,78 @@ export default function App() {
 
   // cash/mao
   const [wholesaleFee, setWholesaleFee] = useState("15000");
+
+  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
+  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
+  useEffect(() => {
+    if (!addressSavable(address)) return;
+    const k = callStoreKey(address);
+    if (k === callKeyRef.current) return;
+    callKeyRef.current = k;
+    const local = readSavedCall(address);
+    const applyRecord = (rec, from) => {
+      setCallState({ ...INITIAL_CALL, ...rec.call });
+      if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
+      if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
+      setCallLoadedAt(rec.at || null);
+      setCallSavedAt(rec.at || null);
+      if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
+    };
+    if (local && local.call) applyRecord(local, "local"); else { setCallLoadedAt(null); setCallSavedAt(null); }
+
+    // Then ask the team store. Whichever copy is newer wins, so a teammate's later work
+    // is never overwritten by a stale local copy sitting in this browser.
+    const id = syncId;
+    if (!id.code) return;
+    let live = true;
+    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { headers: { "x-ylhb-key": id.code } })
+      .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
+      .then((d) => {
+        if (!live || !d) return;
+        if (d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
+        if (d.found && d.record && d.record.call) {
+          const remoteNewer = !local || !local.at || String(d.record.at || "") > String(local.at || "");
+          if (remoteNewer) applyRecord(d.record, "team");
+          else setSyncState((p) => ({ ...p, status: "synced", by: d.record.by || null, at: d.record.at || null, msg: "" }));
+        } else {
+          setSyncState({ status: "synced", by: null, at: null, msg: "" });
+        }
+      })
+      .catch((e) => { if (live) setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }); });
+    return () => { live = false; };
+  }, [address, syncId]);
+
+  // Autosave. Skips empty calls so simply opening the drawer never creates a record.
+  useEffect(() => {
+    if (!addressSavable(address)) return;
+    const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
+    if (untouched) return;
+    const at = new Date().toISOString();
+    try {
+      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, at }));
+      setCallSavedAt(at);
+    } catch { /* private mode or full storage — the call still works, it just will not persist */ }
+
+    // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
+    if (!syncId.code) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      setSyncState((p) => ({ ...p, status: "saving" }));
+      fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
+        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, by: syncId.name, address }),
+      })
+        .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
+        .then((d) => {
+          if (d && d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
+          if (d && d.error) { setSyncState({ status: "error", by: null, at: null, msg: "" }); return; }
+          setSyncState({ status: "synced", by: syncId.name || null, at: (d && d.record && d.record.at) || at, msg: "" });
+        })
+        .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
+    }, 1200);
+  }, [callState, repairOverride, wholesaleFee, address, syncId]);
+
   const [sellingPct, setSellingPct] = useState("10");
   const [holding, setHolding] = useState("7500");
   const [desiredProfit, setDesiredProfit] = useState("25000");
