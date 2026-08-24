@@ -732,7 +732,7 @@ const buildCallNarrative = (cs, deal, strat) => {
   const s4 = [];
   if (deal.arv > 0 || deal.maxCash > 0) {
     const bits = [];
-    if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}`);
+    if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}${deal.arvSource ? ` (${deal.arvSource})` : ""}`);
     if (deal.repairs > 0) bits.push(`estimated repairs ${usd(deal.repairs)}`);
     if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`);
     s4.push(`Deal Desk numbers at the time of the report: ${bits.join(", ")}.`);
@@ -800,6 +800,7 @@ const buildCallReport = (cs, deal, strat) => {
     </table>
     <h2>Deal numbers at download</h2><table>
       ${row("ARV (After Repair Value)", deal.arv > 0 ? esc(usd(deal.arv)) : "&mdash;")}
+      ${row("ARV source", deal.arvSource ? esc(deal.arvSource) : "<span style=\"color:#b45309\">not tagged</span>")}
       ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) : "&mdash;")}
       ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
       ${row("Gap (ask &minus; MAO)", strat.gap != null ? (strat.gap > 0 ? "+" : "") + esc(usd(strat.gap)) : "&mdash;")}
@@ -809,11 +810,58 @@ const buildCallReport = (cs, deal, strat) => {
   </body></html>`;
 };
 
+// ---- Offer Call autosave -------------------------------------------------
+// Calls are saved in THIS BROWSER, keyed by the subject address, so a rep who refreshes,
+// closes the tab, or comes back tomorrow picks up exactly where they left off. This is not
+// team-shared storage: the CRM stays the single source of truth for what the whole team sees.
+// Where an ARV came from. Tagged on every deal so the call report shows whether the number was
+// comped or estimated — the difference between a real offer and a guess with a dollar sign on it.
+const ARV_SOURCES = [
+  ["ps-comps", "PropStream comps"],
+  ["ps-estimate", "PropStream estimate"],
+  ["mls", "MLS / agent"],
+  ["appraisal", "Appraisal"],
+  ["deal-desk", "Deal Desk comps"],
+];
+const ARV_SOURCE_LABEL = Object.fromEntries(ARV_SOURCES);
+
+const CALL_STORE_PREFIX = "ylhb.call.v1:";
+const callStoreKey = (addr) => CALL_STORE_PREFIX + String(addr || "").trim().toLowerCase().replace(/\s+/g, " ");
+// Only save once the address looks real (an autocomplete pick always has "City, ST"), so
+// half-typed addresses do not litter storage with junk records.
+const addressSavable = (addr) => String(addr || "").includes(",") && String(addr).trim().length > 8;
+const readSavedCall = (addr) => {
+  try {
+    const raw = window.localStorage.getItem(callStoreKey(addr));
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+// ---- Team sync -----------------------------------------------------------
+// The shared layer: calls also go to /api/calls so the next person on this address sees them.
+// Identity is two things kept in this browser — the rep's name (stamped on saves so a handoff
+// shows WHO captured it) and the team passcode (gates the endpoint, since the app is public).
+const SYNC_ID_KEY = "ylhb.sync.identity.v1";
+const readSyncId = () => {
+  try { return JSON.parse(window.localStorage.getItem(SYNC_ID_KEY) || "null") || { name: "", code: "" }; }
+  catch { return { name: "", code: "" }; }
+};
+const writeSyncId = (v) => { try { window.localStorage.setItem(SYNC_ID_KEY, JSON.stringify(v)); } catch {} };
+
+const fmtSavedAt = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+};
+
 const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Price", "Numbers", "Strategy", "Close"];
 
-const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) => {
+const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, save }) => {
   const [stage, setStage] = useState(0);
-  useEffect(() => { if (open) setStage((v) => v); }, [open]);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [idDraft, setIdDraft] = useState(() => ({ ...save.syncId }));
+  useEffect(() => { setIdDraft({ ...save.syncId }); }, [save.syncId]);
   if (!open) return null;
   const strat = scoreStrategies(cs, deal);
   const downloadReport = () => {
@@ -855,6 +903,47 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset }) 
               className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${i === stage ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>{t}</button>
           ))}
         </div>
+        <div className="mt-1.5 text-[10px] leading-snug text-slate-400">
+          {!save.savable
+            ? "Pick the subject address up top and this call saves itself."
+            : save.sync.status === "synced" && save.sync.by
+              ? <>Shared with the team. Last saved by <b className="text-slate-500">{save.sync.by}</b>{save.sync.at ? <> at <b className="text-slate-500">{fmtSavedAt(save.sync.at)}</b></> : null}.</>
+              : save.sync.status === "saving"
+                ? "Saving to the team…"
+                : save.sync.status === "synced"
+                  ? <>Shared with the team{save.sync.at ? <> · saved <b className="text-slate-500">{fmtSavedAt(save.sync.at)}</b></> : ""}.</>
+                  : save.sync.status === "denied"
+                    ? <span className="text-amber-600">Team passcode was rejected. Saving to this browser only until it is fixed.</span>
+                    : save.sync.status === "error"
+                      ? <span className="text-amber-600">Cannot reach the team store right now. Your work is safe in this browser.</span>
+                      : save.loadedAt
+                        ? <>Picked up your saved call from <b className="text-slate-500">{fmtSavedAt(save.loadedAt)}</b>.</>
+                        : save.savedAt
+                          ? <>Saved <b className="text-slate-500">{fmtSavedAt(save.savedAt)}</b> to this address.</>
+                          : "Saves itself to this address as you type."}
+          {" "}
+          <button type="button" onClick={() => setSyncOpen((v) => !v)} className="font-semibold text-emerald-600 hover:underline">
+            {save.syncId.code ? "sync settings" : "turn on team sync"}
+          </button>
+        </div>
+        {syncOpen && (
+          <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Team sync</div>
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+              Your name gets stamped on every call you save, so whoever opens this address next knows who captured it. The passcode is the same one for the whole team — get it from B.
+            </div>
+            <input value={idDraft.name} onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} placeholder="Your name"
+              className="mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-400" />
+            <input value={idDraft.code} onChange={(e) => setIdDraft({ ...idDraft, code: e.target.value })} placeholder="Team passcode" type="password"
+              className="mt-1.5 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-400" />
+            <div className="mt-2 flex gap-1.5">
+              <button type="button" onClick={() => { save.setIdentity({ name: idDraft.name.trim(), code: idDraft.code.trim() }); setSyncOpen(false); }}
+                className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700">Save</button>
+              <button type="button" onClick={() => setSyncOpen(false)}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* body */}
@@ -1059,6 +1148,83 @@ export default function App() {
   const [tab, setTab] = useState("cash");
   const [callOpen, setCallOpen] = useState(false); // Offer Call drawer (acquisitions script walkthrough)
   const [callState, setCallState] = useState(INITIAL_CALL);
+  const [callSavedAt, setCallSavedAt] = useState(null);   // when this call was last written to browser storage
+  const [callLoadedAt, setCallLoadedAt] = useState(null); // set when a previously saved call was restored for this address
+  const callKeyRef = useRef("");                          // which address key the open call is attached to
+  const [syncId, setSyncId] = useState(readSyncId);       // { name, code } — this browser's rep identity
+  const [syncState, setSyncState] = useState({ status: "idle", by: null, at: null, msg: "" });
+  const syncTimer = useRef(null);                         // debounce so we do not POST on every keystroke
+  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
+  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
+  useEffect(() => {
+    if (!addressSavable(address)) return;
+    const k = callStoreKey(address);
+    if (k === callKeyRef.current) return;
+    callKeyRef.current = k;
+    const local = readSavedCall(address);
+    const applyRecord = (rec, from) => {
+      setCallState({ ...INITIAL_CALL, ...rec.call });
+      if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
+      if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
+      setCallLoadedAt(rec.at || null);
+      setCallSavedAt(rec.at || null);
+      if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
+    };
+    if (local && local.call) applyRecord(local, "local"); else { setCallLoadedAt(null); setCallSavedAt(null); }
+
+    // Then ask the team store. Whichever copy is newer wins, so a teammate's later work
+    // is never overwritten by a stale local copy sitting in this browser.
+    const id = syncId;
+    if (!id.code) return;
+    let live = true;
+    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { headers: { "x-ylhb-key": id.code } })
+      .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
+      .then((d) => {
+        if (!live || !d) return;
+        if (d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
+        if (d.found && d.record && d.record.call) {
+          const remoteNewer = !local || !local.at || String(d.record.at || "") > String(local.at || "");
+          if (remoteNewer) applyRecord(d.record, "team");
+          else setSyncState((p) => ({ ...p, status: "synced", by: d.record.by || null, at: d.record.at || null, msg: "" }));
+        } else {
+          setSyncState({ status: "synced", by: null, at: null, msg: "" });
+        }
+      })
+      .catch((e) => { if (live) setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }); });
+    return () => { live = false; };
+  }, [address, syncId]);
+
+  // Autosave. Skips empty calls so simply opening the drawer never creates a record.
+  useEffect(() => {
+    if (!addressSavable(address)) return;
+    const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
+    if (untouched) return;
+    const at = new Date().toISOString();
+    try {
+      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, at }));
+      setCallSavedAt(at);
+    } catch { /* private mode or full storage — the call still works, it just will not persist */ }
+
+    // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
+    if (!syncId.code) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      setSyncState((p) => ({ ...p, status: "saving" }));
+      fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
+        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, by: syncId.name, address }),
+      })
+        .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
+        .then((d) => {
+          if (d && d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
+          if (d && d.error) { setSyncState({ status: "error", by: null, at: null, msg: "" }); return; }
+          setSyncState({ status: "synced", by: syncId.name || null, at: (d && d.record && d.record.at) || at, msg: "" });
+        })
+        .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
+    }, 1200);
+  }, [callState, repairOverride, wholesaleFee, address, syncId]);
+
   const [ownerNames, setOwnerNames] = useState(null); // owner of record from the subject pull — prefills the seller name and shows under the field
   const [subjectInfo, setSubjectInfo] = useState(null);
   // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
@@ -1092,6 +1258,8 @@ export default function App() {
   const [soldLoading, setSoldLoading] = useState(false);
   const [soldMsg, setSoldMsg] = useState(null);
   const [soldIncluded, setSoldIncluded] = useState({}); // manual "include" overrides for flagged sold comps, keyed by comp index (reset on each pull)
+  const [arvSource, setArvSource] = useState("");   // which method produced the typed ARV
+  const [compsOpen, setCompsOpen] = useState(false); // Deal Desk comp engine starts collapsed
   const [mlsOnly, setMlsOnly] = useState(true); // show only MLS-verified sales (applies only when the MLS cross-check ran)
   const [compDetail, setCompDetail] = useState(null); // { i } — which sold comp's detail pop-up is open (opened by clicking a card photo)
 
@@ -1118,6 +1286,8 @@ export default function App() {
       } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
       // 2) Recorded sold comps + MLS cross-check (the server makes both RentCast calls in one go)
       await pullSold(hints);
+      setCompsOpen(true);
+      if (!arvSource && num(arvOverride) <= 0) setArvSource("deal-desk");
       setCompMsg({ type: "ok", text: "Pulled the subject record and recorded sold comps. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
     } catch {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
@@ -1305,10 +1475,11 @@ export default function App() {
     const o = num(arvOverride);
     const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;
     let label = "ARV", sub = "sold-comp ARV · actual recorded sales";
-    if (o > 0 && (!soldVal || o !== soldVal)) { label = "Manual ARV"; sub = "typed in — overrides the sold comps"; }
+    const srcLbl = ARV_SOURCE_LABEL[arvSource] || "";
+    if (o > 0 && (!soldVal || o !== soldVal)) { label = "ARV"; sub = srcLbl ? `from ${srcLbl.toLowerCase()}` : "typed in — tag the source"; }
     if (subjAdjust !== 0) sub += ` · includes ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction`;
     return { label, sub };
-  }, [arvOverride, soldSummary, subjAdjust]);
+  }, [arvOverride, soldSummary, subjAdjust, arvSource]);
 
   // ---- repairs ----
   const repairPsf = rehabLevel === "cosmetic" ? 15 : rehabLevel === "moderate" ? 30 : rehabLevel === "gut" ? 50 : num(customPsf);
@@ -1470,8 +1641,19 @@ export default function App() {
                 onClose={() => setCallOpen(false)}
                 cs={callState}
                 upd={(k, v) => setCallState((p) => ({ ...p, [k]: v }))}
-                reset={() => setCallState(INITIAL_CALL)}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee }}
+                reset={() => {
+                  setCallState(INITIAL_CALL);
+                  setCallLoadedAt(null); setCallSavedAt(null);
+                  try { if (addressSavable(address)) window.localStorage.removeItem(callStoreKey(address)); } catch {}
+                  if (syncId.code && addressSavable(address)) {
+                    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { method: "DELETE", headers: { "x-ylhb-key": syncId.code } }).catch(() => {});
+                  }
+                  setSyncState({ status: "idle", by: null, at: null, msg: "" });
+                }}
+                save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
+                  sync: syncState, syncId,
+                  setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "" }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
@@ -1571,10 +1753,66 @@ export default function App() {
           )}
         </div>
 
-        {/* ACTUAL SOLD COMPS (recorded closings) */}
+        {/* ARV — the front door. Type the number you built in PropStream (or wherever), tag the
+            source so the report shows how it was derived, and the whole deal math follows. The
+            Deal Desk comp engine below stays available for verifying or building a number. */}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <SectionTitle>ARV — after repair value</SectionTitle>
+          <div className="mt-1 text-[11px] leading-snug text-slate-500">
+            Type the ARV you came up with and everything below recalculates. Leave it blank to use the Deal Desk sold-comp number instead{subjAdjust !== 0 ? " (your bed/bath record correction rides on top either way)" : ""}.
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label="Enter ARV" hint={num(arvOverride) > 0 ? "driving the deal" : "or use comps below"}>
+              <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
+            </Field>
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Where did this number come from?</div>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {ARV_SOURCES.map(([v, l]) => (
+                  <button key={v} type="button" onClick={() => setArvSource(arvSource === v ? "" : v)}
+                    className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${arvSource === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+              {num(arvOverride) > 0 && !arvSource && (
+                <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
+                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
+                  Tag the source. It goes on the call report, so anyone reviewing this deal later can see whether the ARV was comped or estimated.
+                </div>
+              )}
+              {arvSource === "ps-estimate" && (
+                <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
+                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
+                  That is an automated estimate, not comped value. Fine for a first pass, but comp it before you put a number in front of a seller.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ACTUAL SOLD COMPS (recorded closings) — collapsed by default now that the ARV box is
+            the front door. Reps who already have a number never have to open this. */}
+        {!compsOpen ? (
+          <button type="button" onClick={() => setCompsOpen(true)}
+            className="mt-4 flex w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm hover:bg-slate-50 sm:px-5">
+            <span>
+              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Verify with Deal Desk comps</span>
+              <span className="mt-0.5 block text-[11px] leading-snug text-slate-400">
+                {soldSummary && soldSummary.arv > 0
+                  ? <>Recorded sales say <b className="text-slate-600">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b>{num(arvOverride) > 0 && Math.abs(num(arvOverride) - (soldSummary.arv + subjAdjust)) > (soldSummary.arv + subjAdjust) * 0.1 ? <span className="text-amber-600"> — more than 10% off your number, worth a look</span> : ""}. Open to review the comps.</>
+                  : "Pull real recorded sales to build or check an ARV. Optional if you already have one."}
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+          </button>
+        ) : (
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
-            <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
+            <button type="button" onClick={() => setCompsOpen(false)} className="flex items-center gap-1.5 text-left hover:opacity-70" title="Collapse the comp engine">
+              <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
+              <ChevronLeft className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            </button>
             <div className="flex shrink-0 items-center gap-2">
               {soldLoading && (
                 <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-500">
@@ -1719,19 +1957,7 @@ export default function App() {
             </>
           )}
         </div>
-
-        {/* ARV SOURCE PICKER — which valuation drives the deal */}
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <SectionTitle>ARV override</SectionTitle>
-          <div className="mt-1 text-[11px] leading-snug text-slate-500">
-            The deal math runs on the sold-comp ARV automatically{subjAdjust !== 0 ? " (your bed/bath record correction rides on top)" : ""}. Type a number here only when you want to overrule the comps.
-          </div>
-          <div className="mt-3">
-            <Field label="Enter ARV directly" hint="overrides comps">
-              <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder="optional" />
-            </Field>
-          </div>
-        </div>
+        )}
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
