@@ -786,7 +786,7 @@ const buildCallReport = (cs, deal, strat) => {
   </style></head><body>
     <div class="bar">
       <button class="pdfbtn" onclick="window.print()">Save as PDF</button>
-      <span class="barhint">Opens your print box &mdash; set Destination to &ldquo;Save as PDF&rdquo;, then Save.</span>
+      <span class="barhint">Opens your print box &mdash; set Destination to &ldquo;Save as PDF&rdquo;, then Save. <b>Then upload that PDF to the seller&rsquo;s contact in Closer Control, under Documents.</b></span>
     </div>
     <h1>YLHB &mdash; Offer Call Report</h1>
     <div class="sub">${esc(deal.address || "No address entered")} &middot; ${new Date().toLocaleString()}</div>
