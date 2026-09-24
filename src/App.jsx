@@ -1159,6 +1159,26 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 ? <>From the condition chip above: <span className="font-semibold text-slate-600">{usd(deal.repairs)}</span>{deal.repairPsf > 0 ? ` (${usd(deal.repairPsf)}/sf)` : ""}. Type a real number here if you have a contractor bid — it overrides the estimate.</>
                 : <>Pick a condition above, or type a real repair number if you have one.</>}
           </div>
+          {/* The chain a rep is actually changing when they touch repairs. Kept to one line so the
+              stage stays readable, but it makes condition feel connected to the offer. */}
+          {deal.arv > 0 && (
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">ARV</div>
+                <div className="font-mono text-sm font-bold text-slate-800">{usd(deal.arv)}</div>
+              </div>
+              <div className="text-slate-300">−</div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Repairs</div>
+                <div className="font-mono text-sm font-bold text-slate-800">{deal.repairs > 0 ? usd(deal.repairs) : "—"}</div>
+              </div>
+              <div className="text-slate-300">=</div>
+              <div className="text-right">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">You can offer</div>
+                <div className="font-mono text-sm font-bold text-emerald-700">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div>
+              </div>
+            </div>
+          )}
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
