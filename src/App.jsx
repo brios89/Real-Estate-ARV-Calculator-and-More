@@ -1277,131 +1277,108 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           </WField>
         </div>)}
 
-        {stage === 7 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Strategy — best fit first</div>
-          {(cs.loan === "yes" || cs.terms === "yes" || cs.terms === "maybe") && (
-            <details className="mt-2 rounded-xl border border-slate-200 bg-white p-3">
-              <summary className="cursor-pointer text-[12px] font-bold text-slate-800">Negotiating Sub-To or Hybrid — open before you pitch terms</summary>
+        {stage === 7 && (() => {
+          // Rebuilt for a live call: pick one, read one thing, everything else stays folded.
+          const picked = cs.chosen ? strat.ranked.find((r) => r.id === cs.chosen) : null;
+          const active = picked || (strat.ranked[0] && strat.ranked[0].sc > 0 ? strat.ranked[0] : null);
+          const second = {
+            nov: "“The short version is we prepare and sell it on your behalf, so you end up closer to full value, and we get paid out of what we add rather than out of your pocket.”",
+            sf: "“The short version is you get the number you want, and instead of one lump sum today, it comes to you over time on terms we agree on together.”",
+            hybrid: "“The short version is you get the number you want. Part of it comes at closing, and the rest comes to you over time instead of all at once.”",
+            subto: "“The short version is you get the number you want, and instead of waiting on a bank, we take over what is already in place and handle it from here.”",
+          }[active ? active.id : ""] || "";
+          const overAsk = strat.gap != null && strat.gap > 0;
+          return (<div>
+            <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Strategy</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">Tap the one you are pitching. Scored by fit, but you decide.</div>
 
-              <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Find the real number first</div>
-              <div className="mt-1 text-[11.5px] leading-snug text-slate-600">
-                Do not negotiate against their asking price, negotiate against what they actually need. Ask it in this order.
-              </div>
-              <Line>“After the loan is paid off and everything is settled, what do you need in your pocket to move on?”</Line>
-              <Line>“What are you doing with the money?” Their answer tells you the real minimum. Movers and a deposit is a different number than a lawyer's retainer.</Line>
-              <Line>“If I covered the back payments and all the closing costs, how close does that get you?”</Line>
-              <Hint>Nine times out of ten the cash they need is far smaller than the equity on paper. The equity is a story. The need is a number.</Hint>
-
-              <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">What you can trade</div>
-              <div className="mt-1 text-[11.5px] leading-snug text-slate-600">
-                They can have their price or their terms, not both. Every dollar you hand over at closing should buy something back.
-              </div>
-              <div className="mt-1.5 space-y-1 text-[11.5px] leading-snug text-slate-600">
-                <div><b className="text-slate-800">Give price, take terms.</b> Pay closer to their number in exchange for a lower rate on the carry, a longer term, or a later balloon.</div>
-                <div><b className="text-slate-800">Give time, take cash.</b> If they will wait on part of their money, the cash at closing drops. Monthly payments or a lump sum in twelve months.</div>
-                <div><b className="text-slate-800">Give certainty, take flexibility.</b> A firm close date and no inspection contingency is worth real money to someone under pressure.</div>
-                <div><b className="text-slate-800">Never trade away the rate.</b> On a Sub-To the existing low rate is the asset. Protect it above everything else.</div>
-              </div>
-
-              <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">What they will push back on</div>
-              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Why would I leave the loan in my name?”</summary>
-                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“That is a fair question. What your lender cares about is that the payment gets made on time, every month. We take that over and it gets paid. What changes for you is that you are no longer responsible for the house, the repairs, the tenants, or the payment coming out of your account.”</div>
-              </details>
-              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“What if you stop paying?”</summary>
-                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“Then you would be in a worse spot, which is exactly why we put protections in writing. This closes at a title company with an attorney involved, the payments are documented, and you get proof of every one. Ask us for whatever documentation makes you comfortable.” Do not improvise promises here. Anything beyond what the agreement says goes to the head of acquisitions.</div>
-              </details>
-              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Can the bank call the loan?”</summary>
-                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">Answer honestly and briefly: most mortgages contain a due on sale clause, so yes, a lender has the right to call the balance due. Say what is true, that as long as the payment is current, calling the loan is uncommon, and that if it ever happened we would refinance or sell to pay it off. Then get the specifics from the head of acquisitions. Never tell a seller it cannot happen.</div>
-              </details>
-              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Partnership? So do I still own part of it?”</summary>
-                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“No, and I am glad you asked. Partnership is just what we call the program. You are selling us the house. What the agreement says you get, and when you get it, is exactly what happens.” Do not soften this one. A seller who walks away thinking they kept an ownership interest is a lawsuit, not a deal.</div>
-              </details>
-              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“How does this affect me buying my next house?”</summary>
-                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“Your new lender needs to see that you are not responsible for this payment. We can provide documentation of the transfer and the payment history for exactly that.” If they need something specific in writing for a lender, that is an escalation, not a promise you make on the call.</div>
-              </details>
-
-              <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
-                <b>Do not do these on a call.</b> No guarantees about anything. No promising the loan will never be called. No legal or tax advice. No agreeing to terms that are not on an approved contract. Never let “partnership” imply the seller keeps ownership or a share of the profit. If a seller needs something outside the normal structure to say yes, that is a win worth escalating, not a reason to freelance.
-              </div>
-            </details>
-          )}
-          {strat.gap != null && strat.gap > 0 && (
-            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-[11px] leading-snug text-slate-700">
-              {(() => {
-                // One door, then a second sentence that matches whichever structure is ranked first.
-                // The seller never hears "sub-to" or "novation" at the transition — naming the
-                // mechanism invites them to go Google it mid-call. The rep opens the door, the
-                // best-fit strategy decides how they describe what is behind it.
-                const picked = cs.chosen ? strat.ranked.find((r) => r.id === cs.chosen) : null;
-                const top = picked || strat.ranked[0];
-                const lane = top && (picked || top.sc > 0) ? top.id : "";
-                const second = lane === "nov"
-                  ? "“The short version is we prepare and sell it on your behalf, so you end up closer to full value, and we get paid out of what we add rather than out of your pocket.”"
-                  : lane === "sf"
-                    ? "“The short version is you get the number you want, and instead of one lump sum today, it comes to you over time on terms we agree on together.”"
-                    : lane === "hybrid"
-                      ? "“The short version is you get the number you want. Part of it comes at closing, and the rest comes to you over time instead of all at once.”"
-                      : lane === "subto"
-                        ? "“The short version is you get the number you want, and instead of waiting on a bank, we take over what is already in place and handle it from here.”"
-                        : "";
+            {/* 1. PICK — compact, the whole board at a glance */}
+            <div className="mt-2 space-y-1.5">
+              {strat.ranked.map((o, i) => {
+                const on = active && active.id === o.id;
                 return (
-                  <>
-                    <b>The Partnership transition (their number beats cash):</b> “It sounds like you like everything about what we discussed other than the price… probably 9 out of 10 homeowners we talk with feel the same way. So what we did was develop a way to offer sellers more money and still have it make sense for us — our Partnership Program. If I could get you closer to your number, would you like to go over the details, or should we just part ways now?”
-                    {second && (
-                      <div className="mt-2 border-t border-emerald-200 pt-2">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">Then, once they say yes — {top.label}</div>
-                        <div className="mt-0.5">{second}</div>
-                      </div>
-                    )}
-                  </>
+                  <button key={o.id} type="button" onClick={() => upd("chosen", cs.chosen === o.id ? "" : o.id)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition ${
+                      on ? "border-emerald-600 bg-emerald-50 ring-1 ring-emerald-600" : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}>
+                    <span className="flex items-center gap-1.5">
+                      <span className={`text-[12px] font-bold ${on ? "text-emerald-900" : "text-slate-700"}`}>{o.label}</span>
+                      {i === 0 && o.sc > 0 && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
+                      {o.warn.length > 0 && <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                    </span>
+                    <span className={`font-mono text-[11px] font-bold ${on ? "text-emerald-700" : "text-slate-400"}`}>{o.sc}</span>
+                  </button>
                 );
-              })()}
+              })}
             </div>
-          )}
-          {strat.gap != null && strat.gap > 0 && (
-            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
-              <b>Careful with the word partnership.</b> It is the name of our program, not a description of what the seller becomes. They are not getting an ownership stake, a share of the profit, or a say in what we do with the house. If a seller asks “so am I a partner in this?”, answer plainly: “It is just what we call the program. You are selling us the house, and the agreement spells out exactly what you get and when.” Never let it imply equity, and never promise a number the agreement does not say.
-            </div>
-          )}
-          <div className="mt-2 text-[10.5px] leading-snug text-slate-400">
-            Ranked by fit. Tap whichever one you are actually pitching and the transition line and script above follow your pick, not the ranking.
-          </div>
-          {strat.ranked.map((o, i) => (
-            <div key={o.id} onClick={() => upd("chosen", cs.chosen === o.id ? "" : o.id)}
-              title="Tap to pitch this one — the transition line above follows your pick"
-              className={`mt-2 cursor-pointer rounded-xl border p-3 transition ${
-                cs.chosen === o.id
-                  ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600"
-                  : (!cs.chosen && i === 0 && o.sc > 0) ? "border-emerald-400 bg-emerald-50/40 hover:border-emerald-500" : "border-slate-200 bg-white hover:border-slate-300"
-              }`}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-1.5 text-[12px] font-bold text-slate-800">
-                  {o.label}
-                  {i === 0 && o.sc > 0 && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
-                  {cs.chosen === o.id && <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">Pitching this</span>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[11px] font-bold text-slate-500">{o.sc}</span>
-                  <button type="button" onClick={(e) => { e.stopPropagation(); onTab(o.tab); }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">Open tab</button>
-                </div>
+
+            {/* 2. SAY — the only prose on screen by default */}
+            {active && (
+              <div className="mt-3 rounded-xl border-2 border-emerald-500 bg-emerald-50/50 p-3">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">What to say — {active.label}</div>
+                {overAsk && (
+                  <>
+                    <Line>“It sounds like you like everything about what we discussed other than the price… probably 9 out of 10 homeowners we talk with feel the same way. So what we did was develop a way to offer sellers more money and still have it make sense for us, our Partnership Program. If I could get you closer to your number, would you like to go over the details, or should we just part ways now?”</Line>
+                    {second && <Line>{second}</Line>}
+                  </>
+                )}
+                {active.pitch.map((p, k) => <Line key={k}>{p}</Line>)}
+                <button type="button" onClick={() => onTab(active.tab)}
+                  className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700">
+                  Run the {active.label} numbers
+                </button>
               </div>
-              {o.rs.map((r, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-slate-600"><CheckCircle2 className="mt-px h-3 w-3 shrink-0 text-emerald-500" />{r}</div>)}
-              {o.warn.map((w, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-amber-700"><AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}</div>)}
-              {o.miss.length > 0 && (
-                <div className="mt-1.5 rounded-md bg-slate-50 px-2.5 py-1.5">
-                  <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">To sharpen this — ask:</div>
-                  {o.miss.map((m, k) => <div key={k} className="mt-1 text-[11px] leading-snug text-slate-600"><span className="font-semibold">{m.q}</span> <span className="text-slate-400">— {m.why}</span></div>)}
+            )}
+
+            {/* 3. EVERYTHING ELSE — folded until asked for */}
+            {active && (active.rs.length > 0 || active.warn.length > 0 || active.miss.length > 0) && (
+              <details className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">Why {active.label} scores {active.sc}</summary>
+                {active.rs.map((r, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-slate-600"><CheckCircle2 className="mt-px h-3 w-3 shrink-0 text-emerald-500" />{r}</div>)}
+                {active.warn.map((w, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-amber-700"><AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}</div>)}
+                {active.miss.map((m, k) => <div key={k} className="mt-1.5 text-[11px] leading-snug text-slate-600"><span className="font-semibold">Still to ask: {m.q}</span> <span className="text-slate-400">{m.why}</span></div>)}
+              </details>
+            )}
+
+            {overAsk && (
+              <details className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-amber-800">Careful with the word partnership</summary>
+                <div className="mt-1.5 text-[11px] leading-snug text-amber-800">
+                  It is the name of our program, not a description of what the seller becomes. No ownership stake, no share of the profit, no say in what we do with the house. If they ask “so am I a partner in this?”, say: “It is just what we call the program. You are selling us the house, and the agreement spells out exactly what you get and when.”
                 </div>
-              )}
-              {(cs.chosen ? cs.chosen === o.id : i === 0 && o.sc > 0) && o.pitch.map((p, k) => <Line key={k}>{p}</Line>)}
-            </div>
-          ))}
-        </div>)}
+              </details>
+            )}
+
+            {(cs.loan === "yes" || cs.terms === "yes" || cs.terms === "maybe") && (
+              <details className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">Negotiating terms — the real number, what to trade, pushback</summary>
+
+                <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Find the real number</div>
+                <Line>“After the loan is paid off and everything is settled, what do you need in your pocket to move on?”</Line>
+                <Line>“What are you doing with the money?” Their answer is the real minimum.</Line>
+                <Line>“If I covered the back payments and all the closing costs, how close does that get you?”</Line>
+
+                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">What you can trade</div>
+                <div className="mt-1 space-y-1 text-[11px] leading-snug text-slate-600">
+                  <div><b className="text-slate-800">Price for terms.</b> Closer to their number in exchange for a lower rate, longer term, or later balloon.</div>
+                  <div><b className="text-slate-800">Time for cash.</b> If they will wait on part of it, the cash at closing drops.</div>
+                  <div><b className="text-slate-800">Certainty for flexibility.</b> A firm close date is worth real money to someone under pressure.</div>
+                  <div><b className="text-slate-800">Never trade the rate.</b> On a Sub-To the existing low rate is the asset.</div>
+                </div>
+
+                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Their pushback</div>
+                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Why leave the loan in my name?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“What your lender cares about is that the payment gets made on time. We take that over and it gets paid. What changes for you is that you are no longer responsible for the house, the repairs, the tenants, or that payment leaving your account.”</div></details>
+                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“What if you stop paying?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“That is exactly why we put protections in writing. This closes at a title company, the payments are documented, and you get proof of every one.” Do not improvise promises. Anything beyond the agreement goes to the head of acquisitions.</div></details>
+                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Can the bank call the loan?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">Answer honestly: most mortgages have a due on sale clause, so yes, a lender has that right. As long as the payment is current it is uncommon, and if it happened we would refinance or sell to pay it off. Never tell a seller it cannot happen.</div></details>
+                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“So do I still own part of it?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“No. Partnership is just what we call the program. You are selling us the house, and the agreement says exactly what you get and when.” Do not soften this one.</div></details>
+
+                <div className="mt-2.5 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+                  <b>Never on a call:</b> guarantees of any kind, promising the loan will not be called, legal or tax advice, terms outside an approved contract, or letting “partnership” imply ownership.
+                </div>
+              </details>
+            )}
+          </div>);
+        })()}
 
         {stage === 8 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Close it out</div>
