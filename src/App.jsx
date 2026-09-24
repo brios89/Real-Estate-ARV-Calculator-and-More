@@ -613,6 +613,10 @@ function scoreStrategies(c, deal) {
   // What the rep tapped wins. Failing that, fall back to what the repair number implies.
   const implied = c.condition ? null : impliedCondition(deal.repairs, deal.sqft);
   const cond = c.condition || implied;
+  // A chip that contradicts the repair dollars is worth saying out loud: the offer is built on the
+  // dollars, so the two need to agree before anyone quotes a number.
+  const impliedCheck = c.condition ? impliedCondition(deal.repairs, deal.sqft) : null;
+  const condMismatch = impliedCheck && impliedCheck !== c.condition ? impliedCheck : null;
   const condNote = implied ? ` (read from the ${usd(deal.repairs)} repair number, confirm it on the call)` : "";
   const out = [];
 
@@ -730,6 +734,10 @@ function scoreStrategies(c, deal) {
       pitch: ["“We prepare and sell it retail on your behalf — you get closer to the retail number, we handle the work and the buyers, and you get paid at closing.”"] });
   }
 
+  if (condMismatch) {
+    const msg = `Condition says ${c.condition} but ${usd(deal.repairs)} of repairs reads as ${condMismatch}. The offer is built on the dollars — fix whichever is wrong.`;
+    for (const o of out) if (["cash", "subto", "nov"].includes(o.id)) o.warn.push(msg);
+  }
   for (const o of out) o.sc = Math.max(0, Math.min(100, Math.round(o.sc)));
   out.sort((a, b) => b.sc - a.sc);
   return { ranked: out, gap, equity };
@@ -1167,6 +1175,14 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 ? <>From the condition chip above: <span className="font-semibold text-slate-600">{usd(deal.repairs)}</span>{deal.repairPsf > 0 ? ` (${usd(deal.repairPsf)}/sf)` : ""}. Type a real number here if you have a contractor bid — it overrides the estimate.</>
                 : <>Pick a condition above, or type a real repair number if you have one.</>}
           </div>
+          {cs.condition && impliedCondition(deal.repairs, deal.sqft) && impliedCondition(deal.repairs, deal.sqft) !== cs.condition && (
+            <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-800">
+              <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
+              <span>
+                These disagree. You tapped <b>{cs.condition}</b>, but {usd(deal.repairs)} on {num(deal.sqft).toLocaleString()} sq ft is about ${Math.round(num(deal.repairs) / num(deal.sqft))}/sf, which is a <b>{impliedCondition(deal.repairs, deal.sqft)}</b> rehab. Your offer is being built on the {usd(deal.repairs)}, so fix whichever one is wrong.
+              </span>
+            </div>
+          )}
           {!cs.condition && impliedCondition(deal.repairs, deal.sqft) && (
             <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-slate-500">
               <Info className="mt-px h-3 w-3 shrink-0 text-slate-400" />
