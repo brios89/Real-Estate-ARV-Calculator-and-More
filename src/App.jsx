@@ -306,11 +306,13 @@ const AddressAutocomplete = ({ value, onChange, onPick, placeholder }) => {
   );
 };
 
-const MoneyInput = ({ value, onChange, placeholder }) => (
+// filled: the placeholder is a real number the app pulled, not a hint. Show it dark so it reads as
+// data. Still a placeholder underneath, so typing replaces it and a fresh pull can update it.
+const MoneyInput = ({ value, onChange, placeholder, filled }) => (
   <div className="flex items-center rounded-lg border border-slate-200 bg-white transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
     <span className="pl-3 pr-1 text-sm text-slate-400">$</span>
     <input type="text" inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-      className="w-full bg-transparent py-2 pr-3 text-sm tabular-nums text-slate-900 outline-none font-mono" />
+      className={`w-full bg-transparent py-2 pr-3 text-sm tabular-nums text-slate-900 outline-none font-mono ${filled && !value ? "placeholder:font-semibold placeholder:text-slate-800" : ""}`} />
   </div>
 );
 
@@ -906,6 +908,7 @@ const buildCallReport = (cs, deal, strat) => {
 // Where an ARV came from. Tagged on every deal so the call report shows whether the number was
 // comped or estimated — the difference between a real offer and a guess with a dollar sign on it.
 const ARV_SOURCES = [
+  ["privy", "Privy comps"],
   ["ps-comps", "PropStream comps"],
   ["ps-estimate", "PropStream estimate"],
   ["mls", "MLS / agent"],
@@ -1585,7 +1588,7 @@ export default function App() {
     }
   }
 
-  // Pull the rent estimate on demand (from the BRRRR/DSCR "Generate" button). One RentCast credit per pull.
+  // Pull the rent estimate. Runs as part of Auto-comp, or from the Offer Call drawer. One RentCast credit.
   async function fetchRent(addr) {
     const a = (addr || "").trim();
     if (!a) { setRentMsg({ type: "err", text: "Enter an address up top first, then reopen this tab." }); return; }
@@ -1609,7 +1612,7 @@ export default function App() {
     }
   }
 
-  // Rent is pulled on demand from the BRRRR/DSCR panel's "Generate" button (uses a RentCast credit).
+  // Rent comes from Auto-comp, the drawer's Get market rent button, or a remembered prior pull.
 
   // rehab + MAO %
   const [rehabLevel, setRehabLevel] = useState("moderate");
@@ -2526,7 +2529,7 @@ function InstructionsButton() {
     ["Read the verdict", "Green means it pencils, amber means it's tight, red means walk. Hover the ⓘ icons for what any field means."],
     ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this contract' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
     ["See the rate's worth", "The Rate Savings and amortization sliders show what a below-market loan saves over time and how the payment shifts from interest to principal."],
-    ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Hit Generate next to Monthly rent to pull a RentCast estimate."],
+    ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Market rent is pulled automatically with Auto-comp, or type your own."],
     ["Send it to buyers", "Hit 'Download buyer deck' on any creative tab to generate a branded YLHB PowerPoint for your buyers list. Fill the required fields and it builds the slides."],
     ["Learn as you go", "Every tab has a plain-English explainer at the bottom, plus free Pace Morby videos on that structure."],
   ];
@@ -3390,17 +3393,12 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
             : <div className="mt-1 text-[10px] text-slate-400">Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-500">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-500">Keeping it</b> → just the price.</div>}
         </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
-        <Field label="Monthly rent" info="Market rent once it's fixed and leased. Hit Generate to pull a RentCast estimate for this address, or type your own number.">
-          <div className="flex items-center gap-2">
-            <div className="flex-1"><MoneyInput value={rentOverride} onChange={setRentOverride} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type, or hit Generate"} /></div>
-            <button type="button" onClick={onGenerateRent} disabled={rentLoading || !hasAddress}
-              className="flex shrink-0 items-center gap-1 rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
-              title={hasAddress ? "Pull a RentCast rent estimate for this address" : "Add an address up top first"}>
-              {rentLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Generate
-            </button>
-          </div>
+        <Field label="Monthly rent" info="Market rent once it's fixed and leased. Pulled automatically with Auto-comp — type here to use your own number instead.">
+          <MoneyInput value={rentOverride} onChange={setRentOverride} filled={num(rentDefault) > 0}
+            placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : (rentLoading ? "Pulling…" : "Type the rent")} />
           {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
-          {num(rentDefault) > 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">RentCast estimate ${Math.round(num(rentDefault)).toLocaleString()}/mo loaded — shown above; type to override.</div>}
+          {num(rentDefault) > 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">Pulled with Auto-comp. Type to override.</div>}
+          {num(rentDefault) <= 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">Run Auto-comp up top to pull this automatically, or type it.</div>}
         </Field>
         <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator. Auto-estimated from the ARV using U.S. average rates (~0.9% tax + ~0.6% insurance per year), excluding the outlier states CA, NY & FL. Type the actual to override.">
           <MoneyInput value={taxIns} onChange={setTaxIns} placeholder={estTaxIns > 0 ? String(Math.round(estTaxIns)) : "e.g. 300"} />
