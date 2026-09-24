@@ -2316,6 +2316,19 @@ export default function App() {
             )}
           </div>
 
+          {/* Once there is an ARV, the next move is the call, not more analysis. Point at the button. */}
+          {arv > 0 && !callTouched && (
+            <button type="button" onClick={() => setCallOpen(true)}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
+              <Phone className="h-4 w-4" /> You have an ARV. Open the Offer Call.
+            </button>
+          )}
+          {arv > 0 && !callTouched && (
+            <div className="mt-1 text-center text-[10.5px] leading-snug text-slate-400">
+              The Offer Call walks the script, captures what the seller tells you, and tells you which strategy to pitch.
+            </div>
+          )}
+
           <div className="mt-3 border-t border-slate-100 pt-3">
             <Field label={num(arvOverride) > 0 ? "Your ARV — overriding the comps" : "Use your own number instead"} hint={num(arvOverride) > 0 ? "clear it to go back to comps" : "wins over the comps"}>
               <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder={arv > 0 && num(arvOverride) <= 0 ? String(Math.round(arv)) : "optional"} />
