@@ -534,8 +534,10 @@ const INITIAL_CALL = {
   motivation: "", motivNotes: "",
   occupancy: "", condition: "", loan: "", balance: "", payment: "", rate: "", behind: "",
   escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
+  hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
   timeline: "", others: "",
   ask: "", priceBasis: "",
+  chosen: "",                    // the strategy the rep is actually pitching (may differ from the engine's top pick)
   terms: "",
 };
 
@@ -547,7 +549,7 @@ const PILLARS = [
 ];
 
 const REBUTTALS = [
-  { t: "“There's a similar house listed for this much.”", a: "“The only person that determines the price is a ready, willing and able buyer.”" },
+  { t: "“There's a similar house listed for this much.”", a: "“A listed price is just an asking price, not a sale. The only price that counts is what a buyer who is ready, willing and able will actually pay. Right now, that's us, and this is what we can do.”" },
   { t: "“Zillow says it's worth this much.”", a: "“Let me ask you this — has an employee of Zillow ever gone into your house to take pictures and analyze how much work it needs or doesn't need? Zillow takes the average sales price of houses sold on the MLS, and most of those are retail ready — updated, no work needed.”" },
   { t: "“My house appraised for this much.”", a: "“Here's the thing with appraisals — the appraiser isn't the one buying the house. It's only worth what a buyer will pay. And right now average days on market is 60 to 90 days. A lot can happen in that time.”" },
 ];
@@ -557,16 +559,27 @@ const REBUTTALS = [
 // At or under 65% of rent there is real cash flow. Past 75% you are buying a break-even deal
 // with due-on-sale risk attached. Seller-quoted payments often exclude escrow, so taxes and
 // insurance get added when the rep says the payment does not include them.
+// A loan well under today's market rate is an asset in its own right. Below this, the deal does
+// not get to quietly die on the vine: it goes to the head of acquisitions if it is not locked up.
+const LOW_RATE = 4.0;
+const rateNum = (v) => {
+  const n = parseFloat(String(v || "").replace(/[^0-9.]/g, ""));
+  return isNaN(n) || n <= 0 ? null : n;
+};
+const isLowRate = (v) => { const n = rateNum(v); return n != null && n < LOW_RATE; };
+
 const PITI_GOOD = 0.65, PITI_LIMIT = 0.75;
 const pitiCheck = (cs, rent) => {
   const base = num(cs.payment);
   if (base <= 0 || !rent || rent <= 0) return null;
   const addTI = cs.escrowed === "no" ? num(cs.tiMonthly) : 0;
-  const piti = base + addTI;
+  const addHOA = cs.hoa === "yes" ? num(cs.hoaAmt) : 0;   // dues are a real monthly cost against the same rent
+  const piti = base + addTI + addHOA;
   const ratio = piti / rent;
   const missingTI = cs.escrowed === "no" && num(cs.tiMonthly) <= 0;
+  const missingHOA = cs.hoa === "yes" && num(cs.hoaAmt) <= 0;
   return {
-    piti, rent, ratio, missingTI,
+    piti, rent, ratio, missingTI, missingHOA, hoa: addHOA,
     unknownEscrow: !cs.escrowed,
     verdict: ratio <= PITI_GOOD ? "good" : ratio <= PITI_LIMIT ? "thin" : "fail",
     targetPiti: Math.round(rent * PITI_GOOD),
@@ -628,6 +641,7 @@ function scoreStrategies(c, deal) {
           rs.push(`Payment is ${pct} of market rent, which leaves real room after vacancy, maintenance and CapEx.`);
         }
         if (pc.missingTI) warn.push("Taxes and insurance are not in that payment and have not been added, so the real ratio is worse than shown.");
+        if (pc.missingHOA) warn.push("There is an HOA but the dues have not been entered, so the real ratio is worse than shown.");
       } else if (num(c.payment) > 0 && !deal.rent) {
         miss.push(M("Pull the market rent in the Property stage.", "Payment versus rent decides whether this is a hold or a headache."));
       }
@@ -750,6 +764,9 @@ const buildCallNarrative = (cs, deal, strat) => {
   const s2 = [];
   if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
   else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
+  if (isLowRate(cs.rate)) s2.push(`Loan is at ${rateNum(cs.rate)}%, well under market. If this is not locked up or creative was declined, it goes to the head of acquisitions rather than being marked dead.`);
+  if (cs.hoa === "yes") s2.push(`There is an HOA${num(cs.hoaAmt) > 0 ? ` at ${money(cs.hoaAmt)} a month` : ""}.`);
+  if (cs.hoa === "no") s2.push("No HOA.");
   if (cs.loan === "no") s2.push("Owned free and clear - no loan on the property.");
   if (cs.loan === "yes") {
     const bits = [];
@@ -780,7 +797,9 @@ const buildCallNarrative = (cs, deal, strat) => {
   if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
   const top = strat.ranked[0];
   if (top && top.sc > 0) {
-    s4.push(`Best-fit strategy: ${top.label} (score ${top.sc}).`);
+    const pick = cs.chosen ? strat.ranked.find((r) => r.id === cs.chosen) : null;
+    if (pick && pick.id !== top.id) s4.push(`Strategy pitched: ${pick.label}. Deal Desk's best fit was ${top.label} (score ${top.sc}).`);
+    else s4.push(`Best-fit strategy: ${top.label} (score ${top.sc}).`);
     if (top.rs.length) s4.push(`Why: ${top.rs.slice(0, 2).join(" ")}`);
     if (top.miss.length) s4.push(`Still to get: ${top.miss[0].q}`);
   }
@@ -808,6 +827,7 @@ const buildCallReport = (cs, deal, strat) => {
     h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#94a3b8;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin:22px 0 8px}
     table{width:100%;border-collapse:collapse}td{padding:4px 6px;border-bottom:1px solid #f1f5f9;vertical-align:top}td:first-child{width:220px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
     .pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;background:#f1f5f9;color:#94a3b8;margin-right:6px}.pill.on{background:#d1fae5;color:#047857}
+    .pitched{margin-bottom:8px;border-radius:8px;background:#ecfdf5;border:1px solid #a7f3d0;padding:8px 12px;color:#065f46}
     .strat{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-top:8px}.strat.best{border-color:#059669;background:#ecfdf5}
     .strathead{display:flex;justify-content:space-between;font-size:13px}.strathead span{color:#64748b;font-size:11px}
     .why{color:#334155;margin-top:3px}.warn{color:#b45309;margin-top:3px}.miss{color:#64748b;font-style:italic;margin-top:3px}
@@ -852,6 +872,8 @@ const buildCallReport = (cs, deal, strat) => {
     </table>
     <h2>Property</h2><table>
       ${row("Condition", v(cs.condition))}${row("Occupancy", v(cs.occupancy))}
+      ${isLowRate(cs.rate) ? row("Escalation", `<b style="color:#047857">${esc(String(rateNum(cs.rate)))}% loan &mdash; send to the head of acquisitions if not locked up or if creative was declined</b>`) : ""}
+      ${row("HOA", cs.hoa === "yes" ? `Yes${num(cs.hoaAmt) > 0 ? ` &mdash; ${esc(usd(num(cs.hoaAmt)))}/mo` : ""}` : v(cs.hoa))}
       ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
     </table>
     <h2>Timeline &amp; price</h2><table>
@@ -866,7 +888,9 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
       ${row("Gap (ask &minus; MAO)", strat.gap != null ? (strat.gap > 0 ? "+" : "") + esc(usd(strat.gap)) : "&mdash;")}
     </table>
-    <h2>Strategy ranking</h2>${stratRows}
+    <h2>Strategy ranking</h2>
+    ${cs.chosen && strat.ranked.find((r) => r.id === cs.chosen) ? `<div class="pitched">Pitched on this call: <b>${esc(strat.ranked.find((r) => r.id === cs.chosen).label)}</b></div>` : ""}
+    ${stratRows}
     <div class="foot">Internal working document generated by the YLHB Deal Desk. Figures are estimates for analysis only &mdash; not an appraisal, not an offer, and no outcome is promised or guaranteed.</div>
   </body></html>`;
 };
@@ -1081,9 +1105,18 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <Line>“What has you thinking about selling?”</Line>
           <Line>“How were you hoping we could help?”</Line>
           <Hint>Don't interrogate — keep it natural. Probe with “What's that been like?” · “How long has that been going on?” · “What happens next once you sell?”</Hint>
-          <WField label="Main motivator (the 3 from the script)">
+          <WField label="Main motivator">
             <WChips value={cs.motivation} onChange={(v) => upd("motivation", v)} opts={[["distress", "Property distress"], ["hardship", "Financial hardship"], ["urgency", "Urgency"]]} />
           </WField>
+          {/* Pick-one guidance. Reps hear three problems at once and freeze, so this names what each
+              bucket actually sounds like and tells them to pick the one driving the decision. */}
+          <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2.5 text-[11px] leading-snug text-slate-600">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">What these mean</div>
+            <div className="mt-1.5"><b className="text-slate-800">Property distress</b> is the house itself being the problem. Repairs they cannot afford or manage, a bad tenant, code issues, a place they inherited and cannot keep up.</div>
+            <div className="mt-1.5"><b className="text-slate-800">Financial hardship</b> is money pressure pushing the sale. Behind on payments, medical bills, divorce, job loss, taxes owed, a payment they can no longer carry.</div>
+            <div className="mt-1.5"><b className="text-slate-800">Urgency</b> is a clock. A job transfer, a closing date on another house, a move, an estate that has to settle, or a life change that will not wait.</div>
+            <div className="mt-2 text-[10.5px] text-slate-400">Most sellers have more than one. Pick the one that is actually driving the decision, and put the story in their own words below. That story is what you repeat back later when you ask for the agreement.</div>
+          </div>
           <WField label="Notes — their why, in their words"><WArea value={cs.motivNotes} onChange={(v) => upd("motivNotes", v)} placeholder="tired landlord, moving to FL for grandkids…" /></WField>
         </div>)}
 
@@ -1118,7 +1151,25 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <WField label="Monthly payment"><WText money value={cs.payment} onChange={(v) => upd("payment", v)} placeholder="1150" /></WField>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <WField label="Rate (if they know)"><WText value={cs.rate} onChange={(v) => upd("rate", v)} placeholder="3.25%" /></WField>
+              <WField label="Rate (if they know) — use decimals, like 3.875"><WText value={cs.rate} onChange={(v) => upd("rate", v)} placeholder="3.875" /></WField>
+            </div>
+            {isLowRate(cs.rate) && (
+              <div className="mt-2 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3">
+                <div className="flex items-start gap-2">
+                  <Zap className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                  <div>
+                    <div className="text-[12px] font-bold text-emerald-900">{rateNum(cs.rate)}% loan. Do not let this one go.</div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-emerald-800">
+                      A rate this far under market is worth real money on its own, and it cannot be replaced once this seller sells to someone else. Work the creative offer hard on this call.
+                    </div>
+                    <div className="mt-1.5 text-[11px] font-semibold leading-snug text-emerald-900">
+                      Required after this call: if it is not locked up, or the seller is flat out declining creative financing, send it to the head of acquisitions. Do not mark it dead yourself.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
               <WField label="Behind on payments?"><WChips value={cs.behind} onChange={(v) => upd("behind", v)} opts={[["yes", "Yes"], ["no", "Current"]]} /></WField>
             </div>
             <WField label="Does that payment include taxes and insurance?">
@@ -1130,6 +1181,18 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </WField>
             )}
             <Hint>Ask it plainly: “Is that payment just principal and interest, or does it include your taxes and insurance?” Most sellers quote the escrowed number, but the ones who do not will make this deal look better than it is.</Hint>
+
+            <WField label="Is there an HOA?">
+              <WChips value={cs.hoa} onChange={(v) => upd("hoa", v)} opts={[["yes", "Yes"], ["no", "No"]]} />
+            </WField>
+            {cs.hoa === "yes" && (
+              <>
+                <WField label="HOA dues (monthly)">
+                  <WText money value={cs.hoaAmt} onChange={(v) => upd("hoaAmt", v)} placeholder="250" />
+                </WField>
+                <Hint>Dues come out of the same rent the payment does, so they go straight into the test below. Also ask whether the HOA allows rentals, whether there is a cap or a waitlist, and whether any special assessment is coming. A no-rental HOA kills a Sub-To hold no matter how good the payment looks.</Hint>
+              </>
+            )}
 
             {/* The hold test */}
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
@@ -1153,6 +1216,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     <div className="text-[12px] font-bold text-slate-800">
                       {usd(Math.round(pc.piti))} payment vs {usd(pc.rent)} rent = <span className={tone}>{pct}%</span>
                     </div>
+                    {pc.hoa > 0 && <div className="mt-0.5 text-[10.5px] text-slate-500">Includes {usd(pc.hoa)}/mo HOA dues.</div>}
                     <div className={`mt-0.5 text-[11px] font-semibold leading-snug ${tone}`}>
                       {pc.verdict === "good"
                         ? "Under 65%. This one can carry itself as a rental."
@@ -1161,6 +1225,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                           : `Over 75%. Not a Sub-To hold. The payment would need to be around ${usd(pc.targetPiti)} or less.`}
                     </div>
                     {pc.missingTI && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">Taxes and insurance are not in that payment yet, so the real number is worse than this.</div>}
+                    {pc.missingHOA && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">There is an HOA but the dues are not entered yet, so the real number is worse than this.</div>}
                     {pc.unknownEscrow && <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Confirm whether taxes and insurance are in that payment, or this ratio may be understated.</div>}
                   </div>
                 );
@@ -1214,21 +1279,115 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 7 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Strategy — best fit first</div>
+          {(cs.loan === "yes" || cs.terms === "yes" || cs.terms === "maybe") && (
+            <details className="mt-2 rounded-xl border border-slate-200 bg-white p-3">
+              <summary className="cursor-pointer text-[12px] font-bold text-slate-800">Negotiating Sub-To or Hybrid — open before you pitch terms</summary>
+
+              <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Find the real number first</div>
+              <div className="mt-1 text-[11.5px] leading-snug text-slate-600">
+                Do not negotiate against their asking price, negotiate against what they actually need. Ask it in this order.
+              </div>
+              <Line>“After the loan is paid off and everything is settled, what do you need in your pocket to move on?”</Line>
+              <Line>“What are you doing with the money?” Their answer tells you the real minimum. Movers and a deposit is a different number than a lawyer's retainer.</Line>
+              <Line>“If I covered the back payments and all the closing costs, how close does that get you?”</Line>
+              <Hint>Nine times out of ten the cash they need is far smaller than the equity on paper. The equity is a story. The need is a number.</Hint>
+
+              <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">What you can trade</div>
+              <div className="mt-1 text-[11.5px] leading-snug text-slate-600">
+                They can have their price or their terms, not both. Every dollar you hand over at closing should buy something back.
+              </div>
+              <div className="mt-1.5 space-y-1 text-[11.5px] leading-snug text-slate-600">
+                <div><b className="text-slate-800">Give price, take terms.</b> Pay closer to their number in exchange for a lower rate on the carry, a longer term, or a later balloon.</div>
+                <div><b className="text-slate-800">Give time, take cash.</b> If they will wait on part of their money, the cash at closing drops. Monthly payments or a lump sum in twelve months.</div>
+                <div><b className="text-slate-800">Give certainty, take flexibility.</b> A firm close date and no inspection contingency is worth real money to someone under pressure.</div>
+                <div><b className="text-slate-800">Never trade away the rate.</b> On a Sub-To the existing low rate is the asset. Protect it above everything else.</div>
+              </div>
+
+              <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">What they will push back on</div>
+              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Why would I leave the loan in my name?”</summary>
+                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“That is a fair question. What your lender cares about is that the payment gets made on time, every month. We take that over and it gets paid. What changes for you is that you are no longer responsible for the house, the repairs, the tenants, or the payment coming out of your account.”</div>
+              </details>
+              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“What if you stop paying?”</summary>
+                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“Then you would be in a worse spot, which is exactly why we put protections in writing. This closes at a title company with an attorney involved, the payments are documented, and you get proof of every one. Ask us for whatever documentation makes you comfortable.” Do not improvise promises here. Anything beyond what the agreement says goes to the head of acquisitions.</div>
+              </details>
+              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Can the bank call the loan?”</summary>
+                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">Answer honestly and briefly: most mortgages contain a due on sale clause, so yes, a lender has the right to call the balance due. Say what is true, that as long as the payment is current, calling the loan is uncommon, and that if it ever happened we would refinance or sell to pay it off. Then get the specifics from the head of acquisitions. Never tell a seller it cannot happen.</div>
+              </details>
+              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Partnership? So do I still own part of it?”</summary>
+                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“No, and I am glad you asked. Partnership is just what we call the program. You are selling us the house. What the agreement says you get, and when you get it, is exactly what happens.” Do not soften this one. A seller who walks away thinking they kept an ownership interest is a lawsuit, not a deal.</div>
+              </details>
+              <details className="mt-1.5 rounded-lg border border-slate-200 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“How does this affect me buying my next house?”</summary>
+                <div className="mt-1.5 text-[11px] leading-snug text-slate-600">“Your new lender needs to see that you are not responsible for this payment. We can provide documentation of the transfer and the payment history for exactly that.” If they need something specific in writing for a lender, that is an escalation, not a promise you make on the call.</div>
+              </details>
+
+              <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+                <b>Do not do these on a call.</b> No guarantees about anything. No promising the loan will never be called. No legal or tax advice. No agreeing to terms that are not on an approved contract. Never let “partnership” imply the seller keeps ownership or a share of the profit. If a seller needs something outside the normal structure to say yes, that is a win worth escalating, not a reason to freelance.
+              </div>
+            </details>
+          )}
           {strat.gap != null && strat.gap > 0 && (
             <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-[11px] leading-snug text-slate-700">
-              <b>The Concierge transition (their number beats cash):</b> “It sounds like you like everything about what we discussed other than the price… probably 9 out of 10 homeowners we talk with feel the same way. So what we did was develop a way to offer sellers more money and still have it make sense for us — our Concierge Program. If I could get you closer to your number, would you like to go over the details, or should we just part ways now?”
+              {(() => {
+                // One door, then a second sentence that matches whichever structure is ranked first.
+                // The seller never hears "sub-to" or "novation" at the transition — naming the
+                // mechanism invites them to go Google it mid-call. The rep opens the door, the
+                // best-fit strategy decides how they describe what is behind it.
+                const picked = cs.chosen ? strat.ranked.find((r) => r.id === cs.chosen) : null;
+                const top = picked || strat.ranked[0];
+                const lane = top && (picked || top.sc > 0) ? top.id : "";
+                const second = lane === "nov"
+                  ? "“The short version is we prepare and sell it on your behalf, so you end up closer to full value, and we get paid out of what we add rather than out of your pocket.”"
+                  : lane === "sf"
+                    ? "“The short version is you get the number you want, and instead of one lump sum today, it comes to you over time on terms we agree on together.”"
+                    : lane === "hybrid"
+                      ? "“The short version is you get the number you want. Part of it comes at closing, and the rest comes to you over time instead of all at once.”"
+                      : lane === "subto"
+                        ? "“The short version is you get the number you want, and instead of waiting on a bank, we take over what is already in place and handle it from here.”"
+                        : "";
+                return (
+                  <>
+                    <b>The Partnership transition (their number beats cash):</b> “It sounds like you like everything about what we discussed other than the price… probably 9 out of 10 homeowners we talk with feel the same way. So what we did was develop a way to offer sellers more money and still have it make sense for us — our Partnership Program. If I could get you closer to your number, would you like to go over the details, or should we just part ways now?”
+                    {second && (
+                      <div className="mt-2 border-t border-emerald-200 pt-2">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">Then, once they say yes — {top.label}</div>
+                        <div className="mt-0.5">{second}</div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
+          {strat.gap != null && strat.gap > 0 && (
+            <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
+              <b>Careful with the word partnership.</b> It is the name of our program, not a description of what the seller becomes. They are not getting an ownership stake, a share of the profit, or a say in what we do with the house. If a seller asks “so am I a partner in this?”, answer plainly: “It is just what we call the program. You are selling us the house, and the agreement spells out exactly what you get and when.” Never let it imply equity, and never promise a number the agreement does not say.
+            </div>
+          )}
+          <div className="mt-2 text-[10.5px] leading-snug text-slate-400">
+            Ranked by fit. Tap whichever one you are actually pitching and the transition line and script above follow your pick, not the ranking.
+          </div>
           {strat.ranked.map((o, i) => (
-            <div key={o.id} className={`mt-2 rounded-xl border p-3 ${i === 0 && o.sc > 0 ? "border-emerald-400 bg-emerald-50/40" : "border-slate-200 bg-white"}`}>
+            <div key={o.id} onClick={() => upd("chosen", cs.chosen === o.id ? "" : o.id)}
+              title="Tap to pitch this one — the transition line above follows your pick"
+              className={`mt-2 cursor-pointer rounded-xl border p-3 transition ${
+                cs.chosen === o.id
+                  ? "border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600"
+                  : (!cs.chosen && i === 0 && o.sc > 0) ? "border-emerald-400 bg-emerald-50/40 hover:border-emerald-500" : "border-slate-200 bg-white hover:border-slate-300"
+              }`}>
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-[12px] font-bold text-slate-800">
+                <div className="flex flex-wrap items-center gap-1.5 text-[12px] font-bold text-slate-800">
                   {o.label}
-                  {i === 0 && o.sc > 0 && <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">Best fit</span>}
+                  {i === 0 && o.sc > 0 && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
+                  {cs.chosen === o.id && <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">Pitching this</span>}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[11px] font-bold text-slate-500">{o.sc}</span>
-                  <button type="button" onClick={() => onTab(o.tab)} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">Open tab</button>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); onTab(o.tab); }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">Open tab</button>
                 </div>
               </div>
               {o.rs.map((r, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-slate-600"><CheckCircle2 className="mt-px h-3 w-3 shrink-0 text-emerald-500" />{r}</div>)}
@@ -1239,13 +1398,26 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                   {o.miss.map((m, k) => <div key={k} className="mt-1 text-[11px] leading-snug text-slate-600"><span className="font-semibold">{m.q}</span> <span className="text-slate-400">— {m.why}</span></div>)}
                 </div>
               )}
-              {i === 0 && o.sc > 0 && o.pitch.map((p, k) => <Line key={k}>{p}</Line>)}
+              {(cs.chosen ? cs.chosen === o.id : i === 0 && o.sc > 0) && o.pitch.map((p, k) => <Line key={k}>{p}</Line>)}
             </div>
           ))}
         </div>)}
 
         {stage === 8 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Close it out</div>
+          {isLowRate(cs.rate) && (
+            <div className="mb-3 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3">
+              <div className="flex items-start gap-2">
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                <div>
+                  <div className="text-[12px] font-bold text-emerald-900">{rateNum(cs.rate)}% loan on this one.</div>
+                  <div className="mt-0.5 text-[11px] leading-snug text-emerald-800">
+                    If you did not get it signed, or the seller turned down creative financing, this goes to the head of acquisitions today. Send the report and say what they pushed back on. It does not get marked dead on this call.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <Line>Commitment close: “If we can make the numbers work, are you ready to move forward today?”</Line>
           <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
             <b>Never send agreements without walking through them live on the phone.</b> Verify seller info → send the agreement → review it line-by-line together → confirm signatures while you're still on the call.
@@ -1324,7 +1496,7 @@ export default function App() {
   // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
   const [adjBeds, setAdjBeds] = useState(0);
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
-  const [bedAdjAmt, setBedAdjAmt] = useState("15000");   // $ per bedroom — appraiser count-adjustment (same sqft), not an addition
+  const [bedAdjAmt, setBedAdjAmt] = useState("20000");   // $ per bedroom — count-adjustment (same sqft), not an addition. Raised 15k -> 20k per B, Sep 2026
   const [bathAdjAmt, setBathAdjAmt] = useState("10000"); // $ per FULL bath; a half bath = 0.5 × this
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
@@ -1546,6 +1718,42 @@ export default function App() {
   const [novProfit, setNovProfit] = useState("30000");
   const [novListFactor, setNovListFactor] = useState("95");
   const [novCostFactor, setNovCostFactor] = useState("8");
+
+  // ---- Offer Call -> strategy tabs -------------------------------------------------------
+  // What the rep captures on the phone should already be in whichever tab they open next.
+  // Rule: fill a field only when it is still empty. We never overwrite something a person typed,
+  // so a number changed on a tab stays changed even if the call is edited afterward.
+  const fillIfEmpty = (cur, setter, val) => { if (!cur && val) setter(String(val)); };
+  useEffect(() => {
+    const ask = num(callState.ask);
+    const bal = num(callState.balance);
+    // The payment a rep can actually inherit: what the seller pays, plus escrow and dues when
+    // those sit outside it. Same build-up as the payment-vs-rent test.
+    const piti = num(callState.payment) > 0
+      ? num(callState.payment)
+        + (callState.escrowed === "no" ? num(callState.tiMonthly) : 0)
+        + (callState.hoa === "yes" ? num(callState.hoaAmt) : 0)
+      : 0;
+    const equity = ask > 0 && bal > 0 ? Math.max(0, ask - bal) : 0;
+
+    if (ask > 0) {
+      fillIfEmpty(askingPrice, setAskingPrice, ask);   // Cash / MAO
+      fillIfEmpty(hyPrice, setHyPrice, ask);           // Hybrid
+      fillIfEmpty(sfPrice, setSfPrice, ask);           // Seller Finance
+    }
+    if (bal > 0) {
+      fillIfEmpty(stBal, setStBal, bal);               // Sub-To
+      fillIfEmpty(hyBal, setHyBal, bal);               // Hybrid
+    }
+    if (piti > 0) {
+      fillIfEmpty(stPiti, setStPiti, Math.round(piti));
+      fillIfEmpty(hyPiti, setHyPiti, Math.round(piti));
+    }
+    // On a Sub-To the seller's equity above the balance is what they walk with in cash.
+    if (equity > 0) fillIfEmpty(stCashSeller, setStCashSeller, equity);
+  }, [callState.ask, callState.balance, callState.payment, callState.escrowed, callState.tiMonthly, callState.hoa, callState.hoaAmt]);
+
+
 
   // ---- ARV ----
   // Record-correction dollars: rides on TOP of whichever ARV is driving (sold-comp median or manual override),
@@ -1838,7 +2046,7 @@ export default function App() {
                 <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
                 <span className="text-[10px] text-slate-400">×</span>
-                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="15000" /></div>
+                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="20000" /></div>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-slate-500">Baths</span>
@@ -1860,7 +2068,7 @@ export default function App() {
               )}
             </div>
             <div className="mt-1 text-[10px] text-slate-400">
-              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are conservative appraiser count-adjustments ($15K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
+              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($20K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
         </div>
@@ -3508,6 +3716,63 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
 
 
 // ---------- SUB-TO ----------
+// Two ceilings that keep a creative deal from quietly becoming a bad one. Neither is a published
+// formula, they are working guardrails: (1) the cash you bring should come back out of cash flow
+// inside about two years, and (2) you should not spend more than half your day-one equity to get in.
+// Anything past those is buying equity rather than creating it, and that is a conversation for the
+// head of acquisitions, not a call a rep makes alone.
+const PAYBACK_GOOD = 18, PAYBACK_LIMIT = 24, EQUITY_SPEND_LIMIT = 0.5;
+const CashDiscipline = ({ cashIn, cashFlow, equity }) => {
+  if (cashIn <= 0) return null;
+  const months = cashFlow > 0 ? cashIn / cashFlow : null;
+  const share = equity > 0 ? cashIn / equity : null;
+  const paybackTone = months == null ? "bad" : months <= PAYBACK_GOOD ? "good" : months <= PAYBACK_LIMIT ? "warn" : "bad";
+  const shareTone = share == null ? "bad" : share <= EQUITY_SPEND_LIMIT ? "good" : share <= 0.75 ? "warn" : "bad";
+  const col = { good: "text-emerald-700", warn: "text-amber-700", bad: "text-red-700" };
+  const worst = [paybackTone, shareTone].includes("bad") ? "bad" : [paybackTone, shareTone].includes("warn") ? "warn" : "good";
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <SectionTitle>Cash discipline</SectionTitle>
+      <div className="mt-1 text-[11px] leading-snug text-slate-500">
+        Two checks on the money you bring to the table. Both are house rules, not bank rules.
+      </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Payback</div>
+          <div className={`mt-0.5 font-mono text-lg font-bold ${col[paybackTone]}`}>
+            {months == null ? "never" : `${months.toFixed(1)} mo`}
+          </div>
+          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+            {months == null
+              ? "No positive cash flow, so the cash you bring never comes back out of this property."
+              : `${usd(Math.round(cashIn))} in, ${usd(Math.round(cashFlow))}/mo out. Target is under ${PAYBACK_GOOD} months.`}
+          </div>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Cash in vs equity captured</div>
+          <div className={`mt-0.5 font-mono text-lg font-bold ${col[shareTone]}`}>
+            {share == null ? "no equity" : `${Math.round(share * 100)}%`}
+          </div>
+          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+            {share == null
+              ? "No equity captured, so every dollar in is at risk with nothing underneath it."
+              : `Spending ${usd(Math.round(cashIn))} to capture ${usd(Math.round(equity))}. Stay under half.`}
+          </div>
+        </div>
+      </div>
+      <div className={`mt-3 rounded-lg px-3 py-2 text-[11.5px] font-semibold leading-snug ${
+        worst === "good" ? "bg-emerald-50 text-emerald-800" : worst === "warn" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800"
+      }`}>
+        {worst === "good"
+          ? "Clean entry. The cash you bring comes back reasonably fast and sits on real equity."
+          : worst === "warn"
+            ? "Workable but tight. Before you commit, try to move the cash down instead of the price up. Ask what they actually need at closing rather than what they want on paper."
+            : "Too much cash for what this returns. Do not commit on the call. Get the cash to seller down, or send it to the head of acquisitions."}
+      </div>
+    </div>
+  );
+};
+
 function SubToTab(props) {
   const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
   const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent) || num(rentDefault);
@@ -3554,6 +3819,7 @@ function SubToTab(props) {
           </div>
         </div>
       </div>
+      <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
@@ -3643,6 +3909,7 @@ function HybridTab(props) {
           </div>
         </div>
       </div>
+      <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
