@@ -533,6 +533,7 @@ const INITIAL_CALL = {
   sellerName: "", bookedBy: "",
   motivation: "", motivNotes: "",
   occupancy: "", condition: "", loan: "", balance: "", payment: "", rate: "", behind: "",
+  escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
   timeline: "", others: "",
   ask: "", priceBasis: "",
   terms: "",
@@ -550,6 +551,27 @@ const REBUTTALS = [
   { t: "“Zillow says it's worth this much.”", a: "“Let me ask you this — has an employee of Zillow ever gone into your house to take pictures and analyze how much work it needs or doesn't need? Zillow takes the average sales price of houses sold on the MLS, and most of those are retail ready — updated, no work needed.”" },
   { t: "“My house appraised for this much.”", a: "“Here's the thing with appraisals — the appraiser isn't the one buying the house. It's only worth what a buyer will pay. And right now average days on market is 60 to 90 days. A lot can happen in that time.”" },
 ];
+
+// PITI vs market rent. A sub-to only makes sense as a hold if the payment leaves room for the
+// costs people forget: vacancy, maintenance, CapEx, and management run roughly 25-35% of rent.
+// At or under 65% of rent there is real cash flow. Past 75% you are buying a break-even deal
+// with due-on-sale risk attached. Seller-quoted payments often exclude escrow, so taxes and
+// insurance get added when the rep says the payment does not include them.
+const PITI_GOOD = 0.65, PITI_LIMIT = 0.75;
+const pitiCheck = (cs, rent) => {
+  const base = num(cs.payment);
+  if (base <= 0 || !rent || rent <= 0) return null;
+  const addTI = cs.escrowed === "no" ? num(cs.tiMonthly) : 0;
+  const piti = base + addTI;
+  const ratio = piti / rent;
+  const missingTI = cs.escrowed === "no" && num(cs.tiMonthly) <= 0;
+  return {
+    piti, rent, ratio, missingTI,
+    unknownEscrow: !cs.escrowed,
+    verdict: ratio <= PITI_GOOD ? "good" : ratio <= PITI_LIMIT ? "thin" : "fail",
+    targetPiti: Math.round(rent * PITI_GOOD),
+  };
+};
 
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
@@ -591,6 +613,24 @@ function scoreStrategies(c, deal) {
       if (c.terms === "yes" || c.terms === "maybe") { sc += 8; rs.push("They're open to something other than a cash lump sum."); }
       if (c.timeline === "asap") { sc += 8; rs.push("Sub-To moves fast — no new loan to originate."); }
       if (c.condition === "heavy") { sc -= 10; warn.push("Heavy rehab on a Sub-To puts repair risk on you — price it in."); }
+      // The hold test. This can end the conversation regardless of everything else above.
+      const pc = pitiCheck(c, deal.rent);
+      if (pc) {
+        const pct = `${Math.round(pc.ratio * 100)}%`;
+        if (pc.verdict === "fail") {
+          sc -= 55;
+          warn.push(`Payment is ${pct} of market rent. That is not a Sub-To hold — it needs to be at or under 65%, which means about ${usd(pc.targetPiti)} a month. Vacancy, maintenance, CapEx and management eat 25-35% of rent before you see a dollar.`);
+        } else if (pc.verdict === "thin") {
+          sc -= 15;
+          warn.push(`Payment is ${pct} of market rent. Break-even territory, so it only works if your exit beats standard rent (mid-term, co-living, or a lease option).`);
+        } else {
+          sc += 15;
+          rs.push(`Payment is ${pct} of market rent, which leaves real room after vacancy, maintenance and CapEx.`);
+        }
+        if (pc.missingTI) warn.push("Taxes and insurance are not in that payment and have not been added, so the real ratio is worse than shown.");
+      } else if (num(c.payment) > 0 && !deal.rent) {
+        miss.push(M("Pull the market rent in the Property stage.", "Payment versus rent decides whether this is a hold or a headache."));
+      }
       if (bal <= 0) miss.push(M("“Do you still owe anything on it?” — get the rough balance.", "Balance vs. ask decides Sub-To vs. Hybrid."));
       if (num(c.payment) <= 0) miss.push(M("“What's your current payment?”", "The payment IS the deal — it sets your monthly basis."));
     }
@@ -1081,6 +1121,51 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <WField label="Rate (if they know)"><WText value={cs.rate} onChange={(v) => upd("rate", v)} placeholder="3.25%" /></WField>
               <WField label="Behind on payments?"><WChips value={cs.behind} onChange={(v) => upd("behind", v)} opts={[["yes", "Yes"], ["no", "Current"]]} /></WField>
             </div>
+            <WField label="Does that payment include taxes and insurance?">
+              <WChips value={cs.escrowed} onChange={(v) => upd("escrowed", v)} opts={[["yes", "Yes, escrowed"], ["no", "No, P&I only"]]} />
+            </WField>
+            {cs.escrowed === "no" && (
+              <WField label="Monthly taxes + insurance">
+                <WText money value={cs.tiMonthly} onChange={(v) => upd("tiMonthly", v)} placeholder="350" />
+              </WField>
+            )}
+            <Hint>Ask it plainly: “Is that payment just principal and interest, or does it include your taxes and insurance?” Most sellers quote the escrowed number, but the ones who do not will make this deal look better than it is.</Hint>
+
+            {/* The hold test */}
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Payment vs market rent</div>
+                {!deal.rent && (
+                  <button type="button" onClick={deal.onGetRent} disabled={deal.rentLoading}
+                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
+                    {deal.rentLoading ? "Pulling…" : "Get market rent"}
+                  </button>
+                )}
+              </div>
+              {(() => {
+                const pc = pitiCheck(cs, deal.rent);
+                if (!deal.rent) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Pull the market rent to test whether this payment can carry the house.</div>;
+                if (!pc) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Market rent {usd(deal.rent)}/mo. Add their payment above to run the test.</div>;
+                const pct = Math.round(pc.ratio * 100);
+                const tone = pc.verdict === "good" ? "text-emerald-700" : pc.verdict === "thin" ? "text-amber-700" : "text-red-700";
+                return (
+                  <div className="mt-1">
+                    <div className="text-[12px] font-bold text-slate-800">
+                      {usd(Math.round(pc.piti))} payment vs {usd(pc.rent)} rent = <span className={tone}>{pct}%</span>
+                    </div>
+                    <div className={`mt-0.5 text-[11px] font-semibold leading-snug ${tone}`}>
+                      {pc.verdict === "good"
+                        ? "Under 65%. This one can carry itself as a rental."
+                        : pc.verdict === "thin"
+                          ? `Between 65% and 75%. Break-even as a standard rental. Needs ${usd(pc.targetPiti)} or less to have real room, so it only works if your exit beats market rent.`
+                          : `Over 75%. Not a Sub-To hold. The payment would need to be around ${usd(pc.targetPiti)} or less.`}
+                    </div>
+                    {pc.missingTI && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">Taxes and insurance are not in that payment yet, so the real number is worse than this.</div>}
+                    {pc.unknownEscrow && <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Confirm whether taxes and insurance are in that payment, or this ratio may be understated.</div>}
+                  </div>
+                );
+              })()}
+            </div>
           </>)}
         </div>)}
 
@@ -1567,12 +1652,24 @@ export default function App() {
   const activeInvestorMao = isOver ? investorMaoOver : investorMaoUnder;
   const activePct = isOver ? num(overPct) : num(underPct);
 
+  // Each tab carries a plain-English explainer shown on hover, so a newer rep can tell these five
+  // apart without leaving the screen. Written the way you would explain it to a seller, not a textbook.
   const tabs = [
-    { id: "cash", label: "Cash / MAO", Icon: Calculator },
-    { id: "subto", label: "Sub-To", Icon: Building2 },
-    { id: "hybrid", label: "Hybrid", Icon: Layers },
-    { id: "sf", label: "Seller Finance", Icon: Banknote },
-    { id: "nov", label: "Novation", Icon: RefreshCw },
+    { id: "cash", label: "Cash / MAO", Icon: Calculator,
+      blurb: "You buy it outright, as-is, and close fast. The MAO is the most you can pay and still make money after repairs and your fee.",
+      fit: "Best when the house needs real work and the seller wants speed and certainty." },
+    { id: "subto", label: "Sub-To", Icon: Building2,
+      blurb: "You take over their existing mortgage payments. The loan stays in the seller's name, the deed comes to you.",
+      fit: "Best when there is little equity, the rate is good, or they are behind and need the bleeding to stop." },
+    { id: "hybrid", label: "Hybrid", Icon: Layers,
+      blurb: "Sub-To plus seller carry. You take over the loan, and the seller carries their equity above the balance as a note you pay over time.",
+      fit: "Best when there is a loan to take over AND real equity, so cash alone cannot reach their number." },
+    { id: "sf", label: "Seller Finance", Icon: Banknote,
+      blurb: "The seller becomes the bank. You pay them directly over time on terms you agree to, with no lender involved.",
+      fit: "Best when the house is owned free and clear and they do not need all the money today." },
+    { id: "nov", label: "Novation", Icon: RefreshCw,
+      blurb: "You prepare and sell the house retail on the seller's behalf, then get paid from the spread at closing.",
+      fit: "Best when the house is close to retail-ready and the seller can wait out a 60 to 90 day sale." },
   ];
 
   const deckCommon = {
@@ -1714,7 +1811,8 @@ export default function App() {
                 save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "" }}
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
+                  rent: effRent, rentLoading, onGetRent: () => fetchRent(address) }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
@@ -2090,19 +2188,50 @@ export default function App() {
         </div>
 
         {/* TABS */}
-        <div id="deal-tabs" className="mt-5 flex flex-wrap gap-2 scroll-mt-3">
-          {tabs.map((t) => {
-            const Icon = t.Icon;
-            return (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                  tab === t.id ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}>
-                <Icon className="h-4 w-4" />
-                {t.label}
-              </button>
-            );
-          })}
+        {/* Strategy tabs. These switch the whole deal underneath them, so they read as a real
+            control bar rather than five quiet chips: a labeled container, a green active tab, and
+            an underline so the selected strategy connects visually to the panel below it. */}
+        <div id="deal-tabs" className="mt-6 scroll-mt-3">
+          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Pick your exit strategy</div>
+          <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-100/70 p-1.5">
+            {tabs.map((t) => {
+              const Icon = t.Icon;
+              const on = tab === t.id;
+              return (
+                <div key={t.id} className="group relative flex-1">
+                  <button onClick={() => setTab(t.id)}
+                    className={`flex w-full items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-sm font-bold transition ${
+                      on
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/25 ring-2 ring-emerald-600 ring-offset-1 ring-offset-slate-100"
+                        : "bg-white text-slate-600 shadow-sm hover:bg-white hover:text-slate-900 hover:shadow"
+                    }`}>
+                    <Icon className={`h-4 w-4 ${on ? "" : "text-slate-400"}`} />
+                    <span className="whitespace-nowrap">{t.label}</span>
+                  </button>
+                  {/* Hover explainer. Hidden on touch screens, where there is no hover — the same
+                      wording lives under the tab bar on small screens instead. */}
+                  <div className="pointer-events-none absolute left-1/2 top-full z-30 hidden w-72 -translate-x-1/2 pt-2 opacity-0 transition-opacity group-hover:opacity-100 sm:group-hover:block">
+                    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+                      <div className="flex items-center gap-1.5 text-[12px] font-bold text-slate-900">
+                        <Icon className="h-3.5 w-3.5 text-emerald-600" />{t.label}
+                      </div>
+                      <div className="mt-1 text-[11.5px] leading-snug text-slate-600">{t.blurb}</div>
+                      <div className="mt-1.5 text-[11px] leading-snug text-emerald-700">{t.fit}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Phones and tablets cannot hover, so the active strategy explains itself right here. */}
+          {(() => {
+            const t = tabs.find((x) => x.id === tab);
+            return t ? (
+              <div className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11.5px] leading-snug text-slate-600 sm:hidden">
+                {t.blurb} <span className="text-emerald-700">{t.fit}</span>
+              </div>
+            ) : null;
+          })()}
         </div>
 
         <div className="mt-4">
