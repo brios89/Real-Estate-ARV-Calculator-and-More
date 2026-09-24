@@ -1464,6 +1464,8 @@ export default function App() {
   const [marginalPsf, setMarginalPsf] = useState("");   // size-adjust rate ($ per sq ft of size difference); blank = auto (half the group's typical $/sf)
   // --- rental ---
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
+  const [rentSaved, setRentSaved] = useState(null);  // rent remembered from the last time this address was worked
+  const [pullAt, setPullAt] = useState(null);        // when this address was last actually pulled from RentCast
   const [rentLow, setRentLow] = useState(null);
   const [rentHigh, setRentHigh] = useState(null);
   const [rentOverride, setRentOverride] = useState(""); // manual rent (wins when set)
@@ -1542,7 +1544,11 @@ export default function App() {
       await pullSold(hints);
       setCompsOpen(true);
       if (!arvSource && num(arvOverride) <= 0) setArvSource("deal-desk");
-      setCompMsg({ type: "ok", text: "Pulled the subject record and recorded sold comps. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
+      // 3) Market rent, so the payment-vs-rent test and the BRRRR panel are live without a second
+      //    click. Best-effort on purpose: a rent miss must never take down a good comp pull.
+      try { await fetchRent(a); } catch { /* keep going — rent can be pulled or typed later */ }
+      setPullAt(new Date().toISOString());
+      setCompMsg({ type: "ok", text: "Pulled the subject record, recorded sold comps, and market rent. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
     } catch {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
@@ -1615,76 +1621,6 @@ export default function App() {
   // cash/mao
   const [wholesaleFee, setWholesaleFee] = useState("15000");
 
-  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
-  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
-  useEffect(() => {
-    if (!addressSavable(address)) return;
-    const k = callStoreKey(address);
-    if (k === callKeyRef.current) return;
-    callKeyRef.current = k;
-    const local = readSavedCall(address);
-    const applyRecord = (rec, from) => {
-      setCallState({ ...INITIAL_CALL, ...rec.call });
-      if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
-      if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
-      setCallLoadedAt(rec.at || null);
-      setCallSavedAt(rec.at || null);
-      if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
-    };
-    if (local && local.call) applyRecord(local, "local"); else { setCallLoadedAt(null); setCallSavedAt(null); }
-
-    // Then ask the team store. Whichever copy is newer wins, so a teammate's later work
-    // is never overwritten by a stale local copy sitting in this browser.
-    const id = syncId;
-    if (!id.code) return;
-    let live = true;
-    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { headers: { "x-ylhb-key": id.code } })
-      .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
-      .then((d) => {
-        if (!live || !d) return;
-        if (d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
-        if (d.found && d.record && d.record.call) {
-          const remoteNewer = !local || !local.at || String(d.record.at || "") > String(local.at || "");
-          if (remoteNewer) applyRecord(d.record, "team");
-          else setSyncState((p) => ({ ...p, status: "synced", by: d.record.by || null, at: d.record.at || null, msg: "" }));
-        } else {
-          setSyncState({ status: "synced", by: null, at: null, msg: "" });
-        }
-      })
-      .catch((e) => { if (live) setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }); });
-    return () => { live = false; };
-  }, [address, syncId]);
-
-  // Autosave. Skips empty calls so simply opening the drawer never creates a record.
-  useEffect(() => {
-    if (!addressSavable(address)) return;
-    const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
-    if (untouched) return;
-    const at = new Date().toISOString();
-    try {
-      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, at }));
-      setCallSavedAt(at);
-    } catch { /* private mode or full storage — the call still works, it just will not persist */ }
-
-    // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
-    if (!syncId.code) return;
-    if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(() => {
-      setSyncState((p) => ({ ...p, status: "saving" }));
-      fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
-        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, by: syncId.name, address }),
-      })
-        .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
-        .then((d) => {
-          if (d && d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
-          if (d && d.error) { setSyncState({ status: "error", by: null, at: null, msg: "" }); return; }
-          setSyncState({ status: "synced", by: syncId.name || null, at: (d && d.record && d.record.at) || at, msg: "" });
-        })
-        .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
-    }, 1200);
-  }, [callState, repairOverride, wholesaleFee, address, syncId]);
 
   const [sellingPct, setSellingPct] = useState("10");
   const [holding, setHolding] = useState("7500");
@@ -1851,8 +1787,106 @@ export default function App() {
   }, [repairPsf, sqft, repairOverride]);
 
   // ---- rental ----
-  const effRent = num(rentOverride) > 0 ? num(rentOverride) : (rentEst || 0); // override wins
+  // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
+  // The remembered value keeps a re-opened deal complete without spending another RentCast credit.
+  const effRent = num(rentOverride) > 0 ? num(rentOverride) : (rentEst || rentSaved || 0);
   const onePctMax = effRent > 0 ? effRent * 100 : 0; // 1% rule: rent >= 1% of price → max price = rent × 100
+
+  // The RentCast data worth keeping: subject record, sold comps, sq ft, owner. Saved with the call
+  // so a second visit to this address costs nothing. Skipped entirely if nothing has been pulled.
+  const pullPayload = () => {
+    if (!soldData && !subjDetail) return null;
+    return {
+      subjDetail, subjectInfo, soldData,
+      sqft: num(sqft) > 0 ? num(sqft) : "",
+      ownerNames,
+      at: pullAt || new Date().toISOString(),
+    };
+  };
+
+  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
+  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
+  useEffect(() => {
+    if (!addressSavable(address)) return;
+    const k = callStoreKey(address);
+    if (k === callKeyRef.current) return;
+    callKeyRef.current = k;
+    setRentSaved(null);   // never carry one property's rent onto another
+    setPullAt(null);
+    const local = readSavedCall(address);
+    const applyRecord = (rec, from) => {
+      setCallState({ ...INITIAL_CALL, ...rec.call });
+      if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
+      if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
+      if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
+      // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
+      // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
+      if (rec.pull && rec.pull.at) {
+        if (rec.pull.subjDetail) setSubjDetail(rec.pull.subjDetail);
+        if (rec.pull.subjectInfo) setSubjectInfo(rec.pull.subjectInfo);
+        if (rec.pull.soldData) { setSoldData(rec.pull.soldData); setCompsOpen(true); }
+        if (rec.pull.sqft) setSqft(String(rec.pull.sqft));
+        if (rec.pull.ownerNames) setOwnerNames(rec.pull.ownerNames);
+        setPullAt(rec.pull.at);
+      } else setPullAt(null);
+      setCallLoadedAt(rec.at || null);
+      setCallSavedAt(rec.at || null);
+      if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
+    };
+    if (local && local.call) applyRecord(local, "local"); else { setCallLoadedAt(null); setCallSavedAt(null); }
+
+    // Then ask the team store. Whichever copy is newer wins, so a teammate's later work
+    // is never overwritten by a stale local copy sitting in this browser.
+    const id = syncId;
+    if (!id.code) return;
+    let live = true;
+    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { headers: { "x-ylhb-key": id.code } })
+      .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
+      .then((d) => {
+        if (!live || !d) return;
+        if (d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
+        if (d.found && d.record && d.record.call) {
+          const remoteNewer = !local || !local.at || String(d.record.at || "") > String(local.at || "");
+          if (remoteNewer) applyRecord(d.record, "team");
+          else setSyncState((p) => ({ ...p, status: "synced", by: d.record.by || null, at: d.record.at || null, msg: "" }));
+        } else {
+          setSyncState({ status: "synced", by: null, at: null, msg: "" });
+        }
+      })
+      .catch((e) => { if (live) setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }); });
+    return () => { live = false; };
+  }, [address, syncId]);
+
+  // Autosave. Skips empty calls so simply opening the drawer never creates a record.
+  useEffect(() => {
+    if (!addressSavable(address)) return;
+    const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
+    if (untouched) return;
+    const at = new Date().toISOString();
+    try {
+      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), at }));
+      setCallSavedAt(at);
+    } catch { /* private mode or full storage — the call still works, it just will not persist */ }
+
+    // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
+    if (!syncId.code) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      setSyncState((p) => ({ ...p, status: "saving" }));
+      fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
+        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), by: syncId.name, address }),
+      })
+        .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
+        .then((d) => {
+          if (d && d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
+          if (d && d.error) { setSyncState({ status: "error", by: null, at: null, msg: "" }); return; }
+          setSyncState({ status: "synced", by: syncId.name || null, at: (d && d.record && d.record.at) || at, msg: "" });
+        })
+        .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
+    }, 1200);
+  }, [callState, repairOverride, wholesaleFee, effRent, address, syncId]);
 
   // ---- cash MAO (both bands) ----
   const ruleMaoUnder = arv * (num(underPct) / 100) - repairs;
@@ -2034,11 +2068,16 @@ export default function App() {
               />
               <div className="mt-2 flex items-center gap-2">
                 <button onClick={autoComp} disabled={compLoading}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
-                  {compLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                  {compLoading ? "Pulling…" : "Auto-comp address"}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-60 ${pullAt ? "bg-slate-700 hover:bg-slate-800" : "bg-emerald-600 hover:bg-emerald-700"}`}>
+                  {compLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : pullAt ? <RefreshCw className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
+                  {compLoading ? "Pulling…" : pullAt ? "Re-pull fresh data" : "Auto-comp address"}
                 </button>
               </div>
+              {pullAt && !compLoading && (
+                <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+                  Showing the pull from <b className="text-slate-700">{fmtSavedAt(pullAt)}</b>, reloaded free. Re-pull only if this deal has gone cold or something changed.
+                </div>
+              )}
             </div>
           </div>
 

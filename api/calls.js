@@ -63,6 +63,8 @@ export default async function handler(req, res) {
       const record = {
         call: payload.call,
         repairOverride: payload.repairOverride ?? "",
+        rent: payload.rent ?? "",
+        pull: payload.pull ?? null,                  // cached RentCast pull (subject, sold comps) so a re-open costs no credits                    // market rent last used for this address, so a re-open does not re-bill RentCast
         wholesaleFee: payload.wholesaleFee ?? "",
         at: new Date().toISOString(),
         by: String(payload.by || "").slice(0, 40),   // who captured it — shown on the next person's screen
