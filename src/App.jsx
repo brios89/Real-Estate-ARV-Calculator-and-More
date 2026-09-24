@@ -612,7 +612,15 @@ function scoreStrategies(c, deal) {
     if (ask <= 0) miss.push(M("“If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”", "Their number sets the whole strategy."));
     if (maxCash <= 0) miss.push(M("Run Auto-comp up top so the ARV and max cash offer are live.", "Without ARV there's no cash number to compare."));
     out.push({ id: "cash", label: "Cash offer", tab: "cash", sc, rs, warn, miss,
-      pitch: ["“We use lenders and private capital to buy houses, but flips come with risk, repairs, contractors, holding costs, commissions, and market fluctuations — so we have to buy at a number that still makes sense for us.”"] });
+      // Delivering a low number is the hardest thing a newer rep does. The sequence matters more
+      // than the wording: earn the number first, say it plainly, then stop talking.
+      pitch: [
+        "1. Frame it before you say it. “We buy as-is. No repairs, no cleaning out, no commissions, no inspections, no showings, and we close on whatever date works for you.”",
+        "2. Say the number once, plainly. “Based on all of that, what we can do is ____.” Then stop talking. Do not soften it, do not apologize for it, do not explain it before they react. Whoever talks first after the number loses ground.",
+        "3. If they flinch, do not move. “I understand. What were you hoping to get?” Let them counter. Their counter is information you do not have yet.",
+        "4. Only then, justify it. “We use lenders and private capital, but flips come with repairs, contractors, holding costs, commissions, and a market that can move. We have to buy at a number that still works after all of that.”",
+        "5. If their number is above your ceiling, do not split the difference on the spot. That is what the Partnership Program is for.",
+      ] });
   }
 
   // ---- SUB-TO ----
@@ -1321,6 +1329,16 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <div className="mt-0.5 text-[11px] leading-snug text-slate-600">
                 Even when cash is not the play, say the cash number out loud before anything else. It anchors the conversation low, and everything after it sounds like you moving toward them. Lead with a creative offer and you have given away the anchor for nothing.
               </div>
+              {deal.maxCash > 0 && (
+                <div className="mt-2 border-t border-slate-300 pt-2">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Your cash ceiling</div>
+                  <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-slate-900">{usd(deal.maxCash)}</div>
+                  <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+                    The most you can pay and still get your {usd(num(deal.wholesaleFee))} fee. Anchor under it, never over it.
+                    {strat.gap != null && strat.gap > 0 ? <> They want <b className="text-slate-700">{usd(strat.gap)}</b> more than this.</> : strat.gap != null ? <> Their number is already under it.</> : null}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 1. PICK — compact, the whole board at a glance */}
