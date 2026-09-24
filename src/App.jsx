@@ -1546,6 +1546,7 @@ export default function App() {
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
   const [rentSaved, setRentSaved] = useState(null);  // rent remembered from the last time this address was worked
   const [pullAt, setPullAt] = useState(null);        // when this address was last actually pulled from RentCast
+  const pullAddrRef = useRef("");                   // which address the data on screen belongs to
   const [rentLow, setRentLow] = useState(null);
   const [rentHigh, setRentHigh] = useState(null);
   const [rentOverride, setRentOverride] = useState(""); // manual rent (wins when set)
@@ -1629,6 +1630,7 @@ export default function App() {
       //    click. Best-effort on purpose: a rent miss must never take down a good comp pull.
       try { await fetchRent(a); } catch { /* keep going — rent can be pulled or typed later */ }
       setPullAt(new Date().toISOString());
+      pullAddrRef.current = a.trim().toLowerCase();
       setCompMsg({ type: "ok", text: "Pulled the subject record, recorded sold comps, and market rent. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
     } catch {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
@@ -1885,6 +1887,21 @@ export default function App() {
     };
   };
 
+  // The data on screen belongs to one address. The moment the box says something else, drop it all,
+  // otherwise a rep sees the previous property's photo, sq ft, details and comps under a new address.
+  useEffect(() => {
+    const now = String(address || "").trim().toLowerCase();
+    if (!pullAddrRef.current || pullAddrRef.current === now) return;
+    pullAddrRef.current = "";
+    setPullAt(null);
+    setSubjDetail(null); setSubjDetailOpen(false);
+    setSubjectInfo(null); setOwnerNames(null);
+    setSoldData(null); setSoldIncluded({}); setManualSold([]); setCompsOpen(false);
+    setRentEst(null); setRentSaved(null);
+    setSqft(""); setArvSource("");
+    setCompMsg(null); setSoldMsg(null);
+  }, [address]);
+
   // Restore a saved call when the rep lands on an address that already has one. We never wipe an
   // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
   useEffect(() => {
@@ -1911,6 +1928,7 @@ export default function App() {
         if (rec.pull.sqft) setSqft(String(rec.pull.sqft));
         if (rec.pull.ownerNames) setOwnerNames(rec.pull.ownerNames);
         setPullAt(rec.pull.at);
+        pullAddrRef.current = String(address || "").trim().toLowerCase();
       } else setPullAt(null);
       setCallLoadedAt(rec.at || null);
       setCallSavedAt(rec.at || null);
