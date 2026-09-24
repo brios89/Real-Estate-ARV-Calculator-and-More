@@ -588,6 +588,17 @@ const pitiCheck = (cs, rent) => {
   };
 };
 
+// A real repair number already says what the condition is. The calculator prices light at $15/sf,
+// moderate at $30 and a gut at $50, so we read the dollars back through those same rates and split
+// at the midpoints. Used only when the rep has not tapped a condition chip, and always labelled as
+// inferred rather than treated as something the seller said.
+const impliedCondition = (repairs, sqft) => {
+  const r = num(repairs), sf = num(sqft);
+  if (r <= 0 || sf <= 0) return null;
+  const psf = r / sf;
+  return psf < 22 ? "light" : psf <= 40 ? "moderate" : "heavy";
+};
+
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
 function scoreStrategies(c, deal) {
@@ -599,6 +610,10 @@ function scoreStrategies(c, deal) {
   const equity = c.loan === "yes" && ask > 0 && bal > 0 ? ask - bal : null;
   const eqPct = equity != null && ask > 0 ? equity / ask : null;
   const M = (q, why) => ({ q, why });
+  // What the rep tapped wins. Failing that, fall back to what the repair number implies.
+  const implied = c.condition ? null : impliedCondition(deal.repairs, deal.sqft);
+  const cond = c.condition || implied;
+  const condNote = implied ? ` (read from the ${usd(deal.repairs)} repair number, confirm it on the call)` : "";
   const out = [];
 
   // ---- CASH ----
@@ -606,7 +621,7 @@ function scoreStrategies(c, deal) {
     let sc = 45; const rs = [], warn = [], miss = [];
     if (gap != null && gap <= maxCash * 0.05) { sc += 30; rs.push("Their number is at or under your max cash offer — just close it."); }
     if (gap != null && gap > maxCash * 0.15) { sc -= 35; warn.push("Their number is well above cash — pitch cash to anchor, then pivot creative."); }
-    if (c.condition === "heavy") { sc += 10; rs.push("Heavy rehab — classic cash / wholesale profile."); }
+    if (cond === "heavy") { sc += 10; rs.push(`Heavy rehab${condNote} — classic cash / wholesale profile.`); }
     if (c.timeline === "asap") { sc += 8; rs.push("They need speed, and cash closes fastest."); }
     if (c.behind === "yes") { sc += 8; rs.push("Behind on payments — a fast close stops the bleeding."); }
     if (ask <= 0) miss.push(M("“If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”", "Their number sets the whole strategy."));
@@ -635,7 +650,7 @@ function scoreStrategies(c, deal) {
       if (c.behind === "yes") { sc += 15; rs.push("Behind on payments — take over + reinstate arrears is the classic Sub-To save."); }
       if (c.terms === "yes" || c.terms === "maybe") { sc += 8; rs.push("They're open to something other than a cash lump sum."); }
       if (c.timeline === "asap") { sc += 8; rs.push("Sub-To moves fast — no new loan to originate."); }
-      if (c.condition === "heavy") { sc -= 10; warn.push("Heavy rehab on a Sub-To puts repair risk on you — price it in."); }
+      if (cond === "heavy") { sc -= 10; warn.push(`Heavy rehab${condNote} on a Sub-To puts repair risk on you — price it in.`); }
       // The hold test. This can end the conversation regardless of everything else above.
       const pc = pitiCheck(c, deal.rent);
       if (pc) {
@@ -701,15 +716,15 @@ function scoreStrategies(c, deal) {
   // ---- NOVATION ----
   {
     let sc = 15; const rs = [], warn = [], miss = [];
-    if (c.condition === "light") { sc += 22; rs.push("Light condition — it can sell retail without a full rehab."); }
-    else if (c.condition === "moderate") { sc += 8; rs.push("Moderate condition — retail is possible with cosmetic touch-ups."); }
-    else if (c.condition === "heavy") { sc -= 18; warn.push("Heavy rehab kills the retail buyer — novation is a stretch here."); }
+    if (cond === "light") { sc += 22; rs.push(`Light condition${condNote} — it can sell retail without a full rehab.`); }
+    else if (cond === "moderate") { sc += 8; rs.push(`Moderate condition${condNote} — retail is possible with cosmetic touch-ups.`); }
+    else if (cond === "heavy") { sc -= 18; warn.push(`Heavy rehab${condNote} kills the retail buyer — novation is a stretch here.`); }
     if (c.timeline === "flexible") { sc += 15; rs.push("They can wait out a retail sale (figure 60–90 days on market)."); }
     else if (c.timeline === "asap") { sc -= 12; warn.push("A retail timeline won't fit their urgency."); }
     if (gap != null && gap > 0 && arv > 0 && ask <= arv * 0.9 - deal.repairs) { sc += 12; rs.push("Their number fits under a retail sale with room for the spread."); }
     if (c.occupancy === "tenant") { sc -= 10; warn.push("Tenant in place makes retail showings hard."); }
     if (c.occupancy === "vacant") { sc += 6; rs.push("Vacant — easy access for showings and photos."); }
-    if (!c.condition) miss.push(M("“What can you tell me about the current condition?”", "Condition decides if a retail buyer will touch it."));
+    if (!cond) miss.push(M("“What can you tell me about the current condition?”", "Condition decides if a retail buyer will touch it."));
     if (!c.timeline) miss.push(M("“How soon are you hoping to close?”", "Novation needs a seller who can wait."));
     out.push({ id: "nov", label: "Novation", tab: "nov", sc, rs, warn, miss,
       pitch: ["“We prepare and sell it retail on your behalf — you get closer to the retail number, we handle the work and the buyers, and you get paid at closing.”"] });
@@ -1099,7 +1114,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           )}
           <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
           <WField label="Your wholesale / assignment fee">
-            <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder="15000" />
+            <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder="20000" />
           </WField>
           <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
             You get paid first. Your fee comes out of the deal before the seller's offer, so the number you quote already pays you.
@@ -1152,6 +1167,14 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 ? <>From the condition chip above: <span className="font-semibold text-slate-600">{usd(deal.repairs)}</span>{deal.repairPsf > 0 ? ` (${usd(deal.repairPsf)}/sf)` : ""}. Type a real number here if you have a contractor bid — it overrides the estimate.</>
                 : <>Pick a condition above, or type a real repair number if you have one.</>}
           </div>
+          {!cs.condition && impliedCondition(deal.repairs, deal.sqft) && (
+            <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-slate-500">
+              <Info className="mt-px h-3 w-3 shrink-0 text-slate-400" />
+              <span>
+                {usd(deal.repairs)} on {num(deal.sqft).toLocaleString()} sq ft works out to about ${Math.round(num(deal.repairs) / num(deal.sqft))}/sf, which reads as a <b className="text-slate-700">{impliedCondition(deal.repairs, deal.sqft)} rehab</b>. The strategy scoring is using that until you tap a chip. Confirm it with the seller.
+              </span>
+            </div>
+          )}
           {/* The chain a rep is actually changing when they touch repairs. Kept to one line so the
               stage stays readable, but it makes condition feel connected to the offer. */}
           {deal.arv > 0 && (
@@ -1660,7 +1683,7 @@ export default function App() {
   const [overPct, setOverPct] = useState(80);    // over $200k band
 
   // cash/mao
-  const [wholesaleFee, setWholesaleFee] = useState("15000");
+  const [wholesaleFee, setWholesaleFee] = useState("20000");   // YLHB standard assignment fee (raised from 15k, Sep 2026)
 
 
   const [sellingPct, setSellingPct] = useState("10");
@@ -2103,7 +2126,7 @@ export default function App() {
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
-                  rent: effRent, rentLoading, onGetRent: () => fetchRent(address) }}
+                  rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft) }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
