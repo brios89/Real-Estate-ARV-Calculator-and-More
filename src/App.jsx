@@ -539,6 +539,7 @@ const INITIAL_CALL = {
   hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
   timeline: "", others: "",
   ask: "", priceBasis: "", needCash: "", needCashNotes: "",
+  condItems: "",                 // JSON map of item key -> note, for the walkthrough checklist
   chosen: "",                    // the strategy the rep is actually pitching (may differ from the engine's top pick)
   terms: "",
 };
@@ -799,6 +800,11 @@ const buildCallNarrative = (cs, deal, strat) => {
   if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
   else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
   if (isLowRate(cs.rate)) s2.push(`Loan is at ${rateNum(cs.rate)}%, well under market. If this is not locked up or creative was declined, it goes to the head of acquisitions rather than being marked dead.`);
+  {
+    const items = readItems(cs.condItems);
+    const said = COND_ITEMS.filter(([k]) => items[k]).map(([k, label]) => `${label.toLowerCase()}: ${items[k]}`);
+    if (said.length) s2.push(`Condition notes from the walkthrough - ${said.join("; ")}.`);
+  }
   if (cs.hoa === "yes") s2.push(`There is an HOA${num(cs.hoaAmt) > 0 ? ` at ${money(cs.hoaAmt)} a month` : ""}.`);
   if (cs.hoa === "no") s2.push("No HOA.");
   if (cs.loan === "no") s2.push("Owned free and clear - no loan on the property.");
@@ -907,7 +913,13 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}
     </table>
     <h2>Property</h2><table>
-      ${row("Condition", v(cs.condition))}${row("Occupancy", v(cs.occupancy))}
+      ${row("Condition", v(cs.condition))}
+      ${(() => {
+        const items = readItems(cs.condItems);
+        const keys = COND_ITEMS.filter(([k]) => items[k] !== undefined);
+        if (!keys.length) return row("Walkthrough checklist", "&mdash;");
+        return keys.map(([k, label]) => row(label, items[k] ? esc(items[k]) : "noted, no detail")).join("");
+      })()}${row("Occupancy", v(cs.occupancy))}
       ${isLowRate(cs.rate) ? row("Escalation", `<b style="color:#047857">${esc(String(rateNum(cs.rate)))}% loan &mdash; send to the head of acquisitions if not locked up or if creative was declined</b>`) : ""}
       ${row("HOA", cs.hoa === "yes" ? `Yes${num(cs.hoaAmt) > 0 ? ` &mdash; ${esc(usd(num(cs.hoaAmt)))}/mo` : ""}` : v(cs.hoa))}
       ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
@@ -981,6 +993,24 @@ const fmtSavedAt = (iso) => {
   const today = new Date().toDateString() === d.toDateString();
   return today ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 };
+
+// The walkthrough checklist. Roof and HVAC lead on purpose: they are the two biggest repair
+// numbers on a house, and their age is also the lever we use later to go back for more room.
+const COND_ITEMS = [
+  ["roof", "Roof"],
+  ["hvac", "HVAC"],
+  ["water", "Water heater"],
+  ["windows", "Windows"],
+  ["electrical", "Electrical"],
+  ["plumbing", "Plumbing"],
+  ["foundation", "Foundation"],
+  ["kitchen", "Kitchen"],
+  ["baths", "Bathrooms"],
+  ["floors", "Flooring"],
+  ["paint", "Paint"],
+  ["exterior", "Siding / exterior"],
+];
+const readItems = (raw) => { try { const v = JSON.parse(raw || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
 
 const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Price", "Numbers", "Strategy", "Close"];
 
@@ -1182,7 +1212,52 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         {stage === 3 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Property discovery</div>
           <Line>“What have you done to the property since you bought it?” · “What can you tell me about the current condition?”</Line>
-          <Hint>Skip the roof/HVAC interrogation — you want the overall rehab level and their perception, not an inspection.</Hint>
+          <Hint>You are after the overall rehab level and their perception, not a formal inspection. Work the list below conversationally and write down what they say.</Hint>
+
+          {/* Checklist: tap an item to log it, then type what the seller said. Roof and HVAC first
+              because they carry the biggest dollars and set up the later ask for more room. */}
+          {(() => {
+            const items = readItems(cs.condItems);
+            const setItem = (k, v) => {
+              const next = { ...items };
+              if (v === null) delete next[k]; else next[k] = v;
+              upd("condItems", Object.keys(next).length ? JSON.stringify(next) : "");
+            };
+            const logged = Object.keys(items).length;
+            return (
+              <div className="mt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Walkthrough checklist</div>
+                  <div className="text-[10px] font-semibold text-slate-400">{logged} of {COND_ITEMS.length} logged</div>
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {COND_ITEMS.map(([k, label]) => {
+                    const on = items[k] !== undefined;
+                    return (
+                      <div key={k} className={`rounded-lg border ${on ? "border-emerald-300 bg-emerald-50/50" : "border-slate-200 bg-white"}`}>
+                        <button type="button" onClick={() => setItem(k, on ? null : "")}
+                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
+                          <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${on ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 text-transparent"}`}>✓</span>
+                          <span className={`text-[11.5px] font-semibold ${on ? "text-emerald-900" : "text-slate-600"}`}>{label}</span>
+                          {on && items[k] ? <span className="ml-auto truncate text-[10.5px] text-slate-500">{items[k]}</span> : null}
+                        </button>
+                        {on && (
+                          <div className="px-2.5 pb-2">
+                            <input value={items[k]} onChange={(e) => setItem(k, e.target.value)}
+                              placeholder={k === "roof" ? "e.g. replaced 4 years ago" : k === "hvac" ? "e.g. original, 2001" : "what did they say?"}
+                              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-800 outline-none focus:border-emerald-400" />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-1.5 text-[10.5px] leading-snug text-slate-400">
+                  Log the age of anything they volunteer. An old roof or original HVAC is both a real repair number and the reason you can go back for more room later.
+                </div>
+              </div>
+            );
+          })()}
           <WField label="Condition (drives repairs in the calculator)">
             <WChips value={cs.condition} onChange={(v) => { upd("condition", v); onCondition(v); }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
           </WField>
@@ -1215,7 +1290,9 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           {/* The chain a rep is actually changing when they touch repairs. Kept to one line so the
               stage stays readable, but it makes condition feel connected to the offer. */}
           {deal.arv > 0 && (
-            <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">What this does to your offer</div>
+              <div className="mt-1 flex items-center justify-between gap-2">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">ARV</div>
                 <div className="font-mono text-sm font-bold text-slate-800">{usd(deal.arv)}</div>
@@ -1227,11 +1304,50 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
               <div className="text-slate-300">=</div>
               <div className="text-right">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">You can offer</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Max offer</div>
                 <div className="font-mono text-sm font-bold text-emerald-700">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div>
+              </div>
+              </div>
+              <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+                Repairs come straight off what you can pay, so every item on the checklist above is worth real money. Anchor at <b className="text-emerald-700">{deal.maxCash > 0 ? usd(Math.round(deal.maxCash * ANCHOR_PCT)) : "—"}</b>, never go past the max.
               </div>
             </div>
           )}
+          {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
+              walks a legit 4th bedroom can add it without leaving the call. */}
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
+            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here and the ARV moves.
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra beds</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
+                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
+                  <button type="button" onClick={() => deal.setAdjBeds(Math.min(5, deal.adjBeds + 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra baths</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
+                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
+                  <button type="button" onClick={() => deal.setAdjBaths(Math.min(5, deal.adjBaths + 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+            </div>
+            {deal.subjAdjust !== 0 && (
+              <div className="mt-1.5 text-[10.5px] leading-snug text-emerald-700">
+                Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
+              </div>
+            )}
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+              Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
+            </div>
+          </div>
+
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
@@ -1390,6 +1506,16 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <Line>Value framing: “What Zillow doesn't know is the actual condition of the property.” · “We buy houses as-is. No repairs, no commissions, no inspections, and no showings.” · “We can close quickly and make this process simple.”</Line>
           <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
           <Hint>Negotiation anchor, script-style: “In a perfect world, we would probably need to be somewhere in the low ____s. Now obviously the world isn't perfect — but how close could you get me to that?” Anchor a bit under your max cash so there's room to move.</Hint>
+          {/* The move the roof/HVAC answers were being saved for. */}
+          <div className="mt-3 rounded-lg border-l-4 border-slate-900 bg-slate-100 px-3 py-2">
+            <div className="text-[11.5px] font-bold text-slate-900">Stuck on price? Use the roof and the HVAC.</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-600">
+              If they will not move and you need room, this is what the checklist answers were for. Put them on a brief hold, come back, and use the condition of the big-ticket items as the reason you can ask for more.
+            </div>
+          </div>
+          <Line>“Do you mind holding for just a minute? Let me see what I can do.”</Line>
+          <Line>Come back with: “I went back and looked at this again. You said the roof was ____ and the HVAC was ____. Based on that, let me see if I can get this approved at a better number for you.”</Line>
+          <Hint>Only works if you actually logged those answers in the Property stage. This is a real reason to revisit the number, not a script trick, so do not invent condition details you were never told.</Hint>
           <Line>Takeaway close if they hold firm: “If that's truly what you need to accomplish your goal, then honestly listing it with an agent might make more sense.”</Line>
           <WField label="Open to payments over time? (sets up creative)">
             <WChips value={cs.terms} onChange={(v) => upd("terms", v)} opts={[["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]]} />
@@ -2215,7 +2341,9 @@ export default function App() {
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
-                  rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft) }}
+                  rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft),
+                  adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust,
+                  recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
