@@ -1211,6 +1211,41 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 3 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Property discovery</div>
+          {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
+              walks a legit 4th bedroom can add it without leaving the call. */}
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
+            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here and the ARV moves.
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra beds</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
+                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
+                  <button type="button" onClick={() => deal.setAdjBeds(Math.min(5, deal.adjBeds + 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra baths</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
+                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
+                  <button type="button" onClick={() => deal.setAdjBaths(Math.min(5, deal.adjBaths + 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+            </div>
+            {deal.subjAdjust !== 0 && (
+              <div className="mt-1.5 text-[10.5px] leading-snug text-emerald-700">
+                Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
+              </div>
+            )}
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+              Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
+            </div>
+          </div>
+
           <Line>“What have you done to the property since you bought it?” · “What can you tell me about the current condition?”</Line>
           <Hint>You are after the overall rehab level and their perception, not a formal inspection. Work the list below conversationally and write down what they say.</Hint>
 
@@ -1313,41 +1348,6 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
             </div>
           )}
-          {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
-              walks a legit 4th bedroom can add it without leaving the call. */}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
-            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
-              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here and the ARV moves.
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra beds</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
-                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
-                  <button type="button" onClick={() => deal.setAdjBeds(Math.min(5, deal.adjBeds + 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra baths</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
-                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
-                  <button type="button" onClick={() => deal.setAdjBaths(Math.min(5, deal.adjBaths + 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
-                </div>
-              </div>
-            </div>
-            {deal.subjAdjust !== 0 && (
-              <div className="mt-1.5 text-[10.5px] leading-snug text-emerald-700">
-                Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
-              </div>
-            )}
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
-              Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
-            </div>
-          </div>
-
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
