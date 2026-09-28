@@ -570,6 +570,7 @@ const rateNum = (v) => {
 };
 const isLowRate = (v) => { const n = rateNum(v); return n != null && n < LOW_RATE; };
 
+const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
 const PITI_GOOD = 0.65, PITI_LIMIT = 0.75;
 const pitiCheck = (cs, rent) => {
   const base = num(cs.payment);
@@ -1023,7 +1024,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
                 {deal.arv > 0 ? <>ARV {usd(deal.arv)}</> : null}
                 {deal.arv > 0 && deal.maxCash > 0 ? " · " : ""}
-                {deal.maxCash > 0 ? <>you can offer up to <b className="text-slate-700">{usd(deal.maxCash)}</b></> : null}
+                {deal.maxCash > 0 ? <>max allowable cash offer <b className="text-slate-700">{usd(deal.maxCash)}</b> · anchor at <b className="text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</b></> : null}
               </div>
             )}
           </div>
@@ -1400,10 +1401,12 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
               {deal.maxCash > 0 && (
                 <div className="mt-2 border-t border-slate-300 pt-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Your cash ceiling</div>
-                  <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-slate-900">{usd(deal.maxCash)}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Open here — your anchor</div>
+                  <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</div>
+                  <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Max allowable cash offer</div>
+                  <div className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(deal.maxCash)}</div>
                   <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
-                    The most you can pay and still get your {usd(num(deal.wholesaleFee))} fee. Anchor under it, never over it.
+                    Say the anchor, not the ceiling. That leaves {usd(deal.maxCash - Math.round(deal.maxCash * ANCHOR_PCT))} of room to move toward them and still keep your {usd(num(deal.wholesaleFee))} fee. Never go above the ceiling.
                     {strat.gap != null && strat.gap > 0 ? <> They want <b className="text-slate-700">{usd(strat.gap)}</b> more than this.</> : strat.gap != null ? <> Their number is already under it.</> : null}
                   </div>
                 </div>
@@ -1932,7 +1935,9 @@ export default function App() {
     const local = readSavedCall(address);
     const applyRecord = (rec, from) => {
       setCallState({ ...INITIAL_CALL, ...rec.call });
-      setCallTouched(true);
+      // Only a record with real call content counts as a call in progress. A pull-only record
+      // (someone looked the address up and never dialed) leaves the pill reading "Offer Call".
+      setCallTouched(Object.keys(INITIAL_CALL).some((k) => (rec.call || {})[k] && rec.call[k] !== INITIAL_CALL[k]));
       if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
       if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
       if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
@@ -1979,7 +1984,9 @@ export default function App() {
   useEffect(() => {
     if (!addressSavable(address)) return;
     const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
-    if (untouched) return;
+    // Worth saving if a rep has worked the call OR if there is a RentCast pull to bank. Opening the
+    // app and typing nothing still saves nothing.
+    if (untouched && !pullPayload()) return;
     const at = new Date().toISOString();
     try {
       window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), at }));
