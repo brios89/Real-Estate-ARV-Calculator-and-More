@@ -538,7 +538,7 @@ const INITIAL_CALL = {
   escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
   hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
   timeline: "", others: "",
-  ask: "", priceBasis: "",
+  ask: "", priceBasis: "", needCash: "", needCashNotes: "",
   chosen: "",                    // the strategy the rep is actually pitching (may differ from the engine's top pick)
   terms: "",
 };
@@ -815,6 +815,7 @@ const buildCallNarrative = (cs, deal, strat) => {
   const s3 = [];
   if (cs.timeline) s3.push(`Timeline is ${L[cs.timeline]}.`);
   if (cs.others.trim()) s3.push(`Other decision makers: ${cs.others.trim()}.`);
+  if (num(cs.needCash) > 0) s3.push(`They only need ${money(cs.needCash)} in cash at closing${cs.needCashNotes.trim() ? ` (${cs.needCashNotes.trim()})` : ""}, so the rest does not have to come as cash.`);
   if (num(cs.ask) > 0) s3.push(`Seller's number is ${money(cs.ask)}${cs.priceBasis.trim() ? `, based on: "${cs.priceBasis.trim()}"` : ""}.`);
   if (cs.terms === "yes") s3.push("Seller is open to payments over time.");
   if (cs.terms === "maybe") s3.push("Seller may be open to payments over time.");
@@ -913,7 +914,9 @@ const buildCallReport = (cs, deal, strat) => {
     </table>
     <h2>Timeline &amp; price</h2><table>
       ${row("Timeline", v(cs.timeline))}${row("Other decision makers", v(cs.others))}
-      ${row("Their number", v(cs.ask, true))}${row("How they got that number", v(cs.priceBasis))}
+      ${row("Their number", v(cs.ask, true))}
+      ${row("Cash needed at closing", v(cs.needCash, true))}
+      ${row("What the cash is for", v(cs.needCashNotes))}${row("How they got that number", v(cs.priceBasis))}
       ${row("Open to payments over time", v(cs.terms))}
     </table>
     <h2>Deal numbers at download</h2><table>
@@ -1343,6 +1346,30 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
           <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
           <WField label="“How did you come up with that number?” (optional)"><WArea value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
+
+          {/* Their asking price is a wish. The cash they truly need at closing is the real number,
+              and it is almost always far smaller. Every dollar found here is a dollar we keep. */}
+          <div className="mt-3 rounded-lg border-l-4 border-slate-900 bg-slate-100 px-3 py-2">
+            <div className="text-[11.5px] font-bold text-slate-900">Now find the smallest number they can actually live with.</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-600">
+              What they are asking and what they need are two different numbers. Work down this ladder until they give you the second one. Do not negotiate against their asking price, negotiate against their need.
+            </div>
+          </div>
+          <Line>1. “After the loan is paid off and everything is settled, what do you actually need in your pocket to move on?”</Line>
+          <Line>2. “What are you doing with the money?” This is the one that matters. Movers and a deposit is a different number than a lawyer's retainer or a roof on the next place.</Line>
+          <Line>3. “If I covered the back payments and all of the closing costs, how close does that get you?”</Line>
+          <Line>4. “Does all of it have to come at closing, or could part of it come to you over the next few months?”</Line>
+          <Line>5. “What is the piece you absolutely have to have on closing day?” That answer is the real number.</Line>
+          <Hint>Say the question and then stop. Silence is what gets you the honest answer here. Most sellers name something well under their asking price, and on a creative deal that number is what you have to solve for, not the price.</Hint>
+          <div className="grid grid-cols-2 gap-2">
+            <WField label="Cash they need at closing"><WText money value={cs.needCash} onChange={(v) => upd("needCash", v)} placeholder="8000" /></WField>
+            <WField label="What is it for?"><WText value={cs.needCashNotes} onChange={(v) => upd("needCashNotes", v)} placeholder="movers + deposit" /></WField>
+          </div>
+          {num(cs.needCash) > 0 && num(cs.ask) > 0 && (
+            <div className="mt-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-800">
+              They are asking {usd(num(cs.ask))} but only need <b>{usd(num(cs.needCash))}</b> at closing. That is <b>{usd(num(cs.ask) - num(cs.needCash))}</b> that does not have to be cash, and it is the room a creative structure lives in.
+            </div>
+          )}
           <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Rebuttals — tap to open</div>
           {REBUTTALS.map((r, i) => (
             <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -3254,7 +3281,7 @@ const EDU = {
     what: "A combo deal: you take over the existing low-rate loan subject-to, AND the seller carries a second note for their equity on top.",
     how: "The cheap first loan stays in place. The gap between the price and that loan (minus your down) becomes a seller-financed note — often at 0%. You end up with two payments: one cheap and inherited, one to the seller. It gets deals done when the seller needs more than just debt relief.",
     analogy: "Sub-To handles the bank's loan; the seller note handles the seller's equity — best of both.",
-    videos: [{ label: "The Morby Method", q: "pace morby method hybrid creative finance" }, { label: "Combining sub-to + seller finance", q: "pace morby subto seller finance combo" }],
+    videos: [{ label: "Hybrid deals explained", q: "pace morby hybrid subject to seller carry explained" }, { label: "Combining sub-to + seller finance", q: "pace morby subto seller finance combo" }],
   },
   sf: {
     title: "Seller Financing",
