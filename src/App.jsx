@@ -1012,6 +1012,23 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
           </div>
         </div>
+        {/* The drawer covers the address field, so the call has to say which house it is about. */}
+        <div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-slate-100 px-2.5 py-1.5">
+          <MapPin className="mt-px h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <div className="min-w-0">
+            <div className="text-[11.5px] font-bold leading-snug text-slate-800">
+              {deal.address ? deal.address : <span className="font-semibold text-amber-700">No address set. Close this and pick one up top before you dial.</span>}
+            </div>
+            {deal.address && (deal.arv > 0 || deal.maxCash > 0) && (
+              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+                {deal.arv > 0 ? <>ARV {usd(deal.arv)}</> : null}
+                {deal.arv > 0 && deal.maxCash > 0 ? " · " : ""}
+                {deal.maxCash > 0 ? <>you can offer up to <b className="text-slate-700">{usd(deal.maxCash)}</b></> : null}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* four pillars */}
         <div className="mt-2 flex items-center gap-1.5">
           {PILLARS.map((p) => (
