@@ -944,7 +944,7 @@ const ARV_SOURCES = [
   ["ps-estimate", "PropStream estimate"],
   ["mls", "MLS / agent"],
   ["appraisal", "Appraisal"],
-  ["deal-desk", "Deal Desk comps"],
+  ["deal-desk", "Deal Desk comps (RentCast)"],
 ];
 const ARV_SOURCE_LABEL = Object.fromEntries(ARV_SOURCES);
 
@@ -2177,7 +2177,7 @@ export default function App() {
               </div>
               {pullAt && !compLoading && (
                 <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
-                  Showing the pull from <b className="text-slate-700">{fmtSavedAt(pullAt)}</b>, reloaded free. Re-pull only if this deal has gone cold or something changed.
+                  Showing the RentCast pull from <b className="text-slate-700">{fmtSavedAt(pullAt)}</b>, reloaded free. Re-pull only if this deal has gone cold or something changed.
                 </div>
               )}
             </div>
@@ -2269,87 +2269,17 @@ export default function App() {
           )}
         </div>
 
-        {/* ARV — leads with the number that is actually driving the deal, then lets a rep change
-            it. Showing a blank "optional" box first made VAs think the tool had no ARV at all,
-            even when the comps had already produced one. Answer first, override second. */}
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <SectionTitle>ARV — after repair value</SectionTitle>
-
-          <div className="mt-2 rounded-xl border-2 border-slate-900 bg-slate-50 p-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Driving this deal</div>
-            <div className="mt-0.5 font-mono text-3xl font-bold tabular-nums text-slate-900">{arv > 0 ? usd(arv) : "—"}</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">
-              {arv <= 0
-                ? "No ARV yet. Run Auto-comp up top, or type a number you comped elsewhere."
-                : num(arvOverride) > 0
-                  ? <>
-                      <b className="text-slate-700">Your number is being used.</b> It overrides the Deal Desk comps
-                      {soldSummary && soldSummary.arv > 0 ? <>, which say <b className="text-slate-700">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b></> : null}
-                      {arvSource ? <>. Tagged {(ARV_SOURCE_LABEL[arvSource] || "").toLowerCase()}</> : null}.
-                      {subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} Clear the box below to go back to the comps.
-                    </>
-                  : <>From the Deal Desk sold comps below.{subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} <b className="text-slate-700">Anything you type below wins over this.</b></>}
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Where did this number come from?</div>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {ARV_SOURCES.map(([v, l]) => (
-                <button key={v} type="button" onClick={() => setArvSource(arvSource === v ? "" : v)}
-                  className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${arvSource === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                  {l}
-                </button>
-              ))}
-            </div>
-            {num(arvOverride) > 0 && !arvSource && (
-              <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
-                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
-                Tag the source. It goes on the call report, so anyone reviewing this deal later can see whether the ARV was comped or estimated.
-              </div>
-            )}
-            {arvSource === "ps-estimate" && (
-              <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
-                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
-                That is an automated estimate, not comped value. Fine for a first pass, but comp it before you put a number in front of a seller.
-              </div>
-            )}
-          </div>
-
-          {/* Once there is an ARV, the next move is the call, not more analysis. Point at the button. */}
-          {arv > 0 && !callTouched && (
-            <button type="button" onClick={() => setCallOpen(true)}
-              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
-              <Phone className="h-4 w-4" /> You have an ARV. Open the Offer Call.
-            </button>
-          )}
-          {arv > 0 && !callTouched && (
-            <div className="mt-1 text-center text-[10.5px] leading-snug text-slate-400">
-              The Offer Call walks the script, captures what the seller tells you, and tells you which strategy to pitch.
-            </div>
-          )}
-
-          <div className="mt-3 border-t border-slate-100 pt-3">
-            <Field label={num(arvOverride) > 0 ? "Your ARV — overriding the comps" : "Use your own number instead"} hint={num(arvOverride) > 0 ? "clear it to go back to comps" : "wins over the comps"}>
-              <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder={arv > 0 && num(arvOverride) <= 0 ? String(Math.round(arv)) : "optional"} />
-            </Field>
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
-              A number here takes precedence over whatever the Deal Desk comps calculate. Leave it empty and the comps drive the deal.
-            </div>
-          </div>
-        </div>
-
         {/* ACTUAL SOLD COMPS (recorded closings) — collapsed by default now that the ARV box is
             the front door. Reps who already have a number never have to open this. */}
         {!compsOpen ? (
           <button type="button" onClick={() => setCompsOpen(true)}
             className="mt-4 flex w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm hover:bg-slate-50 sm:px-5">
             <span>
-              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Verify with Deal Desk comps</span>
+              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Verify with Deal Desk comps (RentCast)</span>
               <span className="mt-0.5 block text-[11px] leading-snug text-slate-400">
                 {soldSummary && soldSummary.arv > 0
                   ? <>Recorded sales say <b className="text-slate-600">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b>{num(arvOverride) > 0 && Math.abs(num(arvOverride) - (soldSummary.arv + subjAdjust)) > (soldSummary.arv + subjAdjust) * 0.1 ? <span className="text-amber-600"> — more than 10% off your number, worth a look</span> : ""}. Open to review the comps.</>
-                  : "Pull real recorded sales to build or check an ARV. Optional if you already have one."}
+                  : "Auto-comp pulls recorded sales from RentCast to build or check an ARV. Optional if you already comped it elsewhere."}
               </span>
             </span>
             <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
@@ -2358,7 +2288,7 @@ export default function App() {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <button type="button" onClick={() => setCompsOpen(false)} className="flex items-center gap-1.5 text-left hover:opacity-70" title="Collapse the comp engine">
-              <SectionTitle>Actual sold comps — recorded closings</SectionTitle>
+              <SectionTitle>Actual sold comps — recorded closings (RentCast)</SectionTitle>
               <ChevronLeft className="h-3.5 w-3.5 shrink-0 text-slate-400" />
             </button>
             <div className="flex shrink-0 items-center gap-2">
@@ -2506,6 +2436,75 @@ export default function App() {
           )}
         </div>
         )}
+
+        {/* ARV — leads with the number that is actually driving the deal, then lets a rep change
+            it. Showing a blank "optional" box first made VAs think the tool had no ARV at all,
+            even when the comps had already produced one. Answer first, override second. */}
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <SectionTitle>ARV — after repair value</SectionTitle>
+
+          <div className="mt-2 rounded-xl border-2 border-slate-900 bg-slate-50 p-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Driving this deal</div>
+            <div className="mt-0.5 font-mono text-3xl font-bold tabular-nums text-slate-900">{arv > 0 ? usd(arv) : "—"}</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">
+              {arv <= 0
+                ? "No ARV yet. Run Auto-comp up top, or type a number you comped elsewhere."
+                : num(arvOverride) > 0
+                  ? <>
+                      <b className="text-slate-700">Your number is being used.</b> It overrides the Deal Desk comps
+                      {soldSummary && soldSummary.arv > 0 ? <>, which say <b className="text-slate-700">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b></> : null}
+                      {arvSource ? <>. Tagged {(ARV_SOURCE_LABEL[arvSource] || "").toLowerCase()}</> : null}.
+                      {subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} Clear the box below to go back to the comps.
+                    </>
+                  : <>Calculated from the recorded sold comps that Auto-comp pulled from RentCast, shown above.{subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} <b className="text-slate-700">Anything you type here wins over this.</b></>}
+            </div>
+
+            {/* The override sits inside the box, directly under the line explaining what it does,
+                so the number and the way to change it are one thing rather than two. */}
+            <div className="mt-2.5 border-t border-slate-300 pt-2.5">
+              <Field label={num(arvOverride) > 0 ? "Your ARV — overriding the comps" : "Use your own number instead"} hint={num(arvOverride) > 0 ? "clear it to go back to comps" : "wins over the comps"}>
+                <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder={arv > 0 && num(arvOverride) <= 0 ? String(Math.round(arv)) : "optional"} />
+              </Field>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Where did this number come from?</div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {ARV_SOURCES.map(([v, l]) => (
+                <button key={v} type="button" onClick={() => setArvSource(arvSource === v ? "" : v)}
+                  className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${arvSource === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {num(arvOverride) > 0 && !arvSource && (
+              <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
+                Tag the source. It goes on the call report, so anyone reviewing this deal later can see whether the ARV was comped or estimated.
+              </div>
+            )}
+            {arvSource === "ps-estimate" && (
+              <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
+                That is an automated estimate, not comped value. Fine for a first pass, but comp it before you put a number in front of a seller.
+              </div>
+            )}
+          </div>
+
+          {/* Last thing in the card: with an ARV settled, the next move is the call, not more analysis. */}
+          {arv > 0 && !callTouched && (
+            <>
+              <button type="button" onClick={() => setCallOpen(true)}
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
+                <Phone className="h-4 w-4" /> You have an ARV. Open the Offer Call.
+              </button>
+              <div className="mt-1 text-center text-[10.5px] leading-snug text-slate-400">
+                The Offer Call walks the script, captures what the seller tells you, and tells you which strategy to pitch.
+              </div>
+            </>
+          )}
+        </div>
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
