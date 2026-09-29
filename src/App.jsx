@@ -1954,13 +1954,17 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           return (<div>
             <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Strategy</div>
             <div className="mt-0.5 text-[11px] leading-snug text-slate-500">Tap the one you are pitching, or tap two to present options. Scored by fit, but you decide.</div>
-            <div className="mt-2 rounded-lg border-l-4 border-slate-900 bg-slate-100 px-3 py-2">
-              <div className="text-[11.5px] font-bold text-slate-900">Always pitch cash first.</div>
-              <div className="mt-0.5 text-[11px] leading-snug text-slate-600">
+            {/* Styled like a road warning sign so it cannot be skimmed past: yellow band, black type, triangle. */}
+            <div className="mt-2 overflow-hidden rounded-lg border-2 border-amber-500 bg-amber-50 px-3 pb-2">
+              <div className="-mx-3 mb-2 flex items-center gap-2 bg-amber-400 px-3 py-2" role="alert">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-slate-900" strokeWidth={2.5} />
+                <span className="text-[13px] font-extrabold uppercase tracking-wide text-slate-900">Always pitch cash first</span>
+              </div>
+              <div className="text-[11.5px] leading-snug text-slate-800">
                 Even when cash is not the play, say the cash number out loud before anything else. It anchors the conversation low, and everything after it sounds like you moving toward them. Lead with a creative offer and you have given away the anchor for nothing.
               </div>
               {deal.maxCash > 0 && (
-                <div className="mt-2 border-t border-slate-300 pt-2">
+                <div className="mt-2 border-t border-amber-300 pt-2">
                   <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Open here — your anchor</div>
                   <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</div>
                   <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Max allowable cash offer</div>
