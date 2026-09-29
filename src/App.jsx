@@ -652,6 +652,13 @@ const TAB_DEFAULTS = {
   sfPrice: "", sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0", sfTaxIns: "", sfRent: "", sfReservePct: "12",
   novAsIs: "", novProfit: "30000", novListFactor: "95", novCostFactor: "8",
 };
+// YLHB standard assignment fee. Back to $15K per B (Sep 29 2026). It was $20K from Sep 24, and during
+// that stretch every save wrote "20000" whether or not anyone chose it, so that exact value is read as
+// the old default rather than a deliberate fee. Only a fee that differs from the default is saved now,
+// so a future change to the default reaches every deal nobody customized.
+const FEE_DEFAULT = "15000";
+const FEE_LEGACY_DEFAULTS = ["20000"];
+const savedFee = (v) => (v && !FEE_LEGACY_DEFAULTS.includes(String(v)) ? String(v) : FEE_DEFAULT);
 const FIT_FLOOR = 40;   // Ace's working line: a top score under 40 means nothing actually fits at their number
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
@@ -1195,7 +1202,7 @@ const NumbersPlan = (props) => (<>
   <NumbersPlanBody {...props} />
 </>);
 
-const NumbersPlanBody = ({ cs, upd, deal, gap, goStage }) => {
+const NumbersPlanBody = ({ cs, upd, deal, gap }) => {
   const ask = num(cs.ask), max = deal.maxCash > 0 ? Math.round(deal.maxCash) : 0;
   const anchor = max > 0 ? Math.round(max * ANCHOR_PCT) : 0;
   const band = priceBand(ask, max);
@@ -1229,9 +1236,6 @@ const NumbersPlanBody = ({ cs, upd, deal, gap, goStage }) => {
       <WChips value={cs.terms} onChange={(v) => upd("terms", v)} opts={[["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]]} />
     </WField>
   );
-  const stageBtn = (i, text) => (
-    <button type="button" onClick={() => goStage(i)} className="mt-2 w-full rounded-lg bg-slate-900 px-3 py-2 text-[12px] font-bold text-white hover:bg-slate-800">{text}</button>
-  );
 
   if (band === "no-max") return (<>
     {head("slate", "No max offer yet", <>This needs an ARV and a repair number before it can coach the price. Run Auto-comp or type an ARV up top, and set a condition or repair number on the Property stage.</>)}
@@ -1251,7 +1255,6 @@ const NumbersPlanBody = ({ cs, upd, deal, gap, goStage }) => {
     {head("green", "Their number is under your anchor. Lock it up.", <>They are asking {usd(ask)}. Your anchor is {usd(anchor)} and your max is {usd(max)}. Do not counter lower and do not offer more than they asked. Agree to their number and move to paperwork.</>)}
     <Line>“So if we can do {usd(ask)}, buy it as-is, and close on your timeline, is that something you would want to move forward with?”</Line>
     <Hint>A number this far under the max is worth one sanity check. Make sure the repairs were captured and that nothing like a lien, a second loan or an estate issue is hiding behind the low price.</Hint>
-    {stageBtn(8, "Go to Close")}
   </>);
 
   if (band === "in-range") return (<>
@@ -1259,7 +1262,6 @@ const NumbersPlanBody = ({ cs, upd, deal, gap, goStage }) => {
     {valueFrame}
     {anchorLine}
     {hold}
-    {stageBtn(8, "Agreed on a number? Go to Close")}
   </>);
 
   if (band === "close") return (<>
@@ -1477,7 +1479,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           )}
           <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
           <WField label="Your wholesale / assignment fee">
-            <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder="20000" />
+            <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder={FEE_DEFAULT} />
           </WField>
           <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
             You get paid first. Your fee comes out of the deal before the seller's offer, so the number you quote already pays you.
@@ -1508,7 +1510,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <div className="mt-1.5"><b className="text-slate-800">Property distress</b> is the house itself being the problem. Repairs they cannot afford or manage, a bad tenant, code issues, a place they inherited and cannot keep up.</div>
             <div className="mt-1.5"><b className="text-slate-800">Financial hardship</b> is money pressure pushing the sale. Behind on payments, medical bills, divorce, job loss, taxes owed, a payment they can no longer carry.</div>
             <div className="mt-1.5"><b className="text-slate-800">Urgency</b> is a clock. A job transfer, a closing date on another house, a move, an estate that has to settle, or a life change that will not wait.</div>
-            <div className="mt-2 text-[10.5px] text-slate-400">Most sellers have more than one. Pick the one that is actually driving the decision, and put the story in their own words below. That story is what you repeat back later when you ask for the agreement.</div>
+            <div className="mt-2 text-[11px] leading-snug text-slate-700">Most sellers have more than one. Pick the one that is actually driving the decision, and put the story in their own words below. That story is what you repeat back later when you ask for the agreement.</div>
           </div>
           <WField label="Notes — their why, in their words"><WArea value={cs.motivNotes} onChange={(v) => upd("motivNotes", v)} placeholder="tired landlord, moving to FL for grandkids…" /></WField>
         </div>)}
@@ -1834,7 +1836,9 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             {/* "Gap" meant nothing to a new VA. Say which direction and against what. */}
             <div className={`rounded-lg border p-2 ${strat.gap == null ? "border-slate-200 bg-slate-50/60" : strat.gap > deal.maxCash * CLOSE_BAND_PCT ? "border-rose-300 bg-rose-50" : strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{strat.gap == null ? "Ask vs max" : strat.gap > 0 ? "Ask over max by" : "Ask under max by"}</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? usd(Math.abs(strat.gap)) : "—"}</div></div>
           </div>
-          <NumbersPlan cs={cs} upd={upd} deal={deal} gap={strat.gap} goStage={setStage} />
+          <NumbersPlan cs={cs} upd={upd} deal={deal} gap={strat.gap} />
+          {/* No shortcuts past Strategy. Every rep walks through it so they see what fits, what does not, and why. */}
+          <div className="mt-3 text-[11px] leading-snug text-slate-600">Tap <b className="text-slate-800">Next</b> to see which strategies work, which do not, and why.</div>
         </div>)}
 
         {stage === 7 && (() => {
@@ -2209,7 +2213,7 @@ export default function App() {
   const [overPct, setOverPct] = useState(80);    // over $200k band
 
   // cash/mao
-  const [wholesaleFee, setWholesaleFee] = useState("20000");   // YLHB standard assignment fee (raised from 15k, Sep 2026)
+  const [wholesaleFee, setWholesaleFee] = useState(FEE_DEFAULT);
 
 
   // Buyer-deck flip assumptions, shown next to the deck button on the Cash/MAO tab.
@@ -2280,9 +2284,10 @@ export default function App() {
 
   // ---- Offer Call -> strategy tabs -------------------------------------------------------
   // What the rep captures on the phone should already be in whichever tab they open next.
-  // Rule: fill a field only when it is still empty. We never overwrite something a person typed,
-  // so a number changed on a tab stays changed even if the call is edited afterward.
-  const fillIfEmpty = (cur, setter, val) => { if (!cur && val) setter(String(val)); };
+  // Rule: a tab field FOLLOWS the call until someone types a different number into that field.
+  // The old rule filled a field only while it was empty, and it ran on every keystroke, so typing
+  // 15000 into the call filled the tabs with "1" and then stopped because they were no longer empty.
+  const callFedRef = useRef({});   // the value each tab field last received from the call
   useEffect(() => {
     const ask = num(callState.ask);
     const bal = num(callState.balance);
@@ -2294,22 +2299,26 @@ export default function App() {
         + (callState.hoa === "yes" ? num(callState.hoaAmt) : 0)
       : 0;
     const equity = ask > 0 && bal > 0 ? Math.max(0, ask - bal) : 0;
-
-    if (ask > 0) {
-      fillIfEmpty(askingPrice, setAskingPrice, ask);   // Cash / MAO
-      fillIfEmpty(hyPrice, setHyPrice, ask);           // Hybrid
-      fillIfEmpty(sfPrice, setSfPrice, ask);           // Seller Finance
-    }
-    if (bal > 0) {
-      fillIfEmpty(stBal, setStBal, bal);               // Sub-To
-      fillIfEmpty(hyBal, setHyBal, bal);               // Hybrid
-    }
-    if (piti > 0) {
-      fillIfEmpty(stPiti, setStPiti, Math.round(piti));
-      fillIfEmpty(hyPiti, setHyPiti, Math.round(piti));
-    }
+    const fed = callFedRef.current;
+    const follow = (key, cur, setter, val) => {
+      const next = val > 0 ? String(Math.round(val)) : "";
+      const c = String(cur ?? "");
+      // Still following when the field is empty, still holds what the call last put there, or holds
+      // a leftover partial keystroke of the new number ("1" on the way to "15000").
+      const following = c === "" || c === next || c === (fed[key] ?? "") || (next && c.length < next.length && next.startsWith(c));
+      if (!following) return;
+      if (c !== next) setter(next);
+      fed[key] = next;
+    };
+    follow("askingPrice", askingPrice, setAskingPrice, ask);   // Cash / MAO
+    follow("hyPrice", hyPrice, setHyPrice, ask);               // Hybrid
+    follow("sfPrice", sfPrice, setSfPrice, ask);               // Seller Finance
+    follow("stBal", stBal, setStBal, bal);                     // Sub-To
+    follow("hyBal", hyBal, setHyBal, bal);                     // Hybrid
+    follow("stPiti", stPiti, setStPiti, piti);
+    follow("hyPiti", hyPiti, setHyPiti, piti);
     // On a Sub-To the seller's equity above the balance is what they walk with in cash.
-    if (equity > 0) fillIfEmpty(stCashSeller, setStCashSeller, equity);
+    follow("stCashSeller", stCashSeller, setStCashSeller, equity);
   }, [callState.ask, callState.balance, callState.payment, callState.escrowed, callState.tiMonthly, callState.hoa, callState.hoaAmt]);
 
 
@@ -2430,8 +2439,9 @@ export default function App() {
     const d = {
       arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf,
       soldIncluded, manualSold, mlsOnly, tabs,
+      fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
     };
-    const blank = !tabs && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
+    const blank = !tabs && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
     return blank ? null : d;
   };
@@ -2467,9 +2477,11 @@ export default function App() {
     setArvOverride(""); setRepairOverride("");
     setAdjBeds(0); setAdjBaths(0);
     setRehabLevel(""); setCustomPsf(""); setMlsOnly(true);   // one house's condition never prices another
+    setWholesaleFee(FEE_DEFAULT);   // a fee negotiated on one deal does not carry to the next
     // Strategy tabs too. They only fill empty fields from the call, so a leftover balance or price from
     // the last house would sit there, never get replaced, and quietly run that house's numbers.
     for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](v);
+    callFedRef.current = {};
     // The call is about a seller and a house. Carrying it to a different address would put the
     // wrong seller's name, notes and numbers on the new property, and autosave would then write
     // them into that property's record for the whole team. A saved call for the new address is
@@ -2495,7 +2507,8 @@ export default function App() {
       // (someone looked the address up and never dialed) leaves the pill reading "Offer Call".
       setCallTouched(Object.keys(INITIAL_CALL).some((k) => (rec.call || {})[k] && rec.call[k] !== INITIAL_CALL[k]));
       if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
-      if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
+      // desk.fee is only ever written for a fee someone chose, so it wins outright, even at $20,000.
+      setWholesaleFee(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
       if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
       const dk = rec.desk || {};
       setArvOverride(dk.arvOverride != null ? String(dk.arvOverride) : "");
@@ -2561,7 +2574,7 @@ export default function App() {
     if (untouched && !pullPayload() && !deskPayload()) return;
     const at = new Date().toISOString();
     try {
-      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), at }));
+      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee: wholesaleFee === FEE_DEFAULT ? "" : wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), at }));
       setCallSavedAt(at);
     } catch { /* private mode or full storage — the call still works, it just will not persist */ }
 
@@ -2575,7 +2588,7 @@ export default function App() {
       fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
-        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), by: syncId.name, address }),
+        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee: wholesaleFee === FEE_DEFAULT ? "" : wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), by: syncId.name, address }),
       })
         .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
         .then((d) => {
@@ -3244,7 +3257,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, callAsk: num(callState.ask), rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -3911,7 +3924,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, callAsk, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -3935,6 +3948,15 @@ function CashTab(props) {
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
           <Field label="Seller asking price" hint="negotiations & final contract price" info="One price for both jobs: it grades the deal while you negotiate, and prints on the buyer deck as your contract price (plus your wholesale fee). Just update it to your locked number once you're under contract."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
+          {/* Follows the Offer Call's number until someone types a different one here (usually the
+              locked contract price). When the two differ, say so, so nobody wonders which is right. */}
+          {callAsk > 0 && num(askingPrice) !== callAsk && (
+            <div className="-mt-1 text-[11px] leading-snug text-slate-600">
+              The Offer Call has their number at <b className="text-slate-800">{usd(callAsk)}</b>.{" "}
+              <button type="button" onClick={() => setAskingPrice(String(callAsk))} className="font-semibold text-emerald-700 underline hover:text-emerald-800">Use {usd(callAsk)}</button>
+              {num(askingPrice) > 0 ? " or keep yours if it is your contract price." : ""}
+            </div>
+          )}
         </div>
       </div>
 
