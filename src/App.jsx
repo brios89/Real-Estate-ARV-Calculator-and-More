@@ -650,7 +650,7 @@ const TAB_DEFAULTS = {
   stBal: "", stPiti: "", stArrears: "", stCashSeller: "", stClosing: "3500", stRent: "", stReservePct: "12",
   hyPrice: "", hyDown: "", hyBal: "", hyPiti: "", hyRate: "0", hyTerm: "30", hyClosing: "3500", hyRent: "", hyReservePct: "12",
   sfPrice: "", sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0", sfTaxIns: "", sfRent: "", sfReservePct: "12",
-  novAsIs: "", novProfit: "30000", novListFactor: "95", novCostFactor: "8",
+  novAsIs: "", novCommission: "6", novClosing: "5000", novProfit: "30000", novRepairs: "",
 };
 // YLHB standard assignment fee. Back to $15K per B (Sep 29 2026). It was $20K from Sep 24, and during
 // that stretch every save wrote "20000" whether or not anyone chose it, so that exact value is read as
@@ -2289,8 +2289,9 @@ export default function App() {
   // novation
   const [novAsIs, setNovAsIs] = useState("");
   const [novProfit, setNovProfit] = useState("30000");
-  const [novListFactor, setNovListFactor] = useState("95");
-  const [novCostFactor, setNovCostFactor] = useState("8");
+  const [novCommission, setNovCommission] = useState("6");     // % of the sale price
+  const [novClosing, setNovClosing] = useState("5000");        // flat $
+  const [novRepairs, setNovRepairs] = useState("");            // blank = use the deal's repair number
 
   // One handle on every strategy-tab field, so they can be cleared, saved and restored per address.
   const tabVals = {
@@ -2298,14 +2299,14 @@ export default function App() {
     stBal, stPiti, stArrears, stCashSeller, stClosing, stRent, stReservePct,
     hyPrice, hyDown, hyBal, hyPiti, hyRate, hyTerm, hyClosing, hyRent, hyReservePct,
     sfPrice, sfDown, sfRate, sfAmort, sfBalloon, sfTaxIns, sfRent, sfReservePct,
-    novAsIs, novProfit, novListFactor, novCostFactor,
+    novAsIs, novCommission, novClosing, novProfit, novRepairs,
   };
   const tabSet = {
     rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
     stBal: setStBal, stPiti: setStPiti, stArrears: setStArrears, stCashSeller: setStCashSeller, stClosing: setStClosing, stRent: setStRent, stReservePct: setStReservePct,
     hyPrice: setHyPrice, hyDown: setHyDown, hyBal: setHyBal, hyPiti: setHyPiti, hyRate: setHyRate, hyTerm: setHyTerm, hyClosing: setHyClosing, hyRent: setHyRent, hyReservePct: setHyReservePct,
     sfPrice: setSfPrice, sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon, sfTaxIns: setSfTaxIns, sfRent: setSfRent, sfReservePct: setSfReservePct,
-    novAsIs: setNovAsIs, novProfit: setNovProfit, novListFactor: setNovListFactor, novCostFactor: setNovCostFactor,
+    novAsIs: setNovAsIs, novCommission: setNovCommission, novClosing: setNovClosing, novProfit: setNovProfit, novRepairs: setNovRepairs,
   };
   const tabsChanged = () => {
     const d = {};
@@ -3300,7 +3301,7 @@ export default function App() {
             <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
-            <NovationTab {...{ novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor }} />
+            <NovationTab {...{ repairs, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs }} />
           )}
         </div>
 
@@ -3906,7 +3907,7 @@ const EDU = {
   nov: {
     title: "Novation",
     what: "An agreement that lets you improve and re-sell the seller's home for more — you keep the spread between what you promised them and what it sells for, without ever taking title.",
-    how: "You list the (often fixed-up) house at ARV. The buyer's price, minus selling/closing costs, minus your profit, sets the max you can offer the seller. You're not buying it to hold — you're adding value and capturing the resale spread.",
+    how: "Start from what the house will sell for. Take off the agent commissions, the closing costs, your desired profit and the repairs, and what is left is the most you can promise the seller. You're not buying it to hold — you're adding value and capturing the resale spread.",
     analogy: "Like a consignment deal: you don't own it, you just make it worth more and take a cut of the upside.",
     videos: [{ label: "Novation agreements", q: "pace morby novation agreement real estate" }, { label: "Novation vs wholesaling", q: "pace morby novation vs wholesale" }],
   },
@@ -4848,42 +4849,68 @@ function SellerFinanceTab(props) {
 
 // ---------- NOVATION (your sheet: As-Is × 0.95 × 0.92 − profit = MAO) ----------
 function NovationTab(props) {
-  const { novAsIs, setNovAsIs, novProfit, setNovProfit, novListFactor, setNovListFactor, novCostFactor, setNovCostFactor } = props;
+  const { repairs, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs } = props;
+  // YLHB's novation sheet, step by step (per B, Sep 29 2026):
+  //   As-Is value − commissions (% of value) − closing costs ($) − desired profit − estimated repairs = MAO
+  // Replaces the old As-Is × 95% × (100 − 8)% − profit.
   const asIs = num(novAsIs);
-  const listPrice = asIs * (num(novListFactor) / 100);          // As-Is × 0.95
-  const net = listPrice * (1 - num(novCostFactor) / 100);        // − closing + realtor (~8%)
-  const mao = net - num(novProfit);                             // − desired novation profit
+  const commPct = num(novCommission);
+  const commission = asIs * (commPct / 100);
+  const closing = num(novClosing);
+  const profit = num(novProfit);
+  const repairTyped = String(novRepairs ?? "").trim() !== "";
+  const rep = repairTyped ? num(novRepairs) : num(repairs);   // blank follows the deal's repair number
+  const afterComm = asIs - commission;
+  const afterClosing = afterComm - closing;
+  const afterProfit = afterClosing - profit;
+  const mao = afterProfit - rep;
   let status = "maybe", headline = "Enter the As-Is value to grade", detail = "";
   if (asIs > 0) {
-    if (mao > 0) { status = "go"; headline = "Novation MAO ready"; detail = `Offer up to ${usd(mao)} to net your ${usd(num(novProfit))} target.`; }
-    else { status = "no"; headline = "Profit target too high for this value"; detail = `Costs + profit exceed the net. Lower the target or reconsider the deal.`; }
+    if (mao > 0) { status = "go"; headline = "Novation MAO ready"; detail = `Offer up to ${usd(mao)} to net your ${usd(profit)} target.`; }
+    else { status = "no"; headline = "Costs, profit and repairs are more than the value"; detail = "Lower the profit target, tighten the repairs, or reconsider the deal."; }
   }
+  const steps = [
+    ["As-Is value", asIs, null],
+    [`Minus ${commPct}% commissions`, afterComm, commission],
+    [`Minus closing costs (${usd(closing)})`, afterClosing, closing],
+    [`Minus desired profit (${usd(profit)})`, afterProfit, profit],
+    [`Minus estimated repairs (${usd(rep)})`, mao, rep],
+  ];
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-2">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <div className="text-xs text-amber-900">
-          Confirm the As-Is value is what the property will <b>actually sell for on the MLS as-is</b> before trusting this number. Runs your sheet's formula: As-Is × {num(novListFactor)}% × (100−{num(novCostFactor)})% − profit.
+          Runs your novation sheet: As-Is value, minus {commPct}% commissions, minus {usd(closing)} closing costs, minus your desired profit, minus estimated repairs.
         </div>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <SectionTitle>Novation inputs</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2"><Field label="As-Is value (MLS list basis)"><MoneyInput value={novAsIs} onChange={setNovAsIs} placeholder="405000" /></Field></div>
-            <Field label="Desired novation profit"><MoneyInput value={novProfit} onChange={setNovProfit} /></Field>
-            <div className="hidden sm:block" />
-            <Field label="List discount" hint="As-Is × this %"><PlainInput value={novListFactor} onChange={setNovListFactor} suffix="%" /></Field>
-            <Field label="Closing + realtor" hint="% off list"><PlainInput value={novCostFactor} onChange={setNovCostFactor} suffix="%" /></Field>
+            <div className="sm:col-span-2"><Field label="As-Is value"><MoneyInput value={novAsIs} onChange={setNovAsIs} placeholder="270000" /></Field></div>
+            <Field label="Commissions" hint="% of the value"><PlainInput value={novCommission} onChange={setNovCommission} suffix="%" /></Field>
+            <Field label="Closing costs"><MoneyInput value={novClosing} onChange={setNovClosing} /></Field>
+            <Field label="Desired profit"><MoneyInput value={novProfit} onChange={setNovProfit} /></Field>
+            <Field label="Estimated repairs" hint={repairTyped ? "typed here" : "from the deal · type to override"}>
+              <MoneyInput value={novRepairs} onChange={setNovRepairs} placeholder={num(repairs) > 0 ? String(Math.round(num(repairs))) : "0"} />
+            </Field>
           </div>
         </div>
         <div className="space-y-3">
           <Verdict status={status} headline={headline} detail={detail} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="List price" value={usd(listPrice)} sub={`As-Is × ${num(novListFactor)}%`} />
-            <Stat label="Net after costs" value={usd(net)} sub={`− ${num(novCostFactor)}% closing/realtor`} />
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {steps.map(([label, running, minus], i) => (
+              <div key={i} className="flex items-center justify-between border-b border-slate-100 px-4 py-2 text-sm">
+                <span className="text-slate-700">{label}</span>
+                <span className="font-mono text-slate-800">{asIs > 0 ? usd(running) : "—"}</span>
+              </div>
+            ))}
+            <div className={`flex items-center justify-between px-4 py-2.5 ${asIs > 0 && mao > 0 ? "bg-emerald-50" : asIs > 0 ? "bg-rose-50" : "bg-slate-50"}`}>
+              <span className="text-sm font-bold text-slate-900">Novation Max Allowable Offer</span>
+              <span className={`font-mono text-lg font-bold ${asIs > 0 && mao > 0 ? "text-emerald-700" : asIs > 0 ? "text-rose-700" : "text-slate-400"}`}>{asIs > 0 ? usd(mao) : "—"}</span>
+            </div>
           </div>
-          <Stat label="Novation Max Allowable Offer" value={usd(mao)} tone={mao > 0 ? "good" : "bad"} big sub="net − desired profit" />
         </div>
       </div>
       <TabEducation id="nov" />
