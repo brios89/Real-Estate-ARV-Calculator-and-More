@@ -1226,6 +1226,40 @@ const MotivChecks = ({ checks, title = "These do not line up. Ask again." }) => 
   );
 };
 
+// What the rent estimate was priced for, and a one-tap re-pull when beds, baths or sq ft changed since.
+// Re-pulls are a button, never automatic: each one is a RentCast credit, and a rep tapping +1 bed,
+// +1 bath, -1 bath would otherwise burn three.
+const fmtBasis = (b) => {
+  if (!b) return "";
+  const parts = [];
+  if (b.beds != null && b.baths != null) parts.push(`${num(b.beds)} bd / ${num(b.baths)} ba`);
+  else if (b.beds != null) parts.push(`${num(b.beds)} bd`);
+  if (num(b.sqft) > 0) parts.push(`${Math.round(num(b.sqft)).toLocaleString()} sq ft`);
+  return parts.join(", ");
+};
+const RentBasisNote = ({ info, compact = false }) => {
+  if (!info || info.loading || !info.has) return null;
+  const was = info.basis ? fmtBasis(info.basis) : "";
+  const now = fmtBasis(info.want);
+  if (info.stale) return (
+    <div className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-900">
+      {was ? <>The rent estimate is for <b>{was}</b>, but the house is now <b>{now}</b>.</> : <>The rent estimate was pulled before the bed and bath changes, so it does not include them.</>}
+      <button type="button" onClick={info.onRepull}
+        className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700">
+        <RefreshCw className="h-3 w-3" /> Re-pull rent for {now || "the updated house"}
+      </button>
+      <div className="mt-0.5 text-center text-[10px] text-amber-800">Uses 1 RentCast credit.</div>
+    </div>
+  );
+  if (compact) return null;
+  return (
+    <div className="mt-0.5 text-[10.5px] leading-snug text-slate-600">
+      {was ? <>RentCast estimate for {was}.</> : <>RentCast estimate for the county record's beds and baths.</>}
+      {info.overridden ? " You typed your own rent, so the estimate is a reference only." : " Type to override."}
+    </div>
+  );
+};
+
 const NeedCheck = ({ nd }) => {
   if (!nd) return null;
   const box = (tone, children) => (
@@ -1634,6 +1668,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
               </div>
             )}
+            {deal.rentInfo && deal.rentInfo.stale && <RentBasisNote info={deal.rentInfo} compact />}
             <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
               Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
             </div>
@@ -1843,7 +1878,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               {(() => {
                 const pc = pitiCheck(cs, deal.rent);
                 if (!deal.rent) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Pull the market rent to test whether this payment can carry the house.</div>;
-                if (!pc) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Market rent {usd(deal.rent)}/mo. Add their payment above to run the test.</div>;
+                if (!pc) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Market rent {usd(deal.rent)}/mo. Add their payment above to run the test.<RentBasisNote info={deal.rentInfo} /></div>;
                 const pct = Math.round(pc.ratio * 100);
                 const tone = pc.verdict === "good" ? "text-emerald-700" : pc.verdict === "thin" ? "text-amber-700" : "text-red-700";
                 return (
@@ -2222,6 +2257,7 @@ export default function App() {
   // --- rental ---
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
   const [rentSaved, setRentSaved] = useState(null);  // rent remembered from the last time this address was worked
+  const [rentBasis, setRentBasis] = useState(null);  // { beds, baths, sqft } the rent estimate was priced for
   const [pullAt, setPullAt] = useState(null);        // when this address was last actually pulled from RentCast
   const lastAddrRef = useRef("");                   // the address this screen was last showing
   const pullAddrRef = useRef("");                   // which address the data on screen belongs to
@@ -2293,6 +2329,7 @@ export default function App() {
       // 1) Subject record first (exact-address lookup, 1 credit): fills the sq ft, beds/baths and
       //    coordinates, and pre-loads the Subject property details panel off the same response.
       let hints = { sqft: num(sqft), propertyType: subjectInfo?.propertyType, lat: subjectInfo?.lat, lng: subjectInfo?.lng };
+      let rec = { beds: subjectInfo?.beds ?? null, baths: subjectInfo?.baths ?? null, propertyType: subjectInfo?.propertyType ?? null };
       try {
         const sr = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
         const sd = await sr.json().catch(() => null);
@@ -2307,6 +2344,7 @@ export default function App() {
           setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFullName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
           setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, ownerType: raw.ownerType ?? null, heldFor: raw.heldFor ?? null, hoa: raw.hoa ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
+          rec = { beds: raw.beds ?? null, baths: raw.baths ?? null, propertyType: raw.propertyType ?? null };
         }
       } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
       // 2) Recorded sold comps + MLS cross-check (the server makes both RentCast calls in one go)
@@ -2315,7 +2353,13 @@ export default function App() {
       if (!arvSource && num(arvOverride) <= 0) setArvSource("deal-desk");
       // 3) Market rent, so the payment-vs-rent test and the BRRRR panel are live without a second
       //    click. Best-effort on purpose: a rent miss must never take down a good comp pull.
-      try { await fetchRent(a); } catch { /* keep going — rent can be pulled or typed later */ }
+      try {
+        await fetchRent(a, {
+          beds: rec.beds != null ? rec.beds + adjBeds : null,
+          baths: rec.baths != null ? rec.baths + adjBaths : null,
+          sqft: hints.sqft || null, propertyType: rec.propertyType,
+        });
+      } catch { /* keep going — rent can be pulled or typed later */ }
       setPullAt(new Date().toISOString());
       pullAddrRef.current = a.trim().toLowerCase();
       setCompMsg({ type: "ok", text: "Pulled the subject record, recorded sold comps, and market rent. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
@@ -2356,16 +2400,28 @@ export default function App() {
   }
 
   // Pull the rent estimate. Runs as part of Auto-comp, or from the Offer Call drawer. One RentCast credit.
-  async function fetchRent(addr) {
+  async function fetchRent(addr, basis) {
     const a = (addr || "").trim();
     if (!a) { setRentMsg({ type: "err", text: "Enter an address up top first, then reopen this tab." }); return; }
     setRentLoading(true);
     setRentMsg(null);
     try {
-      const res = await fetch(`${RENT_API}?address=${encodeURIComponent(a)}`);
+      // Price the house as the team has it: record beds/baths plus any corrections, and the sq ft.
+      const q = new URLSearchParams({ address: a });
+      const b = basis || {};
+      if (b.beds != null) q.set("bedrooms", String(b.beds));
+      if (b.baths != null && b.baths > 0) q.set("bathrooms", String(b.baths));
+      if (b.sqft > 0) q.set("squareFootage", String(Math.round(b.sqft)));
+      if (b.propertyType) q.set("propertyType", b.propertyType);
+      const res = await fetch(`${RENT_API}?${q.toString()}`);
       const data = await res.json();
       if (!res.ok) { setRentMsg({ type: "err", text: data.error || "Rent lookup failed." }); return; }
       setRentEst(data.rent || null);
+      setRentBasis(data.rent ? {
+        beds: data.basis && data.basis.beds != null ? Number(data.basis.beds) : (b.beds ?? null),
+        baths: data.basis && data.basis.baths != null ? Number(data.basis.baths) : (b.baths ?? null),
+        sqft: data.basis && data.basis.sqft ? Number(data.basis.sqft) : (b.sqft || null),
+      } : null);
       setRentLow(data.rentLow || null);
       setRentHigh(data.rentHigh || null);
       setRentFetchedFor(a);
@@ -2605,6 +2661,23 @@ export default function App() {
   // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
   // The remembered value keeps a re-opened deal complete without spending another RentCast credit.
   const effRent = num(rentOverride) > 0 ? num(rentOverride) : (rentEst || rentSaved || 0);
+  // The house as the team has it right now: record beds/baths plus corrections, and the sq ft.
+  const wantBasis = {
+    beds: subjectInfo?.beds != null ? subjectInfo.beds + adjBeds : null,
+    baths: subjectInfo?.baths != null ? subjectInfo.baths + adjBaths : null,
+    sqft: num(sqft) || null,
+    propertyType: subjectInfo?.propertyType ?? null,
+  };
+  // The estimate on screen was priced for a different house than the one on screen now.
+  const rentStale = !!(rentEst || rentSaved) && (
+    rentBasis
+      ? ((wantBasis.beds != null && rentBasis.beds != null && wantBasis.beds !== num(rentBasis.beds))
+        || (wantBasis.baths != null && rentBasis.baths != null && wantBasis.baths !== num(rentBasis.baths))
+        || (wantBasis.sqft && rentBasis.sqft && Math.abs(wantBasis.sqft - num(rentBasis.sqft)) >= 1))
+      : (adjBeds !== 0 || adjBaths !== 0)
+  );
+  const repullRent = () => fetchRent(address, wantBasis);
+  const rentInfo = { basis: rentBasis, want: wantBasis, stale: rentStale, onRepull: repullRent, loading: rentLoading, overridden: num(rentOverride) > 0, has: !!(rentEst || rentSaved) };
   const onePctMax = effRent > 0 ? effRent * 100 : 0; // 1% rule: rent >= 1% of price → max price = rent × 100
 
   // The RentCast data worth keeping: subject record, sold comps, sq ft, owner. Saved with the call
@@ -2619,6 +2692,7 @@ export default function App() {
       arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf,
       soldIncluded, manualSold, mlsOnly, tabs,
       fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
+      rentBasis,
     };
     const blank = !tabs && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
@@ -2650,7 +2724,7 @@ export default function App() {
     setSubjDetail(null); setSubjDetailOpen(false);
     setSubjectInfo(null); setOwnerNames(null);
     setSoldData(null); setSoldIncluded({}); setManualSold([]); setCompsOpen(false);
-    setRentEst(null); setRentSaved(null);
+    setRentEst(null); setRentSaved(null); setRentBasis(null);
     setSqft(""); setArvSource("");
     setCompMsg(null); setSoldMsg(null);
     setArvOverride(""); setRepairOverride("");
@@ -2689,6 +2763,7 @@ export default function App() {
       // desk.fee is only ever written for a fee someone chose, so it wins outright, even at $20,000.
       setWholesaleFee(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
       if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
+      setRentBasis(rec.desk && rec.desk.rentBasis ? rec.desk.rentBasis : null);
       const dk = rec.desk || {};
       setArvOverride(dk.arvOverride != null ? String(dk.arvOverride) : "");
       setArvSource(dk.arvSource || "");
@@ -2779,7 +2854,7 @@ export default function App() {
     }, 1200);
     syncTimer.current = { key: saveKey, id: timerId };
   }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey]);
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis]);
 
   // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
   // $40 heavy, the same split the scoring uses). Marked as set by the number, so the strategy engine
@@ -2967,7 +3042,7 @@ export default function App() {
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
-                  rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft),
+                  rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
                   repairsKnown, ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
@@ -3024,6 +3099,7 @@ export default function App() {
               )}
             </div>
             <div className="mt-1 text-[10px] text-slate-400">
+              {rentInfo.stale && <RentBasisNote info={rentInfo} compact />}
               For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of the Deal Desk comp number. It does not apply when you type your own ARV, since a number you comped yourself already reflects the real room count. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($15K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
@@ -3437,7 +3513,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ deckOpenKey: deckKey("cash"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ deckOpenKey: deckKey("cash"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ deckOpenKey: deckKey("subto"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -4173,7 +4249,7 @@ function CashTab(props) {
 
 
       <BrrrrPanel
-        deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened}
+        deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened} rentInfo={props.rentInfo}
         arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
         askingPrice={askingPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
@@ -4198,7 +4274,7 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ deckOpenKey, onDeckOpened, arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
+function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
   const [purchase, setPurchase] = useState("");
   const [rehab, setRehab] = useState("");
   const [taxIns, setTaxIns] = useState("");
@@ -4284,7 +4360,7 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, arv, repairs, rentDefault, rent
           <MoneyInput value={rentOverride} onChange={setRentOverride} filled={num(rentDefault) > 0}
             placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : (rentLoading ? "Pulling…" : "Type the rent")} />
           {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
-          {num(rentDefault) > 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">Pulled with Auto-comp. Type to override.</div>}
+          {num(rentDefault) > 0 && !rentLoading && <RentBasisNote info={rentInfo} />}
           {num(rentDefault) <= 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">Run Auto-comp up top to pull this automatically, or type it.</div>}
         </Field>
         <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator. Auto-estimated from the ARV using U.S. average rates (~0.9% tax + ~0.6% insurance per year), excluding the outlier states CA, NY & FL. Type the actual to override.">
