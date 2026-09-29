@@ -1166,6 +1166,14 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
           <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
+          {(deal.ownerType === "Organization" || deal.heldFor) && (
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-600">
+              {deal.ownerType === "Organization" && (
+                <div className="font-semibold text-amber-700">Owned by an entity, not a person. Find out who actually has authority to sign before you pitch anything.</div>
+              )}
+              {deal.heldFor && <div className={deal.ownerType === "Organization" ? "mt-0.5" : ""}>Owned for <b className="text-slate-800">{deal.heldFor}</b>.</div>}
+            </div>
+          )}
           {deal.ownerNames && deal.ownerNames.length > 0 && (
             <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
               Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
@@ -1211,6 +1219,41 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 3 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Property discovery</div>
+          {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
+              walks a legit 4th bedroom can add it without leaving the call. */}
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
+            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here and the ARV moves.
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra beds</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
+                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
+                  <button type="button" onClick={() => deal.setAdjBeds(Math.min(5, deal.adjBeds + 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra baths</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
+                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
+                  <button type="button" onClick={() => deal.setAdjBaths(Math.min(5, deal.adjBaths + 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
+                </div>
+              </div>
+            </div>
+            {deal.subjAdjust !== 0 && (
+              <div className="mt-1.5 text-[10.5px] leading-snug text-emerald-700">
+                Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
+              </div>
+            )}
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+              Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
+            </div>
+          </div>
+
           <Line>“What have you done to the property since you bought it?” · “What can you tell me about the current condition?”</Line>
           <Hint>You are after the overall rehab level and their perception, not a formal inspection. Work the list below conversationally and write down what they say.</Hint>
 
@@ -1289,7 +1332,13 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           )}
           {/* The chain a rep is actually changing when they touch repairs. Kept to one line so the
               stage stays readable, but it makes condition feel connected to the offer. */}
-          {deal.arv > 0 && (
+          {deal.arv > 0 && !deal.repairsKnown && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span><b>No max offer yet.</b> Tap a condition above or type a repair number. Quoting a price before you know the repairs is how you end up stuck with one.</span>
+            </div>
+          )}
+          {deal.arv > 0 && deal.repairsKnown && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">What this does to your offer</div>
               <div className="mt-1 flex items-center justify-between gap-2">
@@ -1313,41 +1362,6 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
             </div>
           )}
-          {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
-              walks a legit 4th bedroom can add it without leaving the call. */}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
-            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
-              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here and the ARV moves.
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra beds</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
-                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
-                  <button type="button" onClick={() => deal.setAdjBeds(Math.min(5, deal.adjBeds + 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra baths</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
-                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
-                  <button type="button" onClick={() => deal.setAdjBaths(Math.min(5, deal.adjBaths + 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
-                </div>
-              </div>
-            </div>
-            {deal.subjAdjust !== 0 && (
-              <div className="mt-1.5 text-[10.5px] leading-snug text-emerald-700">
-                Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
-              </div>
-            )}
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
-              Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
-            </div>
-          </div>
-
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
@@ -1396,6 +1410,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <WField label="Is there an HOA?">
               <WChips value={cs.hoa} onChange={(v) => upd("hoa", v)} opts={[["yes", "Yes"], ["no", "No"]]} />
             </WField>
+            {typeof deal.hoaKnown === "boolean" && (
+              <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+                The property record says {deal.hoaKnown ? "there is an HOA" : "there is no HOA"}. Confirm it with the seller, since records lag.
+              </div>
+            )}
             {cs.hoa === "yes" && (
               <>
                 <WField label="HOA dues (monthly)">
@@ -1761,7 +1780,7 @@ export default function App() {
   // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
   const [adjBeds, setAdjBeds] = useState(0);
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
-  const [bedAdjAmt, setBedAdjAmt] = useState("20000");   // $ per bedroom — count-adjustment (same sqft), not an addition. Raised 15k -> 20k per B, Sep 2026
+  const [bedAdjAmt, setBedAdjAmt] = useState("15000");   // $ per bedroom — count-adjustment (same sqft), not an addition. Set back to 15k per B, Sep 2026
   const [bathAdjAmt, setBathAdjAmt] = useState("10000"); // $ per FULL bath; a half bath = 0.5 × this
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
@@ -1790,8 +1809,11 @@ export default function App() {
           const raw = sd.raw || {};
           if (raw.sqft) setSqft(String(raw.sqft));
           setOwnerNames(raw.ownerNames || null);
+          // The record often knows whether there is an HOA. Answer it for them rather than making
+          // them ask, but never overwrite an answer a rep already gave.
+          if (typeof raw.hoa === "boolean") setCallState((prev) => (prev.hoa ? prev : { ...prev, hoa: raw.hoa ? "yes" : "no" }));
           setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFullName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
-          setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
+          setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, ownerType: raw.ownerType ?? null, heldFor: raw.heldFor ?? null, hoa: raw.hoa ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
         }
       } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
@@ -1868,7 +1890,7 @@ export default function App() {
   // Rent comes from Auto-comp, the drawer's Get market rent button, or a remembered prior pull.
 
   // rehab + MAO %
-  const [rehabLevel, setRehabLevel] = useState("moderate");
+  const [rehabLevel, setRehabLevel] = useState("");   // no default: repairs stay unknown until a rep picks a level or types a number
   const [customPsf, setCustomPsf] = useState("");
   const [repairOverride, setRepairOverride] = useState("");
   const [underPct, setUnderPct] = useState(75); // under $200k band
@@ -1878,9 +1900,12 @@ export default function App() {
   const [wholesaleFee, setWholesaleFee] = useState("20000");   // YLHB standard assignment fee (raised from 15k, Sep 2026)
 
 
+  // Buyer-deck flip assumptions, shown next to the deck button on the Cash/MAO tab.
   const [sellingPct, setSellingPct] = useState("10");
-  const [holding, setHolding] = useState("7500");
-  const [desiredProfit, setDesiredProfit] = useState("25000");
+  const [carryPerMonth, setCarryPerMonth] = useState("1200");   // loan interest + taxes + insurance + utilities
+  const [rehabPerMonth, setRehabPerMonth] = useState("20000");  // how much work your crew turns out in a month
+  const [holdingOverride, setHoldingOverride] = useState("");   // type a number to ignore the derivation
+  const SELL_MONTHS = 3;                                        // list, contract, close after the work is done
   const [askingPrice, setAskingPrice] = useState("");
 
   // sub-to
@@ -2019,7 +2044,10 @@ export default function App() {
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
   // The deal-driving ARV: manual override wins; otherwise the sold-comp median. Record corrections ride on top.
   const arv = useMemo(() => {
-    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
+    // A typed ARV is taken as final. The bed/bath correction exists to patch a comp-derived number
+    // that was built on the county's bed/bath count, so applying it to a number a human comped
+    // themselves would count the same rooms twice and inflate the offer.
+    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride));
     const soldVal = soldSummary && soldSummary.arv > 0 ? soldSummary.arv : 0;
     if (soldVal <= 0) return 0;
     return Math.max(0, soldVal + subjAdjust);
@@ -2041,6 +2069,15 @@ export default function App() {
     if (num(repairOverride) > 0) return num(repairOverride);
     return repairPsf * num(sqft);
   }, [repairPsf, sqft, repairOverride]);
+  // Unknown is not zero. Without a repair number there is no honest MAO, and the MAO is the figure
+  // a rep says out loud to a seller, so it stays blank rather than assuming the house needs nothing.
+  const repairsKnown = num(repairOverride) > 0 || (rehabLevel !== "" && repairPsf > 0 && num(sqft) > 0);
+  // Holding cost scales with the job. A gut sits for months and a paint-and-carpet does not, so the
+  // months come from the rehab size and the dollars come from your monthly carry. A typed number wins.
+  const rehabMonths = num(rehabPerMonth) > 0 && repairs > 0 ? repairs / num(rehabPerMonth) : 0;
+  const holdMonths = repairs > 0 ? rehabMonths + SELL_MONTHS : 0;
+  const derivedHolding = Math.round(holdMonths * num(carryPerMonth));
+  const holding = num(holdingOverride) > 0 ? String(num(holdingOverride)) : String(derivedHolding);
 
   // ---- rental ----
   // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
@@ -2073,10 +2110,18 @@ export default function App() {
     setRentEst(null); setRentSaved(null);
     setSqft(""); setArvSource("");
     setCompMsg(null); setSoldMsg(null);
+    setArvOverride(""); setRepairOverride("");
+    setAdjBeds(0); setAdjBaths(0);
+    // The call is about a seller and a house. Carrying it to a different address would put the
+    // wrong seller's name, notes and numbers on the new property, and autosave would then write
+    // them into that property's record for the whole team. A saved call for the new address is
+    // restored immediately after this by the effect below.
+    setCallState(INITIAL_CALL); setCallTouched(false);
+    setCallLoadedAt(null); setCallSavedAt(null);
   }, [address]);
 
-  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
-  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
+  // Restore a saved call when the rep lands on an address that already has one. The effect above
+  // has already cleared anything belonging to the previous property, so nothing leaks across.
   useEffect(() => {
     if (!addressSavable(address)) return;
     const k = callStoreKey(address);
@@ -2097,7 +2142,8 @@ export default function App() {
       // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
       // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
       if (rec.pull && rec.pull.at) {
-        if (rec.pull.subjDetail) setSubjDetail(rec.pull.subjDetail);
+        // Open it on a restored pull too, not just a live one, so a cached address looks the same.
+        if (rec.pull.subjDetail) { setSubjDetail(rec.pull.subjDetail); setSubjDetailOpen(true); }
         if (rec.pull.subjectInfo) setSubjectInfo(rec.pull.subjectInfo);
         if (rec.pull.soldData) { setSoldData(rec.pull.soldData); setCompsOpen(true); }
         if (rec.pull.sqft) setSqft(String(rec.pull.sqft));
@@ -2171,13 +2217,11 @@ export default function App() {
   const ruleMaoOver = arv * (num(overPct) / 100) - repairs;
   const investorMaoUnder = ruleMaoUnder - num(wholesaleFee);
   const investorMaoOver = ruleMaoOver - num(wholesaleFee);
-  const itemizedMao =
-    arv - repairs - arv * (num(sellingPct) / 100) - num(holding) - num(desiredProfit) - num(wholesaleFee);
 
   // which band applies to THIS deal (by ARV) — used for the verdict
   const isOver = arv >= 200000;
   const activeRuleMao = isOver ? ruleMaoOver : ruleMaoUnder;
-  const activeInvestorMao = isOver ? investorMaoOver : investorMaoUnder;
+  const activeInvestorMao = repairsKnown ? (isOver ? investorMaoOver : investorMaoUnder) : 0;
   const activePct = isOver ? num(overPct) : num(underPct);
 
   // Each tab carries a plain-English explainer shown on hover, so a newer rep can tell these five
@@ -2343,7 +2387,8 @@ export default function App() {
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust,
-                  recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null }}
+                  recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
+                  repairsKnown, ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
@@ -2374,7 +2419,7 @@ export default function App() {
                 <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
                 <span className="text-[10px] text-slate-400">×</span>
-                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="20000" /></div>
+                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="15000" /></div>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-slate-500">Baths</span>
@@ -2396,7 +2441,7 @@ export default function App() {
               )}
             </div>
             <div className="mt-1 text-[10px] text-slate-400">
-              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($20K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
+              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of the Deal Desk comp number. It does not apply when you type your own ARV, since a number you comped yourself already reflects the real room count. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($15K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
         </div>
@@ -2633,7 +2678,7 @@ export default function App() {
                       <b className="text-slate-700">Your number is being used.</b> It overrides the Deal Desk comps
                       {soldSummary && soldSummary.arv > 0 ? <>, which say <b className="text-slate-700">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b></> : null}
                       {arvSource ? <>. Tagged {(ARV_SOURCE_LABEL[arvSource] || "").toLowerCase()}</> : null}.
-                      {subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} Clear the box below to go back to the comps.
+                      {subjAdjust !== 0 ? <> The {subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(subjAdjust))} bed/bath correction is <b>not</b> added, since you comped this yourself and already counted the rooms.</> : null} Clear the box to go back to the comps.
                     </>
                   : <>Calculated from the recorded sold comps that Auto-comp pulled from RentCast, shown above.{subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} <b className="text-slate-700">Anything you type here wins over this.</b></>}
             </div>
@@ -2696,7 +2741,7 @@ export default function App() {
                 { id: "gut", t: "Full Gut", s: "$50/sf" },
                 { id: "custom", t: "Custom", s: "set $/sf" },
               ].map((r) => (
-                <button key={r.id} onClick={() => setRehabLevel(r.id)}
+                <button key={r.id} onClick={() => setRehabLevel(rehabLevel === r.id ? "" : r.id)}
                   className={`rounded-lg border px-3 py-2 text-left transition ${
                     rehabLevel === r.id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"
                   }`}>
@@ -2718,6 +2763,12 @@ export default function App() {
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Estimated rehab</span>
                 <span className="font-mono text-xl font-bold tabular-nums text-slate-800">{repairs > 0 ? usd(repairs) : "—"}</span>
               </div>
+              {!repairsKnown && (
+                <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span><b>No repair number yet.</b> Pick a rehab level or type a real number. Until then there is no max offer, because an offer that assumes zero repairs is one you cannot honor.</span>
+                </div>
+              )}
               <div className="mt-1 text-[10px] text-slate-400">
                 {num(repairOverride) > 0
                   ? "manual total — overrides the $/sf tiles"
@@ -2803,7 +2854,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -3470,7 +3521,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -3533,69 +3584,6 @@ function CashTab(props) {
         </div>
       </div>
 
-      {/* OPTIONAL — Itemized max offer: the flipper's inputs and the resulting number sit together so the cause/effect is obvious */}
-      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-4 shadow-sm">
-        <div className="flex items-start gap-2">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Itemized max offer</span>
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Optional</span>
-            </div>
-            <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
-              A second, optional way to find your max offer — back into it from your <b className="font-semibold text-slate-600">end buyer's</b> costs and target profit (the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not you</b>). You don't have to fill this in — the Rule and MAO (Max Allowable Offer) above already work. When you do, the number on the right updates the instant you change a field on the left.
-            </p>
-          </div>
-        </div>
-        <div className="mt-3 grid items-stretch gap-4 md:grid-cols-2">
-          {/* left: the flipper's inputs */}
-          <div className="space-y-3">
-            <Field label="Selling costs" hint="% of ARV" info="Cost to SELL the fixed-up house: agent commissions, title, closing. Roughly 8–10% of ARV."><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
-            <Field label="Holding costs" info="Cost to OWN it during rehab and sale: loan interest, taxes, insurance, utilities. ~$3k–$8k on a typical flip."><MoneyInput value={holding} onChange={setHolding} /></Field>
-            <Field label="Flipper's desired profit" hint="optional — your end buyer, not you" info="The profit the END BUYER (the investor who buys this from you and flips it) wants to clear after all their costs. This is THEIR cushion, not your wholesale fee. Commonly $25k–$40k+. Leave the default if you don't know it.">
-              <MoneyInput value={desiredProfit} onChange={setDesiredProfit} />
-              {num(desiredProfit) > 50000 && <div className="mt-1 flex items-start gap-1 text-[10px] font-medium text-amber-600"><span>⚠</span><span>That's high for a flip cushion — most flippers target $25k–$40k. A big number here pushes your max offer way down. Double-check this is really the buyer's number, not your wholesale fee.</span></div>}
-            </Field>
-          </div>
-          {/* right: the live result, right next to the inputs that drive it */}
-          <div className="flex flex-col justify-center rounded-xl border border-slate-200 bg-white p-5 text-center">
-            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Itemized max offer</div>
-            <div className="mt-1 text-4xl font-bold tabular-nums text-slate-900">{usd(itemizedMao)}</div>
-            <div className="mt-2 text-[11px] leading-snug text-slate-500">Buy at this price or lower and the flipper still clears the profit you entered.</div>
-            <div className="mt-3 text-[10px] font-medium text-amber-700">↻ Updates the instant you change the flipper's desired profit.</div>
-            {(() => {
-              // Buyer's ceiling: the most the END BUYER can pay all-in (contract + your fee) and still clear
-              // their target profit. itemizedMao already nets out the fee, so ceiling = itemizedMao + fee.
-              const fee = num(wholesaleFee);
-              const asking = num(askingPrice);
-              const maxAssign = itemizedMao + fee;
-              const planned = asking + fee;          // what you'd actually assign it for today
-              const slack = maxAssign - planned;     // = itemizedMao - asking (the fee cancels)
-              const maxFee = maxAssign - asking;     // fee ceiling at the current contract price
-              return (
-                <div className="mt-3 w-full border-t border-slate-200 pt-3 text-left">
-                  <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Assign it for</div>
-                  <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-slate-900">{usd(maxAssign)} <span className="text-sm font-semibold text-slate-400">max</span></div>
-                  <div className="text-[10px] leading-snug text-slate-400">The most your end buyer can pay all-in — contract price + your fee — and still clear {usd(num(desiredProfit))} on the numbers at left.</div>
-                  {asking > 0 ? (
-                    slack >= 0 ? (
-                      <div className="mt-2 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-700">
-                        ✓ Your plan — {usd(asking)} contract + {usd(fee)} fee = <b>{usd(planned)}</b> — works{slack === 0 ? <>, <b>exactly at the ceiling</b> (zero room)</> : <> with <b>{usd(slack)}</b> of room</>}.
-                      </div>
-                    ) : (
-                      <div className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-700">
-                        ⚠ Your plan — {usd(asking)} contract + {usd(fee)} fee = <b>{usd(planned)}</b> — is <b>{usd(-slack)}</b> over the ceiling. {maxFee > 0 ? <>Max fee at this contract price: <b>{usd(maxFee)}</b> — or renegotiate the price down.</> : <>Even a $0 fee doesn't work at this contract price — renegotiate the price.</>}
-                      </div>
-                    )
-                  ) : (
-                    <div className="mt-2 text-[10px] italic text-slate-400">Enter the Seller asking price up top and this checks your actual assignment against the ceiling.</div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      </div>
 
       <BrrrrPanel
         arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
@@ -3605,6 +3593,8 @@ function CashTab(props) {
           sellingCost: arv * num(sellingPct) / 100,
           holdingCost: num(holding),
           sellingPct: num(sellingPct),
+          holdMonths,
+          assumptions: { sellingPct, setSellingPct, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride },
         }}
       />
       <TabEducation id="cash" />
@@ -3761,10 +3751,34 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
       <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">{brrrrLine}</div>
       <div className="mt-2 text-[10px] text-slate-400">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
 
+      {deckCommon && flipDeck && flipDeck.assumptions && (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Buyer deck assumptions</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <Field label="Selling costs" hint="% of ARV"><PlainInput value={flipDeck.assumptions.sellingPct} onChange={flipDeck.assumptions.setSellingPct} suffix="%" /></Field>
+            <Field label="Carry per month" hint="interest, tax, ins, utils"><MoneyInput value={flipDeck.assumptions.carryPerMonth} onChange={flipDeck.assumptions.setCarryPerMonth} placeholder="1200" /></Field>
+            <Field label="Rehab pace" hint="work per month"><MoneyInput value={flipDeck.assumptions.rehabPerMonth} onChange={flipDeck.assumptions.setRehabPerMonth} placeholder="20000" /></Field>
+          </div>
+          <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 rounded-md bg-white px-3 py-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Holding cost</span>
+            <span className="font-mono text-lg font-bold tabular-nums text-slate-800">{flipDeck.holdingCost > 0 ? usd(flipDeck.holdingCost) : "—"}</span>
+          </div>
+          <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+            {num(flipDeck.assumptions.holdingOverride) > 0
+              ? <>Your number, overriding the calculation. Clear it to go back.</>
+              : flipDeck.holdMonths > 0
+                ? <>{flipDeck.holdMonths.toFixed(1)} months at {usd(num(flipDeck.assumptions.carryPerMonth))}/mo. That is {(flipDeck.holdMonths - 3).toFixed(1)} months of work on {usd(repairs)} of repairs, plus 3 months to list, contract and close.</>
+                : <>Set a repair number above and this calculates itself.</>}
+          </div>
+          <div className="mt-2">
+            <Field label="Or type a holding cost" hint="overrides the calculation"><MoneyInput value={flipDeck.assumptions.holdingOverride} onChange={flipDeck.assumptions.setHoldingOverride} placeholder={flipDeck.holdingCost > 0 ? String(flipDeck.holdingCost) : "optional"} /></Field>
+          </div>
+        </div>
+      )}
       {deckCommon && flipDeck && (
         <div className="mt-3">
           <BuyerDeckButton
-            label="Download deal deck — Flip + BRRRR (.pptx)"
+            label="Download buyer deck — Flip + BRRRR (.pptx)"
             common={{ ...deckCommon, rent: rnt }}
             generateOverride={async (form) => {
               await generateDualDeck({
