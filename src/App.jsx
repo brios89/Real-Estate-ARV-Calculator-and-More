@@ -646,7 +646,7 @@ const impliedCondition = (repairs, sqft) => {
 // Every number typed on the strategy tabs belongs to one property. These are the fresh-screen values,
 // used to clear the tabs on an address change and to tell whether there is anything worth saving.
 const TAB_DEFAULTS = {
-  askingPrice: "", rentOverride: "", holdingOverride: "",
+  rentOverride: "", holdingOverride: "",
   stBal: "", stPiti: "", stArrears: "", stCashSeller: "", stClosing: "3500", stRent: "", stReservePct: "12",
   hyPrice: "", hyDown: "", hyBal: "", hyPiti: "", hyRate: "0", hyTerm: "30", hyClosing: "3500", hyRent: "", hyReservePct: "12",
   sfPrice: "", sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0", sfTaxIns: "", sfRent: "", sfReservePct: "12",
@@ -2222,7 +2222,10 @@ export default function App() {
   const [rehabPerMonth, setRehabPerMonth] = useState("20000");  // how much work your crew turns out in a month
   const [holdingOverride, setHoldingOverride] = useState("");   // type a number to ignore the derivation
   const SELL_MONTHS = 3;                                        // list, contract, close after the work is done
-  const [askingPrice, setAskingPrice] = useState("");
+  // One number, two screens. The calculator's seller asking price IS the Offer Call's "Their number",
+  // so typing in either place changes both. Before, they were separate fields kept in step by a copy.
+  const askingPrice = callState.ask;
+  const setAskingPrice = (v) => { setCallTouched(true); setCallState((p) => ({ ...p, ask: v })); };
 
   // sub-to
   const [stBal, setStBal] = useState("");
@@ -2262,14 +2265,14 @@ export default function App() {
 
   // One handle on every strategy-tab field, so they can be cleared, saved and restored per address.
   const tabVals = {
-    askingPrice, rentOverride, holdingOverride,
+    rentOverride, holdingOverride,
     stBal, stPiti, stArrears, stCashSeller, stClosing, stRent, stReservePct,
     hyPrice, hyDown, hyBal, hyPiti, hyRate, hyTerm, hyClosing, hyRent, hyReservePct,
     sfPrice, sfDown, sfRate, sfAmort, sfBalloon, sfTaxIns, sfRent, sfReservePct,
     novAsIs, novProfit, novListFactor, novCostFactor,
   };
   const tabSet = {
-    askingPrice: setAskingPrice, rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
+    rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
     stBal: setStBal, stPiti: setStPiti, stArrears: setStArrears, stCashSeller: setStCashSeller, stClosing: setStClosing, stRent: setStRent, stReservePct: setStReservePct,
     hyPrice: setHyPrice, hyDown: setHyDown, hyBal: setHyBal, hyPiti: setHyPiti, hyRate: setHyRate, hyTerm: setHyTerm, hyClosing: setHyClosing, hyRent: setHyRent, hyReservePct: setHyReservePct,
     sfPrice: setSfPrice, sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon, sfTaxIns: setSfTaxIns, sfRent: setSfRent, sfReservePct: setSfReservePct,
@@ -2310,7 +2313,6 @@ export default function App() {
       if (c !== next) setter(next);
       fed[key] = next;
     };
-    follow("askingPrice", askingPrice, setAskingPrice, ask);   // Cash / MAO
     follow("hyPrice", hyPrice, setHyPrice, ask);               // Hybrid
     follow("sfPrice", sfPrice, setSfPrice, ask);               // Seller Finance
     follow("stBal", stBal, setStBal, bal);                     // Sub-To
@@ -3257,7 +3259,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, callAsk: num(callState.ask), rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -3924,7 +3926,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, callAsk, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -3947,16 +3949,7 @@ function CashTab(props) {
         <SectionTitle>Your wholesale numbers</SectionTitle>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
-          <Field label="Seller asking price" hint="negotiations & final contract price" info="One price for both jobs: it grades the deal while you negotiate, and prints on the buyer deck as your contract price (plus your wholesale fee). Just update it to your locked number once you're under contract."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
-          {/* Follows the Offer Call's number until someone types a different one here (usually the
-              locked contract price). When the two differ, say so, so nobody wonders which is right. */}
-          {callAsk > 0 && num(askingPrice) !== callAsk && (
-            <div className="-mt-1 text-[11px] leading-snug text-slate-600">
-              The Offer Call has their number at <b className="text-slate-800">{usd(callAsk)}</b>.{" "}
-              <button type="button" onClick={() => setAskingPrice(String(callAsk))} className="font-semibold text-emerald-700 underline hover:text-emerald-800">Use {usd(callAsk)}</button>
-              {num(askingPrice) > 0 ? " or keep yours if it is your contract price." : ""}
-            </div>
-          )}
+          <Field label="Seller asking price" hint="same as Their number in the Offer Call" info="This is the same number as Their number in the Offer Call. Change it in either place and both update. It grades the deal while you negotiate and prints on the buyer deck as your contract price (plus your wholesale fee), so once you are under contract, update it to the locked number."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
         </div>
       </div>
 
