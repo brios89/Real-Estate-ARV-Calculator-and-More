@@ -1332,7 +1332,13 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           )}
           {/* The chain a rep is actually changing when they touch repairs. Kept to one line so the
               stage stays readable, but it makes condition feel connected to the offer. */}
-          {deal.arv > 0 && (
+          {deal.arv > 0 && !deal.repairsKnown && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span><b>No max offer yet.</b> Tap a condition above or type a repair number. Quoting a price before you know the repairs is how you end up stuck with one.</span>
+            </div>
+          )}
+          {deal.arv > 0 && deal.repairsKnown && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">What this does to your offer</div>
               <div className="mt-1 flex items-center justify-between gap-2">
@@ -1884,7 +1890,7 @@ export default function App() {
   // Rent comes from Auto-comp, the drawer's Get market rent button, or a remembered prior pull.
 
   // rehab + MAO %
-  const [rehabLevel, setRehabLevel] = useState("moderate");
+  const [rehabLevel, setRehabLevel] = useState("");   // no default: repairs stay unknown until a rep picks a level or types a number
   const [customPsf, setCustomPsf] = useState("");
   const [repairOverride, setRepairOverride] = useState("");
   const [underPct, setUnderPct] = useState(75); // under $200k band
@@ -2060,6 +2066,9 @@ export default function App() {
     if (num(repairOverride) > 0) return num(repairOverride);
     return repairPsf * num(sqft);
   }, [repairPsf, sqft, repairOverride]);
+  // Unknown is not zero. Without a repair number there is no honest MAO, and the MAO is the figure
+  // a rep says out loud to a seller, so it stays blank rather than assuming the house needs nothing.
+  const repairsKnown = num(repairOverride) > 0 || (rehabLevel !== "" && repairPsf > 0 && num(sqft) > 0);
 
   // ---- rental ----
   // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
@@ -2124,7 +2133,8 @@ export default function App() {
       // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
       // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
       if (rec.pull && rec.pull.at) {
-        if (rec.pull.subjDetail) setSubjDetail(rec.pull.subjDetail);
+        // Open it on a restored pull too, not just a live one, so a cached address looks the same.
+        if (rec.pull.subjDetail) { setSubjDetail(rec.pull.subjDetail); setSubjDetailOpen(true); }
         if (rec.pull.subjectInfo) setSubjectInfo(rec.pull.subjectInfo);
         if (rec.pull.soldData) { setSoldData(rec.pull.soldData); setCompsOpen(true); }
         if (rec.pull.sqft) setSqft(String(rec.pull.sqft));
@@ -2204,7 +2214,7 @@ export default function App() {
   // which band applies to THIS deal (by ARV) — used for the verdict
   const isOver = arv >= 200000;
   const activeRuleMao = isOver ? ruleMaoOver : ruleMaoUnder;
-  const activeInvestorMao = isOver ? investorMaoOver : investorMaoUnder;
+  const activeInvestorMao = repairsKnown ? (isOver ? investorMaoOver : investorMaoUnder) : 0;
   const activePct = isOver ? num(overPct) : num(underPct);
 
   // Each tab carries a plain-English explainer shown on hover, so a newer rep can tell these five
@@ -2371,7 +2381,7 @@ export default function App() {
                   rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
-                  ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
+                  repairsKnown, ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
@@ -2724,7 +2734,7 @@ export default function App() {
                 { id: "gut", t: "Full Gut", s: "$50/sf" },
                 { id: "custom", t: "Custom", s: "set $/sf" },
               ].map((r) => (
-                <button key={r.id} onClick={() => setRehabLevel(r.id)}
+                <button key={r.id} onClick={() => setRehabLevel(rehabLevel === r.id ? "" : r.id)}
                   className={`rounded-lg border px-3 py-2 text-left transition ${
                     rehabLevel === r.id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"
                   }`}>
@@ -2746,6 +2756,12 @@ export default function App() {
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Estimated rehab</span>
                 <span className="font-mono text-xl font-bold tabular-nums text-slate-800">{repairs > 0 ? usd(repairs) : "—"}</span>
               </div>
+              {!repairsKnown && (
+                <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
+                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span><b>No repair number yet.</b> Pick a rehab level or type a real number. Until then there is no max offer, because an offer that assumes zero repairs is one you cannot honor.</span>
+                </div>
+              )}
               <div className="mt-1 text-[10px] text-slate-400">
                 {num(repairOverride) > 0
                   ? "manual total — overrides the $/sf tiles"
