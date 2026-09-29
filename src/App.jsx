@@ -1738,6 +1738,7 @@ export default function App() {
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
   const [rentSaved, setRentSaved] = useState(null);  // rent remembered from the last time this address was worked
   const [pullAt, setPullAt] = useState(null);        // when this address was last actually pulled from RentCast
+  const lastAddrRef = useRef("");                   // the address this screen was last showing
   const pullAddrRef = useRef("");                   // which address the data on screen belongs to
   const [rentLow, setRentLow] = useState(null);
   const [rentHigh, setRentHigh] = useState(null);
@@ -1754,7 +1755,8 @@ export default function App() {
   const callKeyRef = useRef("");                          // which address key the open call is attached to
   const [syncId, setSyncId] = useState(readSyncId);       // { name, code } — this browser's rep identity
   const [syncState, setSyncState] = useState({ status: "idle", by: null, at: null, msg: "" });
-  const syncTimer = useRef(null);                         // debounce so we do not POST on every keystroke
+  const syncTimer = useRef(null);
+  const saveKeyRef = useRef("");                          // address the last autosave pass saw                         // debounce so we do not POST on every keystroke
   const [ownerNames, setOwnerNames] = useState(null); // owner of record from the subject pull — prefills the seller name and shows under the field
   const [subjectInfo, setSubjectInfo] = useState(null);
   // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
@@ -2087,6 +2089,20 @@ export default function App() {
 
   // The RentCast data worth keeping: subject record, sold comps, sq ft, owner. Saved with the call
   // so a second visit to this address costs nothing. Skipped entirely if nothing has been pulled.
+  // The rep's own underwriting on this address: a typed ARV and its source tag, comp include/exclude
+  // picks, hand-entered sales, the MLS filter, bed/bath corrections and the condition chip. Without
+  // these a reopened deal fell back to the raw comp median and showed a different ARV than the one
+  // the team actually used. Null when nothing differs from a fresh screen, so it never forces a save.
+  const deskPayload = () => {
+    const d = {
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf,
+      soldIncluded, manualSold, mlsOnly,
+    };
+    const blank = !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
+      && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
+    return blank ? null : d;
+  };
+
   const pullPayload = () => {
     if (!soldData && !subjDetail) return null;
     return {
@@ -2101,7 +2117,12 @@ export default function App() {
   // otherwise a rep sees the previous property's photo, sq ft, details and comps under a new address.
   useEffect(() => {
     const now = String(address || "").trim().toLowerCase();
-    if (!pullAddrRef.current || pullAddrRef.current === now) return;
+    // Keyed on the last address seen, not on whether a RentCast pull exists. A rep who typed a
+    // PropStream ARV and worked the call without ever pulling had nothing to trigger the clear,
+    // so that house's ARV and seller carried onto the next address.
+    const prev = lastAddrRef.current;
+    lastAddrRef.current = now;
+    if (!prev || prev === now) return;
     pullAddrRef.current = "";
     setPullAt(null);
     setSubjDetail(null); setSubjDetailOpen(false);
@@ -2112,6 +2133,7 @@ export default function App() {
     setCompMsg(null); setSoldMsg(null);
     setArvOverride(""); setRepairOverride("");
     setAdjBeds(0); setAdjBaths(0);
+    setRehabLevel(""); setCustomPsf(""); setMlsOnly(true);   // one house's condition never prices another
     // The call is about a seller and a house. Carrying it to a different address would put the
     // wrong seller's name, notes and numbers on the new property, and autosave would then write
     // them into that property's record for the whole team. A saved call for the new address is
@@ -2139,6 +2161,13 @@ export default function App() {
       if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
       if (rec.wholesaleFee) setWholesaleFee(rec.wholesaleFee);
       if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
+      const dk = rec.desk || {};
+      setArvOverride(dk.arvOverride != null ? String(dk.arvOverride) : "");
+      setArvSource(dk.arvSource || "");
+      setAdjBeds(num(dk.adjBeds)); setAdjBaths(num(dk.adjBaths));
+      setRehabLevel(dk.rehabLevel || ""); setCustomPsf(dk.customPsf != null ? String(dk.customPsf) : "");
+      setMlsOnly(dk.mlsOnly !== false);
+      setManualSold(Array.isArray(dk.manualSold) ? dk.manualSold : []);
       // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
       // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
       if (rec.pull && rec.pull.at) {
@@ -2151,6 +2180,8 @@ export default function App() {
         setPullAt(rec.pull.at);
         pullAddrRef.current = String(address || "").trim().toLowerCase();
       } else setPullAt(null);
+      // Comp picks are keyed by position in the cached pull, so they only mean something alongside it.
+      setSoldIncluded(rec.pull && dk.soldIncluded && typeof dk.soldIncluded === "object" ? dk.soldIncluded : {});
       setCallLoadedAt(rec.at || null);
       setCallSavedAt(rec.at || null);
       if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
@@ -2182,25 +2213,32 @@ export default function App() {
   // Autosave. Skips empty calls so simply opening the drawer never creates a record.
   useEffect(() => {
     if (!addressSavable(address)) return;
+    // On the render where the address changes, every value in this closure still belongs to the
+    // previous house (the clear and the restore land on the next render). Saving here wrote one
+    // seller's call into the new address's record and pushed it to the team. Skip exactly this pass.
+    const saveKey = callStoreKey(address);
+    if (saveKeyRef.current !== saveKey) { saveKeyRef.current = saveKey; return; }
     const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
     // Worth saving if a rep has worked the call OR if there is a RentCast pull to bank. Opening the
     // app and typing nothing still saves nothing.
-    if (untouched && !pullPayload()) return;
+    if (untouched && !pullPayload() && !deskPayload()) return;
     const at = new Date().toISOString();
     try {
-      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), at }));
+      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), at }));
       setCallSavedAt(at);
     } catch { /* private mode or full storage — the call still works, it just will not persist */ }
 
     // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
     if (!syncId.code) return;
-    if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(() => {
+    // Only replace a pending push for this same address. A push still waiting for the house the rep
+    // just left carries that house's final state and must be allowed to land.
+    if (syncTimer.current && syncTimer.current.key === saveKey) clearTimeout(syncTimer.current.id);
+    const timerId = setTimeout(() => {
       setSyncState((p) => ({ ...p, status: "saving" }));
       fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
-        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), by: syncId.name, address }),
+        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), by: syncId.name, address }),
       })
         .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
         .then((d) => {
@@ -2210,7 +2248,9 @@ export default function App() {
         })
         .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
     }, 1200);
-  }, [callState, repairOverride, wholesaleFee, effRent, address, syncId]);
+    syncTimer.current = { key: saveKey, id: timerId };
+  }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly]);
 
   // ---- cash MAO (both bands) ----
   const ruleMaoUnder = arv * (num(underPct) / 100) - repairs;

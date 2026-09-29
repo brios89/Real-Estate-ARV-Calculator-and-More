@@ -66,6 +66,7 @@ export default async function handler(req, res) {
         rent: payload.rent ?? "",
         pull: payload.pull ?? null,                  // cached RentCast pull (subject, sold comps) so a re-open costs no credits                    // market rent last used for this address, so a re-open does not re-bill RentCast
         wholesaleFee: payload.wholesaleFee ?? "",
+        desk: payload.desk && typeof payload.desk === "object" ? payload.desk : null,   // typed ARV + source, comp picks, bed/bath fixes, condition
         at: new Date().toISOString(),
         by: String(payload.by || "").slice(0, 40),   // who captured it — shown on the next person's screen
         address: String(payload.address || "").slice(0, 200),
