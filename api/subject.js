@@ -22,18 +22,6 @@ export default async function handler(req, res) {
     const latestKey = (o) => (o && typeof o === "object" ? Object.keys(o).sort().pop() : null);
     const taY = latestKey(p.taxAssessments); const ta = taY ? p.taxAssessments[taY] : null;
     const txY = latestKey(p.propertyTaxes); const tx = txY ? p.propertyTaxes[txY] : null;
-    // How long they have owned it. Long tenure is motivation signal and it is the same figure
-    // PropStream shows as "Length of Ownership", derived from the last recorded sale.
-    const heldFor = (() => {
-      const d = new Date(p.lastSaleDate);
-      if (isNaN(d)) return null;
-      const months = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24 * 30.44));
-      if (months < 1) return "less than a month";
-      const y = Math.floor(months / 12), m = months % 12;
-      return [y ? `${y} year${y === 1 ? "" : "s"}` : null, m ? `${m} month${m === 1 ? "" : "s"}` : null].filter(Boolean).join(" ");
-    })();
-    // The owner entity type, straight from RentCast rather than guessed from the name string.
-    const ownerType = p.owner && p.owner.type ? p.owner.type : null;
     const ownerNames = p.owner && Array.isArray(p.owner.names) ? p.owner.names.join(", ") : null;
     const mail = p.owner && p.owner.mailingAddress ? p.owner.mailingAddress.formattedAddress ||
       [p.owner.mailingAddress.addressLine1, p.owner.mailingAddress.city, p.owner.mailingAddress.state].filter(Boolean).join(", ") : null;
@@ -46,13 +34,11 @@ export default async function handler(req, res) {
         ["Type", p.propertyType], ["Heating", f.heatingType || yn(f.heating)], ["Cooling", f.coolingType || yn(f.cooling)],
         ["Fireplace", f.fireplaceType || yn(f.fireplace)], ["Garage", f.garageType || (f.garageSpaces ? `${f.garageSpaces} spaces` : yn(f.garage))],
         ["Pool", yn(f.pool)], ["Exterior", f.exteriorType], ["Roof", f.roofType], ["Foundation", f.foundationType],
-        ["Architecture", f.architectureType], ["HOA", p.hoa === false ? "No" : yn(p.hoa)],
+        ["Architecture", f.architectureType],
       ]),
       "Ownership": pick([
         ["Owner", ownerNames],
-        ["Owner Type", ownerType],
         ["Owner Occupied", p.ownerOccupied === false ? "No — ABSENTEE" : yn(p.ownerOccupied)],
-        ["Owned For", heldFor],
         ["Owner Mailing Address", mail],
       ]),
       "Tax & Sale": pick([
@@ -79,9 +65,6 @@ export default async function handler(req, res) {
         yearBuilt: p.yearBuilt ?? null,
         propertyType: p.propertyType ?? null,
         ownerNames: (p.owner && Array.isArray(p.owner.names)) ? p.owner.names : null,
-        ownerType,                                  // "Individual" or "Organization"
-        heldFor,                                    // human-readable length of ownership
-        hoa: typeof p.hoa === "boolean" ? p.hoa : (p.hoa ? true : null),   // null = unknown, not "no"
         architecture: (p.features && p.features.architectureType) || null,
         lat: p.latitude ?? null,
         lng: p.longitude ?? null,
