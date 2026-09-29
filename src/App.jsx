@@ -669,6 +669,35 @@ const WENT_WITH = [
   { id: "sf", label: "Seller finance", tab: "sf", deck: "Seller Finance" },
   { id: "nov", label: "Novation", tab: "nov", deck: null },
 ];
+// Checks the main motivator against the harder answers captured later in the call. It never moves a
+// strategy score (timeline, payments and condition already do that, so scoring the motivator too would
+// count the same fact twice). A contradiction usually means the rep misheard or the seller has not
+// told the whole story, and either is worth one more question before an offer goes out.
+const MOTIV_LABEL = { distress: "Property distress", hardship: "Financial hardship", urgency: "Urgency" };
+const motivationChecks = (c, deal) => {
+  const out = [];
+  const m = c.motivation;
+  if (!m) return out;
+  const cond = (c.condition && c.conditionAuto !== "yes" ? c.condition : null)
+    || impliedCondition(num(deal && deal.repairs), num(deal && deal.sqft)) || c.condition || null;
+  if (m === "urgency" && c.timeline === "flexible") out.push({
+    msg: "Urgency is the main motivator, but they said their timeline is flexible.",
+    ask: "“You mentioned this needs to happen soon. Is there a date you are working against?”",
+  });
+  if (m === "hardship" && c.timeline === "flexible") out.push({
+    msg: "Financial hardship usually comes with a clock, but they said their timeline is flexible.",
+    ask: "“If nothing changes, when does this start to cost you?”",
+  });
+  if (m === "hardship" && c.loan === "yes" && c.behind === "no") out.push({
+    msg: "Financial hardship is the main motivator, but they are current on the loan.",
+    ask: "“You mentioned money is tight. What is putting the pressure on, if the mortgage is current?”",
+  });
+  if (m === "distress" && cond === "light") out.push({
+    msg: `Property distress is the main motivator, but the condition reads Light${c.condition && c.conditionAuto !== "yes" ? "" : " from the repair number"}.`,
+    ask: "“What is it about the house that has you ready to be done with it?”",
+  });
+  return out;
+};
 const FIT_FLOOR = 40;   // Ace's working line: a top score under 40 means nothing actually fits at their number
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
@@ -939,6 +968,7 @@ const buildCallNarrative = (cs, deal, strat) => {
   s1.push(`Offer call${cs.sellerName.trim() ? ` with ${cs.sellerName.trim()}` : ""}${deal.address ? ` regarding ${deal.address}` : ""}${cs.bookedBy.trim() ? `, booked by ${cs.bookedBy.trim()}` : ""}.`);
   if (cs.motivation) s1.push(`Seller's main driver is ${L[cs.motivation] || cs.motivation}.`);
   if (cs.motivNotes.trim()) s1.push(`In their words: "${cs.motivNotes.trim()}".`);
+  for (const k of motivationChecks(cs, deal)) s1.push(`Worth a second look: ${k.msg}`);
   p.push(s1.join(" "));
   const s2 = [];
   if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.conditionAuto === "yes" ? " (going by the repair number)" : ""}${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
@@ -1073,7 +1103,7 @@ const buildCallReport = (cs, deal, strat) => {
     </div>
     <h2>Call basics</h2><table>
       ${row("Seller", v(cs.sellerName))}${row("Booked by (lead manager)", v(cs.bookedBy))}
-      ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}
+      ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}${(() => { const mc = motivationChecks(cs, deal); return mc.length ? row("Motivation check", `<span style="color:#b45309">${mc.map((k) => esc(k.msg)).join("<br>")}</span>`) : ""; })()}
     </table>
     <h2>Property</h2><table>
       ${row("Condition", v(cs.condition) + (cs.condition && cs.conditionAuto === "yes" ? " (set from the repair number)" : ""))}
@@ -1180,6 +1210,22 @@ const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Pric
 
 // The need-vs-number panel on the Price stage. Red when the numbers cannot both be true, amber when a
 // missing input keeps it from being checked, green only when there is real room to work with.
+const MotivChecks = ({ checks, title = "These do not line up. Ask again." }) => {
+  if (!checks || !checks.length) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[12px] font-bold text-amber-900"><AlertTriangle className="h-3.5 w-3.5 text-amber-500" />{title}</div>
+      {checks.map((k, i) => (
+        <div key={i} className="mt-1.5 text-[11px] leading-snug text-slate-800">
+          {k.msg}
+          <div className="mt-0.5 font-medium text-emerald-800">Ask: {k.ask}</div>
+        </div>
+      ))}
+      <div className="mt-1.5 text-[10.5px] leading-snug text-slate-600">This does not change any strategy score. It flags answers worth one more question.</div>
+    </div>
+  );
+};
+
 const NeedCheck = ({ nd }) => {
   if (!nd) return null;
   const box = (tone, children) => (
@@ -1543,6 +1589,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <WField label="Main motivator">
             <WChips value={cs.motivation} onChange={(v) => upd("motivation", v)} opts={[["distress", "Property distress"], ["hardship", "Financial hardship"], ["urgency", "Urgency"]]} />
           </WField>
+          <MotivChecks checks={motivationChecks(cs, deal)} />
           {/* Pick-one guidance. Reps hear three problems at once and freeze, so this names what each
               bucket actually sounds like and tells them to pick the one driving the decision. */}
           <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2.5 text-[11px] leading-snug text-slate-600">
@@ -1927,6 +1974,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               )}
             </div>
 
+            <MotivChecks checks={motivationChecks(cs, deal)} title="Before you pitch: the motivator does not match" />
             {!strat.fits && strat.gatedBy.length > 0 && (
               <div className="mt-2 rounded-lg border-l-4 border-amber-500 bg-amber-50 px-3 py-2">
                 <div className="text-[12px] font-bold text-amber-900">Not enough to call a fit yet.</div>
@@ -2073,7 +2121,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
             <FileDown className="h-4 w-4" /> Download call report
           </button>
-          <div className="mt-1.5 text-center text-[10.5px] leading-snug text-slate-400">Everything captured on this call, plus a copy-and-paste summary for the CRM.</div>
+          <div className="mt-1.5 text-center text-[12px] font-medium leading-snug text-slate-700">Everything captured on this call, plus a copy-and-paste summary for the CRM.</div>
 
           {/* Buyer deck for the strategy the deal ended up as. Opens that tab's deck form, so the deck is
               built from the same numbers the tab shows. */}
@@ -2140,7 +2188,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                   className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
                   <FileDown className="h-4 w-4" /> Download buyer deck: {ww.deck}
                 </button>
-                <div className="mt-1.5 text-center text-[10.5px] leading-snug text-slate-500">Upload this deck to the CRM on the same lead as the call report.</div>
+                <div className="mt-1.5 text-center text-[12px] font-medium leading-snug text-slate-700">Upload this deck to the CRM on the same lead as the call report.</div>
               </>);
             })()}
           </div>
