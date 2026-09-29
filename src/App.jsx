@@ -703,6 +703,7 @@ function scoreStrategies(c, deal) {
   const pcPct = pc ? `${Math.round(pc.ratio * 100)}%` : "";
   const out = [];
   const gatedBy = [];   // strategies held under the fit line only because an answer is missing
+  let stGate = null, hyGate = null;   // what Sub-To / Hybrid still need before they can be graded at all
 
   // ---- CASH ----
   {
@@ -779,14 +780,15 @@ function scoreStrategies(c, deal) {
       // No payment or no rent means the hold test never ran. Before, a Sub-To with low equity and a
       // flexible seller reached 68 and "Best fit" without anyone knowing what the payment was.
       if (!pc) {
-        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Subject-To", need: num(c.payment) <= 0 ? "their monthly payment" : "the market rent" });
+        stGate = num(c.payment) <= 0 ? "their monthly payment" : "the market rent";
+        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Subject-To", need: stGate });
         sc = Math.min(sc, FIT_FLOOR - 1);
         warn.push(num(c.payment) <= 0
           ? "Cannot call Sub-To a fit until you have their monthly payment. The payment is the deal, and it has not been asked yet."
           : "Cannot call Sub-To a fit until the market rent is in. The payment has to be tested against it.");
       }
     }
-    out.push({ id: "subto", label: "Subject-To", tab: "subto", sc, rs, warn, miss,
+    out.push({ id: "subto", label: "Subject-To", tab: "subto", sc, rs, warn, miss, gate: stGate,
       pitch: ["“What if I just took over your existing payments?”", "Get the payment, rate, and whether they're current — then run the Sub-To tab live."] });
   }
 
@@ -844,7 +846,8 @@ function scoreStrategies(c, deal) {
         miss.push(M("Pull the market rent in the Property stage.", "The payment plus the note has to fit under the rent."));
       }
       if (!pc) {
-        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Hybrid", need: num(c.payment) <= 0 ? "their monthly payment" : "the market rent" });
+        hyGate = num(c.payment) <= 0 ? "their monthly payment" : "the market rent";
+        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Hybrid", need: hyGate });
         sc = Math.min(sc, FIT_FLOOR - 1);
         warn.push(num(c.payment) <= 0
           ? "Cannot call Hybrid a fit until you have their monthly payment. It inherits that payment with a note payment on top."
@@ -852,7 +855,7 @@ function scoreStrategies(c, deal) {
       }
       if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
     }
-    out.push({ id: "hybrid", label: "Hybrid (Sub-To + carry)", tab: "hybrid", sc, rs, warn, miss,
+    out.push({ id: "hybrid", label: "Hybrid (Sub-To + carry)", tab: "hybrid", sc, rs, warn, miss, gate: hyGate,
       pitch: ["Take over the existing payments, and the seller carries the equity above the balance as a note — their price, your structure."] });
   }
 
@@ -986,7 +989,11 @@ const buildCallNarrative = (cs, deal, strat) => {
   if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
   const top = strat.ranked[0];
   const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
-  if (ww) s4.push(`Went with ${ww.label}.${ww.deck ? ` The ${ww.deck} buyer deck is attached to this lead.` : ""}`);
+  if (ww) {
+    const wr = strat.ranked.find((x) => x.id === ww.id);
+      const sc = wr ? ` It scored ${wr.sc} of 100${wr.sc < FIT_FLOOR ? `, under the ${FIT_FLOOR} fit line` : ""}${wr.warn.length ? `, with ${wr.warn.length} warning${wr.warn.length > 1 ? "s" : ""}: ${wr.warn.map((x) => x.replace(/[.\s]+$/, "")).join(". ")}` : ", no warnings"}.` : "";
+    s4.push(`Went with ${ww.label}.${sc}${ww.deck ? ` The ${ww.deck} buyer deck is attached to this lead.` : ""}`);
+  }
   const pickIds = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
   const picks = strat.ranked.filter((r) => pickIds.includes(r.id));
   if (top && !strat.fits && strat.gatedBy.length) {
@@ -1095,7 +1102,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
     </table>
     <h2>Strategy ranking</h2>
-    ${(() => { const ww = WENT_WITH.find((x) => x.id === cs.wentWith); return ww ? `<div class="pitched">Went with: <b>${esc(ww.label)}</b>${ww.deck ? ` &middot; buyer deck: ${esc(ww.deck)}` : ""}</div>` : ""; })()}
+    ${(() => { const ww = WENT_WITH.find((x) => x.id === cs.wentWith); if (!ww) return ""; const wr = strat.ranked.find((x) => x.id === ww.id); return `<div class="pitched">Went with: <b>${esc(ww.label)}</b>${wr ? ` &middot; scored ${wr.sc} of 100${wr.warn.length ? ` &middot; ${wr.warn.length} warning${wr.warn.length > 1 ? "s" : ""}` : ""}` : ""}${ww.deck ? ` &middot; buyer deck: ${esc(ww.deck)}` : ""}</div>`; })()}
     ${(() => {
       const ps = strat.ranked.filter((r) => (cs.chosen || "").split(",").filter(Boolean).includes(r.id));
       return ps.length ? `<div class="pitched">Pitched on this call: <b>${esc(ps.map((p) => p.label).join(" and "))}</b></div>` : "";
@@ -2080,6 +2087,49 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 </button>
               ))}
             </div>
+            {(() => {
+              // How the strategy they went with actually scored, and what the engine warned about it,
+              // right before they send a deck to a buyer. Deliberately repeated from the Strategy stage.
+              const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
+              const r = ww && strat.ranked.find((x) => x.id === ww.id);
+              if (!r) return null;
+              const top = strat.ranked[0];
+              const gated = r.gate ? { need: r.gate } : null;
+              const tone = gated ? "amber" : r.sc < FIT_FLOOR ? "red" : r.warn.length ? "amber" : "green";
+              const box = { red: "border-rose-300 bg-rose-50", amber: "border-amber-300 bg-amber-50", green: "border-emerald-300 bg-emerald-50" }[tone];
+              const ink = { red: "text-rose-900", amber: "text-amber-900", green: "text-emerald-900" }[tone];
+              const icon = { red: "text-rose-600", amber: "text-amber-500", green: "text-emerald-600" }[tone];
+              return (
+                <div className={`mt-2.5 rounded-lg border px-3 py-2 ${box}`}>
+                  <div className={`flex items-center justify-between gap-2 text-[12px] font-bold ${ink}`}>
+                    <span className="flex items-center gap-1.5">
+                      {tone === "green" ? <CheckCircle2 className={`h-4 w-4 ${icon}`} /> : <AlertTriangle className={`h-4 w-4 ${icon}`} />}
+                      {r.label} scored {r.sc} out of 100
+                    </span>
+                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide">
+                      {gated ? "Not graded yet" : r.sc < FIT_FLOOR ? `Under the ${FIT_FLOOR} fit line` : strat.fits && top && top.id === r.id ? "Best fit" : "Fits"}
+                    </span>
+                  </div>
+                  {gated && <div className="mt-1 text-[11px] leading-snug text-slate-700">It cannot be graded without {gated.need}. Get it before sending anything to a buyer.</div>}
+                  {!gated && r.sc < FIT_FLOOR && <div className="mt-1 text-[11px] leading-snug text-slate-700">The numbers do not support this strategy as captured. Double-check them, and flag it to the head of acquisitions before a buyer sees this deck.</div>}
+                  {strat.fits && top && top.id !== r.id && <div className="mt-1 text-[11px] leading-snug text-slate-700">Deal Desk's best fit was {top.label} ({top.sc}).</div>}
+                  {r.warn.length > 0 ? (
+                    <div className="mt-1.5 space-y-1">
+                      {r.warn.map((wn, k) => (
+                        <div key={k} className="flex items-start gap-1.5 text-[11px] leading-snug text-slate-800">
+                          <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{wn}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="mt-1 text-[11px] leading-snug text-slate-700">No warnings on this strategy.</div>}
+                  {r.miss.length > 0 && (
+                    <div className="mt-1.5 text-[11px] leading-snug text-slate-700">
+                      <b>Still unanswered:</b> {r.miss.slice(0, 3).map((m) => m.q).join(" · ")}{r.miss.length > 3 ? ` · and ${r.miss.length - 3} more` : ""}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {(() => {
               const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
               if (!ww) return <div className="mt-2 text-[11px] leading-snug text-slate-600">Pick one and the matching buyer deck button shows up here.</div>;
