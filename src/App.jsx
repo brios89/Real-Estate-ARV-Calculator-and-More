@@ -692,6 +692,7 @@ function scoreStrategies(c, deal) {
   const pc = c.loan === "yes" ? pitiCheck(c, deal.rent) : null;
   const pcPct = pc ? `${Math.round(pc.ratio * 100)}%` : "";
   const out = [];
+  const gatedBy = [];   // strategies held under the fit line only because an answer is missing
 
   // ---- CASH ----
   {
@@ -764,6 +765,16 @@ function scoreStrategies(c, deal) {
       if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
       if (bal <= 0) miss.push(M("“Do you still owe anything on it?” — get the rough balance.", "Balance vs. ask decides Sub-To vs. Hybrid."));
       if (num(c.payment) <= 0) miss.push(M("“What's your current payment?”", "The payment IS the deal — it sets your monthly basis."));
+      if (!(num(c.rate) > 0)) miss.push(M("“Do you happen to know the interest rate on it?”", "A low fixed rate is the asset you are taking over. It sets the financing value on the buyer deck."));
+      // No payment or no rent means the hold test never ran. Before, a Sub-To with low equity and a
+      // flexible seller reached 68 and "Best fit" without anyone knowing what the payment was.
+      if (!pc) {
+        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Subject-To", need: num(c.payment) <= 0 ? "their monthly payment" : "the market rent" });
+        sc = Math.min(sc, FIT_FLOOR - 1);
+        warn.push(num(c.payment) <= 0
+          ? "Cannot call Sub-To a fit until you have their monthly payment. The payment is the deal, and it has not been asked yet."
+          : "Cannot call Sub-To a fit until the market rent is in. The payment has to be tested against it.");
+      }
     }
     out.push({ id: "subto", label: "Subject-To", tab: "subto", sc, rs, warn, miss,
       pitch: ["“What if I just took over your existing payments?”", "Get the payment, rate, and whether they're current — then run the Sub-To tab live."] });
@@ -822,6 +833,13 @@ function scoreStrategies(c, deal) {
       } else if (!deal.rent) {
         miss.push(M("Pull the market rent in the Property stage.", "The payment plus the note has to fit under the rent."));
       }
+      if (!pc) {
+        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Hybrid", need: num(c.payment) <= 0 ? "their monthly payment" : "the market rent" });
+        sc = Math.min(sc, FIT_FLOOR - 1);
+        warn.push(num(c.payment) <= 0
+          ? "Cannot call Hybrid a fit until you have their monthly payment. It inherits that payment with a note payment on top."
+          : "Cannot call Hybrid a fit until the market rent is in.");
+      }
       if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
     }
     out.push({ id: "hybrid", label: "Hybrid (Sub-To + carry)", tab: "hybrid", sc, rs, warn, miss,
@@ -855,7 +873,7 @@ function scoreStrategies(c, deal) {
   // top score is not a recommendation, and the screen says so instead of badging it "Best fit".
   const fits = out[0] && out[0].sc >= FIT_FLOOR;
   const payoffShort = c.loan === "yes" && bal > 0 && maxCash > 0 && bal > maxCash ? bal - maxCash : null;
-  return { ranked: out, gap, equity, fits, spread, payoffShort, bal };
+  return { ranked: out, gap, equity, fits, spread, payoffShort, bal, gatedBy };
 }
 
 // ---- tiny self-contained inputs so the drawer has zero dependencies on App-scoped components ----
@@ -959,7 +977,9 @@ const buildCallNarrative = (cs, deal, strat) => {
   const top = strat.ranked[0];
   const pickIds = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
   const picks = strat.ranked.filter((r) => pickIds.includes(r.id));
-  if (top && !strat.fits && num(cs.ask) > 0) {
+  if (top && !strat.fits && strat.gatedBy.length) {
+    s4.push(`${picks.length ? `Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. ` : ""}Not graded yet: ${strat.gatedBy.map((g) => `${g.label} needs ${g.need}`).join(", ")}.`);
+  } else if (top && !strat.fits && num(cs.ask) > 0) {
     s4.push(`${picks.length ? `Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. ` : ""}No strategy fits at the seller's number (best score ${top.sc} of 100).`);
     if (strat.spread != null && strat.spread < 0) s4.push(`Their number plus repairs is ${usd(-strat.spread)} over the ARV.`);
   }
@@ -1887,7 +1907,16 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               )}
             </div>
 
-            {!strat.fits && strat.ranked.length > 0 && num(cs.ask) > 0 && (
+            {!strat.fits && strat.gatedBy.length > 0 && (
+              <div className="mt-2 rounded-lg border-l-4 border-amber-500 bg-amber-50 px-3 py-2">
+                <div className="text-[12px] font-bold text-amber-900">Not enough to call a fit yet.</div>
+                <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
+                  {strat.gatedBy.map((g, k) => <span key={k}>{k > 0 ? " " : ""}{g.label} could be the play, but it cannot be graded without {g.need}.</span>)}
+                  {" "}Get {[...new Set(strat.gatedBy.map((g) => g.need))].join(" and ")}, and the score will update on its own.
+                </div>
+              </div>
+            )}
+            {!strat.fits && strat.gatedBy.length === 0 && strat.ranked.length > 0 && num(cs.ask) > 0 && (
               <div className="mt-2 rounded-lg border-l-4 border-rose-600 bg-rose-50 px-3 py-2">
                 <div className="text-[12px] font-bold text-rose-900">Nothing fits at their number.</div>
                 <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
@@ -3262,10 +3291,10 @@ export default function App() {
             <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
             <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
@@ -4547,7 +4576,7 @@ const CashDiscipline = ({ cashIn, cashFlow, equity }) => {
 };
 
 function SubToTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, callRate, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
   const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent) || num(rentDefault);
   const reserves = rent * (num(stReservePct) / 100);
   const cashIn = cashSeller + arrears + closing + repairs;
@@ -4557,11 +4586,16 @@ function SubToTab(props) {
   const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
   // shared rate-savings inputs (feed both Rate Savings + the creative-wholesale value)
-  const [rsRate, setRsRate] = useState(4);
+  const [rsRate, setRsRate] = useState(callRate > 0 ? callRate : 4);
+  // The seller's real rate from the call replaces the 4% placeholder whenever it is known.
+  useEffect(() => { if (callRate > 0) setRsRate(callRate); }, [callRate]);
   const [rsTerm, setRsTerm] = useState(30);
   const [rsMkt, setRsMkt] = useState(7.5);
   const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
-  let status = "maybe", headline = "Enter rent & PITI to grade", detail = "";
+  // Without the payment there is no cash flow to show. A blank PITI used to count as $0, which
+  // printed rent minus reserves as a big green cash flow number.
+  const graded = rent > 0 && piti > 0;
+  let status = "maybe", headline = piti > 0 ? "Enter rent to grade" : "Enter the PITI to grade", detail = piti > 0 ? "" : "The inherited payment is blank, so there is no cash flow to show yet.";
   if (rent > 0 && piti > 0) {
     if (cashFlow >= 200 && equity > 0) { status = "go"; headline = "STRONG sub-to"; detail = `${usd(cashFlow)}/mo cash flow and ${usd(equity)} captured equity over the loan.`; }
     else if (cashFlow > 0) { status = "maybe"; headline = "WORKS — watch the margin"; detail = `${usd(cashFlow)}/mo after reserves. ${equity > 0 ? usd(equity) + " equity." : "Little/no equity — leaning on rate + cash flow."}`; }
@@ -4585,16 +4619,16 @@ function SubToTab(props) {
         <div className="space-y-3">
           <Verdict status={status} headline={headline} detail={detail} />
           <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − PITI − ${usd(reserves)} reserves`} />
+            <Stat label="Monthly cash flow" value={graded ? usd(cashFlow) : "—"} tone={graded ? (cashFlow > 0 ? "good" : "bad") : undefined} big sub={graded ? `rent − PITI − ${usd(reserves)} reserves` : piti > 0 ? "needs market rent" : "needs the PITI"} />
             <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub={repairs > 0 ? "ARV − loan − entry − rehab" : "ARV − loan − entry"} />
             <Stat label="Total cash to close" value={usd(closeCash)} sub={num(wholesaleFee) > 0 ? "seller + arrears + closing + fee" : "seller + arrears + closing"} />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "annual · on cash in + rehab" : "annual · on cash in"} />
+            <Stat label="Cash-on-cash" value={graded ? pct(coc) : "—"} tone={graded ? (coc > 0 ? "good" : "bad") : undefined} sub={graded ? (repairs > 0 ? "annual · on cash in + rehab" : "annual · on cash in") : "needs cash flow"} />
           </div>
         </div>
       </div>
-      <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />
+      {graded && <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />}
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
-        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
+        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
       <BuyerDeckButton
         common={{ ...deckCommon, contractDefault: closeCash + repairs, fee: 0 }}
@@ -4602,9 +4636,9 @@ function SubToTab(props) {
         deal={{
           type: "Subject-To",
           loanSavings: computeLoanSavings({ P: bal, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: piti }),
-          headline: `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
+          headline: graded ? `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value` : `Sub-To · ${usd(finValue)} financing value`,
           highlights: [
-            cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
+            graded && cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
             equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
             finValue > 0 ? `${usd(finValue)} of value from the assumed below-market loan` : null,
             "Take over the seller's existing financing — no new bank loan or qualifying",
@@ -4612,16 +4646,16 @@ function SubToTab(props) {
           ],
           rows: [
             ["Existing loan balance", usd(bal)],
-            ["Inherited payment (PITI)", usd(piti) + "/mo"],
+            ["Inherited payment (PITI)", piti > 0 ? usd(piti) + "/mo" : "To be confirmed"],
             ["Cash to seller", usd(cashSeller)],
-            ["Monthly cash flow", usd(cashFlow)],
+            ["Monthly cash flow", graded ? usd(cashFlow) : "To be confirmed"],
             ["Equity captured", usd(equity)],
             ["Financing value (low rate)", usd(finValue)],
           ],
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc }),
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0 }),
         }}
       />
       <TabEducation id="subto" />
@@ -4631,7 +4665,7 @@ function SubToTab(props) {
 
 // ---------- HYBRID ----------
 function HybridTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
+  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, callRate, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
   const price = num(hyPrice), down = num(hyDown), bal = num(hyBal), piti = num(hyPiti), rent = num(hyRent) || num(rentDefault), closing = num(hyClosing);
   const note = Math.max(0, price - bal - down);
   const notePay = pmt(note, num(hyRate), num(hyTerm));
@@ -4643,12 +4677,15 @@ function HybridTab(props) {
   const equity = arv - price - repairs;
   const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  const [rsRate, setRsRate] = useState(4);
+  const [rsRate, setRsRate] = useState(callRate > 0 ? callRate : 4);
+  useEffect(() => { if (callRate > 0) setRsRate(callRate); }, [callRate]);   // seller's real rate beats the 4% placeholder
   const [rsTerm, setRsTerm] = useState(30);
   const [rsMkt, setRsMkt] = useState(7.5);
   const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
-  let status = "maybe", headline = "Enter price, loan & rent to grade", detail = "";
-  if (price > 0 && rent > 0) {
+  const pitiMissing = bal > 0 && piti <= 0;   // a loan with no payment entered is unknown, not free
+  const graded = price > 0 && rent > 0 && !pitiMissing;
+  let status = "maybe", headline = pitiMissing ? "Enter the Sub-To PITI to grade" : "Enter price, loan & rent to grade", detail = pitiMissing ? "The inherited payment is blank, so there is no cash flow to show yet." : "";
+  if (graded) {
     if (cashFlow >= 200 && equity >= 0) { status = "go"; headline = "STRONG hybrid"; detail = `Sub-to keeps the low-rate ${usd(bal)} loan clean; ${usd(note)} seller note on top. ${usd(cashFlow)}/mo.`; }
     else if (cashFlow > 0) { status = "maybe"; headline = "WORKS — tune the note"; detail = `${usd(cashFlow)}/mo. Push note rate toward 0% or extend term to lift cash flow.`; }
     else { status = "no"; headline = "NEGATIVE — restructure"; detail = `${usd(cashFlow)}/mo. Lower price, bigger sub-to portion, or longer/0% note.`; }
@@ -4673,27 +4710,27 @@ function HybridTab(props) {
         <div className="space-y-3">
           <Verdict status={status} headline={headline} detail={detail} />
           <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − ${usd(totalMonthly)} debt − reserves`} />
+            <Stat label="Monthly cash flow" value={graded ? usd(cashFlow) : "—"} tone={graded ? (cashFlow > 0 ? "good" : "bad") : undefined} big sub={graded ? `rent − ${usd(totalMonthly)} debt − reserves` : pitiMissing ? "needs the Sub-To PITI" : "needs price and rent"} />
             <Stat label="Seller note amount" value={usd(note)} sub="price − loan − down" />
             <Stat label="Note payment" value={usd(notePay)} sub={`${num(hyRate)}% / ${num(hyTerm)}yr`} />
-            <Stat label="Total monthly debt" value={usd(totalMonthly)} sub="PITI + note" />
+            <Stat label="Total monthly debt" value={pitiMissing ? "—" : usd(totalMonthly)} sub={pitiMissing ? "needs the Sub-To PITI" : "PITI + note"} />
             <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={`${usd(closeCash + repairs)} in`} />
+            <Stat label="Cash-on-cash" value={graded ? pct(coc) : "—"} tone={graded ? (coc > 0 ? "good" : "bad") : undefined} sub={graded ? `${usd(closeCash + repairs)} in` : "needs cash flow"} />
           </div>
         </div>
       </div>
-      <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />
+      {graded && <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />}
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
-        dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
+        dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
           type: "Hybrid",
           loanSavings: computeLoanSavings({ P: bal, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: totalMonthly }),
-          headline: `Hybrid · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
+          headline: graded ? `Hybrid · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value` : `Hybrid · ${usd(finValue)} financing value`,
           highlights: [
-            cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
+            graded && cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
             equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
             finValue > 0 ? `${usd(finValue)} of value from the assumed low-rate first loan` : null,
             "Low-rate loan taken subject-to, seller carries the rest — minimal cash in",
@@ -4704,13 +4741,13 @@ function HybridTab(props) {
             ["Sub-to loan (low rate)", usd(bal)],
             ["Seller note", usd(note)],
             ["Total monthly debt", usd(totalMonthly)],
-            ["Monthly cash flow", usd(cashFlow)],
+            ["Monthly cash flow", graded ? usd(cashFlow) : "To be confirmed"],
             ["Equity captured", usd(equity)],
           ],
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc }),
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0 }),
         }}
       />
       <TabEducation id="hybrid" />
