@@ -534,7 +534,7 @@ const ownerFullName = (names) => {
 const INITIAL_CALL = {
   sellerName: "", bookedBy: "",
   motivation: "", motivNotes: "",
-  occupancy: "", condition: "", loan: "", balance: "", payment: "", rate: "", behind: "",
+  occupancy: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
   escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
   hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
   timeline: "", others: "",
@@ -643,6 +643,16 @@ const impliedCondition = (repairs, sqft) => {
   return psf < 22 ? "light" : psf <= 40 ? "moderate" : "heavy";
 };
 
+// Every number typed on the strategy tabs belongs to one property. These are the fresh-screen values,
+// used to clear the tabs on an address change and to tell whether there is anything worth saving.
+const TAB_DEFAULTS = {
+  askingPrice: "", rentOverride: "", holdingOverride: "",
+  stBal: "", stPiti: "", stArrears: "", stCashSeller: "", stClosing: "3500", stRent: "", stReservePct: "12",
+  hyPrice: "", hyDown: "", hyBal: "", hyPiti: "", hyRate: "0", hyTerm: "30", hyClosing: "3500", hyRent: "", hyReservePct: "12",
+  sfPrice: "", sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0", sfTaxIns: "", sfRent: "", sfReservePct: "12",
+  novAsIs: "", novProfit: "30000", novListFactor: "95", novCostFactor: "8",
+};
+const FIT_FLOOR = 40;   // Ace's working line: a top score under 40 means nothing actually fits at their number
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
 function scoreStrategies(c, deal) {
@@ -655,13 +665,25 @@ function scoreStrategies(c, deal) {
   const eqPct = equity != null && ask > 0 ? equity / ask : null;
   const M = (q, why) => ({ q, why });
   // What the rep tapped wins. Failing that, fall back to what the repair number implies.
-  const implied = c.condition ? null : impliedCondition(deal.repairs, deal.sqft);
-  const cond = c.condition || implied;
+  // A chip the app set from a typed repair number counts as inferred, not as something the seller said.
+  const tapped = c.conditionAuto === "yes" ? "" : c.condition;
+  const implied = tapped ? null : (impliedCondition(deal.repairs, deal.sqft) || c.condition || null);
+  const cond = tapped || implied;
   // A chip that contradicts the repair dollars is worth saying out loud: the offer is built on the
   // dollars, so the two need to agree before anyone quotes a number.
-  const impliedCheck = c.condition ? impliedCondition(deal.repairs, deal.sqft) : null;
-  const condMismatch = impliedCheck && impliedCheck !== c.condition ? impliedCheck : null;
+  const impliedCheck = tapped ? impliedCondition(deal.repairs, deal.sqft) : null;
+  const condMismatch = impliedCheck && impliedCheck !== tapped ? impliedCheck : null;
   const condNote = implied ? ` (read from the ${usd(deal.repairs)} repair number, confirm it on the call)` : "";
+  // Value check for every strategy that buys at the seller's number. If their price plus the repairs
+  // is more than the house is worth fixed up, you start underwater no matter how good the terms are.
+  const spread = arv > 0 && ask > 0 ? arv - ask - num(deal.repairs) : null;
+  const underwaterMsg = spread != null && spread < 0
+    ? `At their ${usd(ask)}, plus ${usd(deal.repairs)} of repairs, you would pay ${usd(-spread)} more than the ${usd(arv)} it is worth fixed up. You start underwater.`
+    : null;
+  // The hold test, shared by Sub-To and Hybrid. Hybrid inherits the same payment, so it can never pass
+  // a test Sub-To fails. Before, Hybrid skipped it entirely.
+  const pc = c.loan === "yes" ? pitiCheck(c, deal.rent) : null;
+  const pcPct = pc ? `${Math.round(pc.ratio * 100)}%` : "";
   const out = [];
 
   // ---- CASH ----
@@ -672,6 +694,21 @@ function scoreStrategies(c, deal) {
     if (cond === "heavy") { sc += 10; rs.push(`Heavy rehab${condNote} — classic cash / wholesale profile.`); }
     if (c.timeline === "asap") { sc += 8; rs.push("They need speed, and cash closes fastest."); }
     if (c.behind === "yes") { sc += 8; rs.push("Behind on payments — a fast close stops the bleeding."); }
+    // A cash price has to pay off the loan. Before, cash scored the same whether the seller owed
+    // nothing or twice our max.
+    if (c.loan === "yes" && bal > 0 && maxCash > 0) {
+      const anchorAmt = Math.round(maxCash * ANCHOR_PCT);
+      if (bal > maxCash) {
+        sc -= 40;
+        warn.push(`They owe about ${usd(bal)} and your max cash offer is ${usd(maxCash)}. No cash price you can pay covers the loan, so the seller would have to bring ${usd(bal - maxCash)} to closing or their lender would have to approve a short sale.`);
+      } else if (bal > anchorAmt) {
+        warn.push(`Your ${usd(anchorAmt)} anchor is under their ${usd(bal)} payoff, which is not a number they can accept. Open at or just above the payoff instead.`);
+      }
+    } else if (c.loan === "yes" && bal <= 0 && maxCash > 0) {
+      miss.push(M("“Roughly how much is left on the loan?”", "If they owe more than your max cash offer, a cash deal cannot close."));
+    } else if (!c.loan && maxCash > 0) {
+      miss.push(M("“At closing, will we need to pay off any loan?”", "A loan bigger than your max cash offer kills a cash deal."));
+    }
     if (ask <= 0) miss.push(M("“If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”", "Their number sets the whole strategy."));
     if (maxCash <= 0) miss.push(M("Run Auto-comp up top so the ARV and max cash offer are live.", "Without ARV there's no cash number to compare."));
     out.push({ id: "cash", label: "Cash offer", tab: "cash", sc, rs, warn, miss,
@@ -700,9 +737,8 @@ function scoreStrategies(c, deal) {
       if (c.timeline === "asap") { sc += 8; rs.push("Sub-To moves fast — no new loan to originate."); }
       if (cond === "heavy") { sc -= 10; warn.push(`Heavy rehab${condNote} on a Sub-To puts repair risk on you — price it in.`); }
       // The hold test. This can end the conversation regardless of everything else above.
-      const pc = pitiCheck(c, deal.rent);
       if (pc) {
-        const pct = `${Math.round(pc.ratio * 100)}%`;
+        const pct = pcPct;
         if (pc.verdict === "fail") {
           sc -= 55;
           warn.push(`Payment is ${pct} of market rent. That is not a Sub-To hold — it needs to be at or under 65%, which means about ${usd(pc.targetPiti)} a month. Vacancy, maintenance, CapEx and management eat 25-35% of rent before you see a dollar.`);
@@ -718,6 +754,7 @@ function scoreStrategies(c, deal) {
       } else if (num(c.payment) > 0 && !deal.rent) {
         miss.push(M("Pull the market rent in the Property stage.", "Payment versus rent decides whether this is a hold or a headache."));
       }
+      if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
       if (bal <= 0) miss.push(M("“Do you still owe anything on it?” — get the rough balance.", "Balance vs. ask decides Sub-To vs. Hybrid."));
       if (num(c.payment) <= 0) miss.push(M("“What's your current payment?”", "The payment IS the deal — it sets your monthly basis."));
     }
@@ -729,7 +766,7 @@ function scoreStrategies(c, deal) {
   {
     let sc = 0; const rs = [], warn = [], miss = [];
     if (c.loan === "yes" && ask > 0 && bal > ask * 0.1) {
-      warn.push("Not free and clear — with a real balance, Hybrid is the seller-carry play.");
+      warn.push("Not free and clear. With a real loan balance this becomes a Hybrid (Sub-To the loan, seller carries the rest), which is scored on its own line.");
     } else {
       sc = 20;
       if (c.loan === "no") { sc += 25; rs.push("Free and clear — the textbook seller-finance setup."); }
@@ -737,6 +774,7 @@ function scoreStrategies(c, deal) {
       if (c.terms === "yes") { sc += 12; rs.push("They're open to becoming the bank."); }
       else if (c.terms === "maybe") { sc += 6; rs.push("Lukewarm on terms — worth the pitch."); }
       if (c.timeline === "flexible") { sc += 8; rs.push("No rush — room for a terms conversation."); }
+      if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
       if (!c.loan) miss.push(M("“Do you still owe anything on it?”", "Seller finance wants free-and-clear (or close to it)."));
       if (!c.terms) miss.push(M("“What kind of terms would make you excited about seller financing?”", "Their answer tells you if the door is open."));
     }
@@ -749,13 +787,35 @@ function scoreStrategies(c, deal) {
     let sc = 0; const rs = [], warn = [], miss = [];
     if (c.loan !== "yes") {
       warn.push("No loan — that's straight Seller Finance, not a hybrid.");
-    } else if (eqPct != null && eqPct <= 0.15) {
-      sc = 10; warn.push("Equity's thin — plain Sub-To is likely cleaner.");
+    } else if (bal <= 0 || ask <= 0) {
+      // Before, a missing balance fell through to "real equity" and scored 40 on an assumption.
+      sc = 10;
+      warn.push("Cannot tell if there is equity for the seller to carry until you have both their number and the loan balance.");
+      if (bal <= 0) miss.push(M("Get the loan balance — the equity above it is what the seller carries.", "Ask − balance = the carried piece."));
+    } else if (eqPct <= 0.15) {
+      sc = 10; warn.push(`Only ${usd(Math.max(0, equity))} above the ${usd(bal)} loan, so there is almost nothing for the seller to carry. Plain Sub-To is cleaner.`);
     } else {
-      sc = 40; rs.push("A loan to take over AND real equity — Sub-To the loan, seller carries the difference.");
+      sc = 40; rs.push(`A ${usd(bal)} loan to take over and ${usd(equity)} of equity above it for the seller to carry as a note.`);
       if (gap != null && gap > 0) { sc += 15; rs.push("Bridges their price without more cash out of pocket."); }
       if (c.terms === "yes" || c.terms === "maybe") { sc += 10; rs.push("They're open to payments over time on the equity."); }
-      if (bal <= 0) miss.push(M("Get the loan balance — the equity above it is what the seller carries.", "Ask − balance = the carried piece."));
+      if (pc) {
+        if (pc.verdict === "fail") {
+          sc -= 55;
+          warn.push(`The loan payment alone is ${pcPct} of market rent, and the seller's note payment comes on top of that. It fails the same hold test Sub-To fails.`);
+        } else if (pc.verdict === "thin") {
+          sc -= 20;
+          warn.push(`The loan payment alone is ${pcPct} of market rent. Add the note payment and it is likely negative, so only a 0% note or a long term keeps it alive.`);
+        } else {
+          sc += 10; rs.push(`The loan payment is ${pcPct} of market rent, which leaves room for a note payment.`);
+        }
+        if (pc.missingTI) warn.push("Taxes and insurance are not in that payment and have not been added, so the real ratio is worse than shown.");
+        if (pc.missingHOA) warn.push("There is an HOA but the dues have not been entered, so the real ratio is worse than shown.");
+      } else if (num(c.payment) <= 0) {
+        miss.push(M("“What's your current payment?”", "Hybrid inherits that payment, plus a note payment on top."));
+      } else if (!deal.rent) {
+        miss.push(M("Pull the market rent in the Property stage.", "The payment plus the note has to fit under the rent."));
+      }
+      if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
     }
     out.push({ id: "hybrid", label: "Hybrid (Sub-To + carry)", tab: "hybrid", sc, rs, warn, miss,
       pitch: ["Take over the existing payments, and the seller carries the equity above the balance as a note — their price, your structure."] });
@@ -784,15 +844,19 @@ function scoreStrategies(c, deal) {
   }
   for (const o of out) o.sc = Math.max(0, Math.min(100, Math.round(o.sc)));
   out.sort((a, b) => b.sc - a.sc);
-  return { ranked: out, gap, equity };
+  // Ranking always produces a first place, even when first place is terrible. Below this line the
+  // top score is not a recommendation, and the screen says so instead of badging it "Best fit".
+  const fits = out[0] && out[0].sc >= FIT_FLOOR;
+  const payoffShort = c.loan === "yes" && bal > 0 && maxCash > 0 && bal > maxCash ? bal - maxCash : null;
+  return { ranked: out, gap, equity, fits, spread, payoffShort, bal };
 }
 
 // ---- tiny self-contained inputs so the drawer has zero dependencies on App-scoped components ----
-const WChips = ({ value, onChange, opts }) => (
+const WChips = ({ value, onChange, opts, auto }) => (
   <div className="mt-1.5 flex flex-wrap gap-1.5">
     {opts.map(([v, l]) => (
       <button key={v} type="button" onClick={() => onChange(value === v ? "" : v)}
-        className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${value === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+        className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${value === v ? (auto ? "border-dashed border-emerald-500 bg-emerald-50 text-emerald-800" : "border-emerald-600 bg-emerald-600 text-white") : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
         {l}
       </button>
     ))}
@@ -839,7 +903,7 @@ const buildCallNarrative = (cs, deal, strat) => {
   if (cs.motivNotes.trim()) s1.push(`In their words: "${cs.motivNotes.trim()}".`);
   p.push(s1.join(" "));
   const s2 = [];
-  if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
+  if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.conditionAuto === "yes" ? " (going by the repair number)" : ""}${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
   else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
   if (isLowRate(cs.rate)) s2.push(`Loan is at ${rateNum(cs.rate)}%, well under market. If this is not locked up or creative was declined, it goes to the head of acquisitions rather than being marked dead.`);
   {
@@ -886,9 +950,13 @@ const buildCallNarrative = (cs, deal, strat) => {
   }
   if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
   const top = strat.ranked[0];
-  if (top && top.sc > 0) {
-    const pickIds = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
-    const picks = strat.ranked.filter((r) => pickIds.includes(r.id));
+  const pickIds = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
+  const picks = strat.ranked.filter((r) => pickIds.includes(r.id));
+  if (top && !strat.fits && num(cs.ask) > 0) {
+    s4.push(`${picks.length ? `Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. ` : ""}No strategy fits at the seller's number (best score ${top.sc} of 100).`);
+    if (strat.spread != null && strat.spread < 0) s4.push(`Their number plus repairs is ${usd(-strat.spread)} over the ARV.`);
+  }
+  if (top && strat.fits) {
     if (picks.length) s4.push(`Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. Deal Desk's best fit was ${top.label} (score ${top.sc}).`);
     else s4.push(`Best-fit strategy: ${top.label} (score ${top.sc}).`);
     if (top.rs.length) s4.push(`Why: ${top.rs.slice(0, 2).join(" ")}`);
@@ -906,8 +974,8 @@ const buildCallReport = (cs, deal, strat) => {
   const pillars = PILLARS.map((p) => `<span class="pill ${p.done(cs) ? "on" : ""}">${p.label}</span>`).join("");
   const narrative = buildCallNarrative(cs, deal, strat);
   const stratRows = strat.ranked.map((o, i) => `
-    <div class="strat ${i === 0 && o.sc > 0 ? "best" : ""}">
-      <div class="strathead"><b>${i + 1}. ${esc(o.label)}</b><span>${i === 0 && o.sc > 0 ? "BEST FIT &middot; " : ""}score ${o.sc}</span></div>
+    <div class="strat ${i === 0 && strat.fits ? "best" : ""}">
+      <div class="strathead"><b>${i + 1}. ${esc(o.label)}</b><span>${i === 0 && strat.fits ? "BEST FIT &middot; " : ""}score ${o.sc}</span></div>
       ${o.rs.map((r) => `<div class="why">&#10003; ${esc(r)}</div>`).join("")}
       ${o.warn.map((w) => `<div class="warn">&#9888; ${esc(w)}</div>`).join("")}
       ${o.miss.map((m) => `<div class="miss">Still to ask: ${esc(m.q)}</div>`).join("")}
@@ -962,7 +1030,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}
     </table>
     <h2>Property</h2><table>
-      ${row("Condition", v(cs.condition))}
+      ${row("Condition", v(cs.condition) + (cs.condition && cs.conditionAuto === "yes" ? " (set from the repair number)" : ""))}
       ${(() => {
         const items = readItems(cs.condItems);
         const keys = COND_ITEMS.filter(([k]) => items[k] !== undefined);
@@ -1098,7 +1166,36 @@ const NeedCheck = ({ nd }) => {
 // The Numbers stage, rebuilt around one question: where is their number against our max? Each band
 // gets only the moves that fit it. A seller asking 2.5x the max does not need a roof-and-HVAC hold,
 // and a seller already under the anchor does not need to be negotiated down.
-const NumbersPlan = ({ cs, upd, deal, gap, goStage }) => {
+// Can a cash price even pay off their loan? Shown wherever the rep is about to say a cash number.
+const PayoffAlert = ({ cs, maxCash }) => {
+  const bal = num(cs.balance), max = Math.round(num(maxCash));
+  if (cs.loan !== "yes" || bal <= 0 || max <= 0) return null;
+  const anchor = Math.round(max * ANCHOR_PCT);
+  if (bal > max) return (
+    <div className="mt-2 flex items-start gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] leading-snug text-rose-900">
+      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-rose-600" />
+      <span>
+        <b>Cash cannot pay off their loan.</b> They owe about {usd(bal)}, and the most you can pay is {usd(max)}. At any cash price you can offer, they are {usd(bal - max)} short of the payoff, so they would have to bring that to closing or get their lender to approve a short sale. Say the cash number to anchor, but expect a no, and understand it is the math, not a bad negotiation.
+      </span>
+    </div>
+  );
+  if (bal > anchor) return (
+    <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
+      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+      <span>They owe about {usd(bal)}, more than your {usd(anchor)} anchor. A number below their payoff is one they cannot accept, so open at or just above {usd(bal)}. That leaves {usd(max - bal)} between the payoff and your max.</span>
+    </div>
+  );
+  return (
+    <div className="mt-2 text-[10.5px] leading-snug text-slate-500">Your anchor clears their {usd(bal)} loan payoff, leaving them {usd(anchor - bal)} at the anchor and up to {usd(max - bal)} at your max.</div>
+  );
+};
+
+const NumbersPlan = (props) => (<>
+  {props.deal.maxCash > 0 && num(props.cs.ask) > 0 && <PayoffAlert cs={props.cs} maxCash={props.deal.maxCash} />}
+  <NumbersPlanBody {...props} />
+</>);
+
+const NumbersPlanBody = ({ cs, upd, deal, gap, goStage }) => {
   const ask = num(cs.ask), max = deal.maxCash > 0 ? Math.round(deal.maxCash) : 0;
   const anchor = max > 0 ? Math.round(max * ANCHOR_PCT) : 0;
   const band = priceBand(ask, max);
@@ -1503,8 +1600,25 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             );
           })()}
           <WField label="Condition (drives repairs in the calculator)">
-            <WChips value={cs.condition} onChange={(v) => { upd("condition", v); onCondition(v); }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
+            <WChips value={cs.condition} auto={cs.conditionAuto === "yes"} onChange={(v) => {
+              // Tapping a chip the repair number picked means "the seller confirmed it", not "clear it".
+              if (v === "" && cs.conditionAuto === "yes") { upd("conditionAuto", ""); return; }
+              upd("condition", v); upd("conditionAuto", ""); onCondition(v);
+              // A typed number that disagrees with the chip just tapped gives way to that chip's
+              // estimate, so the two can never contradict each other. Needs sq ft, or there would be
+              // no estimate to fall back to and repairs would go blank.
+              const typedCond = impliedCondition(num(deal.repairOverride), deal.sqft);
+              if (v && typedCond && typedCond !== v) deal.setRepairOverride("");
+            }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
           </WField>
+          {cs.conditionAuto === "yes" && cs.condition && num(deal.repairOverride) > 0 && num(deal.sqft) > 0 && (
+            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-500">
+              Matched to your {usd(num(deal.repairOverride))}, about ${Math.round(num(deal.repairOverride) / num(deal.sqft))}/sf on {num(deal.sqft).toLocaleString()} sq ft. Tap it once the seller confirms, or tap a different condition to swap in that estimate instead.
+            </div>
+          )}
+          {num(deal.repairOverride) > 0 && !(num(deal.sqft) > 0) && (
+            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-500">Condition cannot match your repair number until the square footage is known. Run Auto-comp or enter sq ft.</div>
+          )}
           <WField label="Estimated repairs">
             <WText money value={deal.repairOverride} onChange={deal.setRepairOverride} placeholder={deal.repairs > 0 ? String(Math.round(deal.repairs)) : "type a number"} />
           </WField>
@@ -1736,7 +1850,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           // Pitching the creative one first gives away the anchor.
           const chosenList = strat.ranked.filter((r) => ids.includes(r.id))
             .sort((a, b) => (a.id === "cash" ? -1 : b.id === "cash" ? 1 : 0));
-          const fallback = strat.ranked[0] && strat.ranked[0].sc > 0 ? strat.ranked[0] : null;
+          // Nothing fits: the default script is the cash anchor, never the least-bad creative option.
+          const fallback = strat.fits ? strat.ranked[0] : (strat.ranked.find((r) => r.id === "cash") || null);
           const showList = chosenList.length ? chosenList : (fallback ? [fallback] : []);
           const active = showList[0] || null;
           const multi = showList.length > 1;
@@ -1765,9 +1880,22 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     Say the anchor, not the ceiling. That leaves {usd(deal.maxCash - Math.round(deal.maxCash * ANCHOR_PCT))} of room to move toward them and still keep your {usd(num(deal.wholesaleFee))} fee. Never go above the ceiling.
                     {strat.gap != null && strat.gap > 0 ? <> They want <b className="text-slate-700">{usd(strat.gap)}</b> more than this.</> : strat.gap != null ? <> Their number is already under it.</> : null}
                   </div>
+                  <PayoffAlert cs={cs} maxCash={deal.maxCash} />
                 </div>
               )}
             </div>
+
+            {!strat.fits && strat.ranked.length > 0 && num(cs.ask) > 0 && (
+              <div className="mt-2 rounded-lg border-l-4 border-rose-600 bg-rose-50 px-3 py-2">
+                <div className="text-[12px] font-bold text-rose-900">Nothing fits at their number.</div>
+                <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
+                  The best score here is {strat.ranked[0].sc} out of 100, below the {FIT_FLOOR} it takes to call something a fit. Hover the warning triangles to see what kills each one.
+                  {strat.payoffShort != null ? <> They owe {usd(strat.bal)}, which is {usd(strat.payoffShort)} more than your max cash offer, so cash cannot pay off the loan.</> : null}
+                  {strat.spread != null && strat.spread < 0 ? <> Their number plus repairs is {usd(-strat.spread)} more than the house is worth fixed up, so every creative option starts underwater.</> : null}
+                  {" "}Say your cash anchor anyway, per the rule. Unless something changes (their number, the repairs, or the loan), this is a follow-up, not a deal today.
+                </div>
+              </div>
+            )}
 
             {/* 1. PICK — compact, the whole board at a glance */}
             <div className="mt-2 space-y-1.5">
@@ -1780,7 +1908,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     }`}>
                     <span className="flex items-center gap-1.5">
                       <span className={`text-[12px] font-bold ${on ? "text-emerald-900" : "text-slate-700"}`}>{o.label}</span>
-                      {i === 0 && o.sc > 0 && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
+                      {i === 0 && strat.fits && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
                       {o.warn.length > 0 && <WarnTip label={o.label} warns={o.warn} />}
                     </span>
                     <span className={`font-mono text-[11px] font-bold ${on ? "text-emerald-700" : "text-slate-400"}`}>{o.sc}</span>
@@ -2130,6 +2258,28 @@ export default function App() {
   const [novListFactor, setNovListFactor] = useState("95");
   const [novCostFactor, setNovCostFactor] = useState("8");
 
+  // One handle on every strategy-tab field, so they can be cleared, saved and restored per address.
+  const tabVals = {
+    askingPrice, rentOverride, holdingOverride,
+    stBal, stPiti, stArrears, stCashSeller, stClosing, stRent, stReservePct,
+    hyPrice, hyDown, hyBal, hyPiti, hyRate, hyTerm, hyClosing, hyRent, hyReservePct,
+    sfPrice, sfDown, sfRate, sfAmort, sfBalloon, sfTaxIns, sfRent, sfReservePct,
+    novAsIs, novProfit, novListFactor, novCostFactor,
+  };
+  const tabSet = {
+    askingPrice: setAskingPrice, rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
+    stBal: setStBal, stPiti: setStPiti, stArrears: setStArrears, stCashSeller: setStCashSeller, stClosing: setStClosing, stRent: setStRent, stReservePct: setStReservePct,
+    hyPrice: setHyPrice, hyDown: setHyDown, hyBal: setHyBal, hyPiti: setHyPiti, hyRate: setHyRate, hyTerm: setHyTerm, hyClosing: setHyClosing, hyRent: setHyRent, hyReservePct: setHyReservePct,
+    sfPrice: setSfPrice, sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon, sfTaxIns: setSfTaxIns, sfRent: setSfRent, sfReservePct: setSfReservePct,
+    novAsIs: setNovAsIs, novProfit: setNovProfit, novListFactor: setNovListFactor, novCostFactor: setNovCostFactor,
+  };
+  const tabsChanged = () => {
+    const d = {};
+    for (const k of Object.keys(TAB_DEFAULTS)) if (String(tabVals[k] ?? "") !== TAB_DEFAULTS[k]) d[k] = String(tabVals[k]);
+    return Object.keys(d).length ? d : null;
+  };
+  const tabKey = JSON.stringify(tabVals);   // one dependency for autosave instead of thirty
+
   // ---- Offer Call -> strategy tabs -------------------------------------------------------
   // What the rep captures on the phone should already be in whichever tab they open next.
   // Rule: fill a field only when it is still empty. We never overwrite something a person typed,
@@ -2278,11 +2428,12 @@ export default function App() {
   // these a reopened deal fell back to the raw comp median and showed a different ARV than the one
   // the team actually used. Null when nothing differs from a fresh screen, so it never forces a save.
   const deskPayload = () => {
+    const tabs = tabsChanged();
     const d = {
       arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf,
-      soldIncluded, manualSold, mlsOnly,
+      soldIncluded, manualSold, mlsOnly, tabs,
     };
-    const blank = !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
+    const blank = !tabs && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
     return blank ? null : d;
   };
@@ -2318,6 +2469,9 @@ export default function App() {
     setArvOverride(""); setRepairOverride("");
     setAdjBeds(0); setAdjBaths(0);
     setRehabLevel(""); setCustomPsf(""); setMlsOnly(true);   // one house's condition never prices another
+    // Strategy tabs too. They only fill empty fields from the call, so a leftover balance or price from
+    // the last house would sit there, never get replaced, and quietly run that house's numbers.
+    for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](v);
     // The call is about a seller and a house. Carrying it to a different address would put the
     // wrong seller's name, notes and numbers on the new property, and autosave would then write
     // them into that property's record for the whole team. A saved call for the new address is
@@ -2352,6 +2506,7 @@ export default function App() {
       setRehabLevel(dk.rehabLevel || ""); setCustomPsf(dk.customPsf != null ? String(dk.customPsf) : "");
       setMlsOnly(dk.mlsOnly !== false);
       setManualSold(Array.isArray(dk.manualSold) ? dk.manualSold : []);
+      for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](dk.tabs && dk.tabs[k] != null ? String(dk.tabs[k]) : v);
       // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
       // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
       if (rec.pull && rec.pull.at) {
@@ -2434,7 +2589,20 @@ export default function App() {
     }, 1200);
     syncTimer.current = { key: saveKey, id: timerId };
   }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly]);
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey]);
+
+  // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
+  // $40 heavy, the same split the scoring uses). Marked as set by the number, so the strategy engine
+  // still labels it inferred. A chip that already agrees is left alone, so a condition the rep tapped
+  // stays tapped.
+  useEffect(() => {
+    if (!(num(repairOverride) > 0) || !(num(sqft) > 0)) return;
+    const implied = impliedCondition(num(repairOverride), num(sqft));
+    if (!implied) return;
+    setCallState((p) => (p.condition === implied ? p : { ...p, condition: implied, conditionAuto: "yes" }));
+    const lvl = { light: "cosmetic", moderate: "moderate", heavy: "gut" }[implied];
+    setRehabLevel((cur) => (cur === lvl || cur === "custom" ? cur : lvl));   // a deliberate $/sf stays put
+  }, [repairOverride, sqft]);
 
   // ---- cash MAO (both bands) ----
   const ruleMaoUnder = arv * (num(underPct) / 100) - repairs;
