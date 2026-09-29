@@ -540,6 +540,7 @@ const INITIAL_CALL = {
   timeline: "", others: "",
   ask: "", priceBasis: "", needCash: "", needCashNotes: "",
   condItems: "",                 // JSON map of item key -> note, for the walkthrough checklist
+  wentWith: "",                  // the strategy the deal ended up as (drives which buyer deck to download)
   chosen: "",                    // the strategy the rep is actually pitching (may differ from the engine's top pick)
   terms: "",
 };
@@ -659,6 +660,15 @@ const TAB_DEFAULTS = {
 const FEE_DEFAULT = "15000";
 const FEE_LEGACY_DEFAULTS = ["20000"];
 const savedFee = (v) => (v && !FEE_LEGACY_DEFAULTS.includes(String(v)) ? String(v) : FEE_DEFAULT);
+// The strategy a deal ended up as, and the buyer deck that goes with it. Novation has no buyer deck,
+// because the house is sold to a retail buyer on the MLS, not to an investor.
+const WENT_WITH = [
+  { id: "cash", label: "Cash", tab: "cash", deck: "Flip + BRRRR" },
+  { id: "subto", label: "Subject-To", tab: "subto", deck: "Subject-To" },
+  { id: "hybrid", label: "Hybrid", tab: "hybrid", deck: "Hybrid" },
+  { id: "sf", label: "Seller finance", tab: "sf", deck: "Seller Finance" },
+  { id: "nov", label: "Novation", tab: "nov", deck: null },
+];
 const FIT_FLOOR = 40;   // Ace's working line: a top score under 40 means nothing actually fits at their number
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
@@ -975,6 +985,8 @@ const buildCallNarrative = (cs, deal, strat) => {
   }
   if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
   const top = strat.ranked[0];
+  const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
+  if (ww) s4.push(`Went with ${ww.label}.${ww.deck ? ` The ${ww.deck} buyer deck is attached to this lead.` : ""}`);
   const pickIds = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
   const picks = strat.ranked.filter((r) => pickIds.includes(r.id));
   if (top && !strat.fits && strat.gatedBy.length) {
@@ -1083,6 +1095,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
     </table>
     <h2>Strategy ranking</h2>
+    ${(() => { const ww = WENT_WITH.find((x) => x.id === cs.wentWith); return ww ? `<div class="pitched">Went with: <b>${esc(ww.label)}</b>${ww.deck ? ` &middot; buyer deck: ${esc(ww.deck)}` : ""}</div>` : ""; })()}
     ${(() => {
       const ps = strat.ranked.filter((r) => (cs.chosen || "").split(",").filter(Boolean).includes(r.id));
       return ps.length ? `<div class="pitched">Pitched on this call: <b>${esc(ps.map((p) => p.label).join(" and "))}</b></div>` : "";
@@ -1332,7 +1345,7 @@ const WarnTip = ({ label, warns }) => {
   );
 };
 
-const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, save }) => {
+const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, save, onDeck }) => {
   const [stage, setStage] = useState(0);
   const [syncOpen, setSyncOpen] = useState(false);
   const [showCode, setShowCode] = useState(false);
@@ -2054,6 +2067,33 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <FileDown className="h-4 w-4" /> Download call report
           </button>
           <div className="mt-1.5 text-center text-[10.5px] leading-snug text-slate-400">Everything captured on this call, plus a copy-and-paste summary for the CRM.</div>
+
+          {/* Buyer deck for the strategy the deal ended up as. Opens that tab's deck form, so the deck is
+              built from the same numbers the tab shows. */}
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Which strategy did you go with?</div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {WENT_WITH.map((o) => (
+                <button key={o.id} type="button" onClick={() => upd("wentWith", cs.wentWith === o.id ? "" : o.id)}
+                  className={`rounded-full border px-3 py-1 text-[11.5px] font-semibold ${cs.wentWith === o.id ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"}`}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            {(() => {
+              const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
+              if (!ww) return <div className="mt-2 text-[11px] leading-snug text-slate-600">Pick one and the matching buyer deck button shows up here.</div>;
+              if (ww.deck && !(deal.arv > 0)) return <div className="mt-2 text-[11px] leading-snug text-slate-600">The buyer deck is built from the ARV and repairs, and there is no ARV yet. Run Auto-comp or type an ARV, then this button appears.</div>;
+              if (!ww.deck) return <div className="mt-2 text-[11px] leading-snug text-slate-600">Novation does not have a buyer deck. The house goes to a retail buyer on the MLS, so there is nothing to upload beyond the call report.</div>;
+              return (<>
+                <button type="button" onClick={() => onDeck(ww.tab)}
+                  className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
+                  <FileDown className="h-4 w-4" /> Download buyer deck: {ww.deck}
+                </button>
+                <div className="mt-1.5 text-center text-[10.5px] leading-snug text-slate-500">Upload this deck to the CRM on the same lead as the call report.</div>
+              </>);
+            })()}
+          </div>
         </div>)}
       </div>
 
@@ -2090,6 +2130,11 @@ export default function App() {
   const [rentMsg, setRentMsg] = useState(null);
   const [rentFetchedFor, setRentFetchedFor] = useState(""); // address we last pulled rent for (lazy-load guard)
   const [tab, setTab] = useState("cash");
+  // A buyer deck asked for from the Offer Call. The matching tab's deck button opens its form once,
+  // then clears the request so switching tabs later does not pop it open again.
+  const [deckReq, setDeckReq] = useState({ tab: "", n: 0 });
+  const deckKey = (t) => (deckReq.tab === t ? deckReq.n : 0);
+  const deckDone = () => setDeckReq((p) => ({ tab: "", n: p.n }));
   const [callOpen, setCallOpen] = useState(false); // Offer Call drawer (acquisitions script walkthrough)
   const [callState, setCallState] = useState(INITIAL_CALL);
   const [callTouched, setCallTouched] = useState(false); // true only once a rep edits the call or a saved one is restored
@@ -2825,6 +2870,7 @@ export default function App() {
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
                   repairsKnown, ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
+                onDeck={(t) => { setTab(t); setDeckReq((p) => ({ tab: t, n: p.n + 1 })); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
               <div className="mt-2 flex items-center gap-2">
@@ -3289,16 +3335,16 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ deckOpenKey: deckKey("cash"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ deckOpenKey: deckKey("subto"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ deckOpenKey: deckKey("hybrid"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
-            <SellerFinanceTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
+            <SellerFinanceTab {...{ deckOpenKey: deckKey("sf"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
             <NovationTab {...{ repairs, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs }} />
@@ -3589,7 +3635,8 @@ async function generateBuyerDeck(data) {
   s.addText("We work a short buyers list and move quickly — reach out to lock this one up.", { x: 0.6, y: cy + 0.7, w: 12.1, h: 0.5, fontSize: 14, color: DECK.SAGE, align: "center", italic: true });
   s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
   const safe = (data.address || "deal").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
-  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}.pptx` });
+  const kind = String(data.dealType || "buyer-deck").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-${kind}-buyer-deck-${new Date().toISOString().slice(0, 10)}.pptx` });
 }
 
 // Dual-exit deck: shows the SAME deal as both a Fix & Flip and a BRRRR hold, so the buyer picks their lane.
@@ -3734,13 +3781,13 @@ async function generateDualDeck(data) {
   s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
 
   const safe = (data.address || "deal").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
-  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-flip-brrrr.pptx` });
+  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-Flip-BRRRR-buyer-deck-${new Date().toISOString().slice(0, 10)}.pptx` });
 }
 
 // Strip the leading house/street number from an address so buyer decks show street + city only (protects the exact property; the calculator's comp/search still use the full address).
 const stripHouseNum = (a) => String(a || "").replace(/^\s*\d[\w-]*\s+/, "");
 
-function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "Purchase price" }) {
+function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "Purchase price", openKey = 0, onOpened }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
@@ -3751,6 +3798,9 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
     name: "", phone: "", email: "",
   });
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target?.value ?? e }));
+  const openForm = () => { setF((p) => ({ ...p, address: stripHouseNum(common.address) || p.address, contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : p.contract, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); };
+  // Asked for from the Offer Call's "Which strategy did you go with?" button.
+  useEffect(() => { if (openKey > 0) { openForm(); if (onOpened) onOpened(); } }, [openKey]);
   const missing = ["address", "contract", "rent"].filter((k) => !String(f[k]).trim());
 
   function onPhoto(e) {
@@ -3815,7 +3865,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
 
   return (
     <>
-      <button onClick={() => { setF((p) => ({ ...p, address: stripHouseNum(common.address) || p.address, contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : p.contract, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); }}
+      <button onClick={openForm}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
         <FileDown className="h-4 w-4" /> {label || `Download buyer deck (.pptx) — ${deal.type}`}
       </button>
@@ -4021,6 +4071,7 @@ function CashTab(props) {
 
 
       <BrrrrPanel
+        deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened}
         arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
         askingPrice={askingPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
         onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
@@ -4045,7 +4096,7 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
+function BrrrrPanel({ deckOpenKey, onDeckOpened, arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
   const [purchase, setPurchase] = useState("");
   const [rehab, setRehab] = useState("");
   const [taxIns, setTaxIns] = useState("");
@@ -4212,7 +4263,7 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
       )}
       {deckCommon && flipDeck && (
         <div className="mt-3">
-          <BuyerDeckButton
+          <BuyerDeckButton openKey={deckOpenKey} onOpened={onDeckOpened}
             label="Download buyer deck — Flip + BRRRR (.pptx)"
             common={{ ...deckCommon, rent: rnt }}
             generateOverride={async (form) => {
@@ -4631,7 +4682,7 @@ function SubToTab(props) {
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
-      <BuyerDeckButton
+      <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
         common={{ ...deckCommon, contractDefault: closeCash + repairs, fee: 0 }}
         priceLabel="Buyer's total cash in"
         deal={{
@@ -4724,7 +4775,7 @@ function HybridTab(props) {
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
-      <BuyerDeckButton
+      <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
           type: "Hybrid",
@@ -4815,7 +4866,7 @@ function SellerFinanceTab(props) {
       <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
         dealCost={price} costLabel="Seller-finance price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
-      <BuyerDeckButton
+      <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
         common={{ ...deckCommon, contractDefault: price }}
         deal={{
           type: "Seller Finance",
