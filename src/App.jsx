@@ -1761,7 +1761,7 @@ export default function App() {
   // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
   const [adjBeds, setAdjBeds] = useState(0);
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
-  const [bedAdjAmt, setBedAdjAmt] = useState("20000");   // $ per bedroom — count-adjustment (same sqft), not an addition. Raised 15k -> 20k per B, Sep 2026
+  const [bedAdjAmt, setBedAdjAmt] = useState("15000");   // $ per bedroom — count-adjustment (same sqft), not an addition. Set back to 15k per B, Sep 2026
   const [bathAdjAmt, setBathAdjAmt] = useState("10000"); // $ per FULL bath; a half bath = 0.5 × this
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
@@ -2019,7 +2019,10 @@ export default function App() {
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
   // The deal-driving ARV: manual override wins; otherwise the sold-comp median. Record corrections ride on top.
   const arv = useMemo(() => {
-    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride) + subjAdjust);
+    // A typed ARV is taken as final. The bed/bath correction exists to patch a comp-derived number
+    // that was built on the county's bed/bath count, so applying it to a number a human comped
+    // themselves would count the same rooms twice and inflate the offer.
+    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride));
     const soldVal = soldSummary && soldSummary.arv > 0 ? soldSummary.arv : 0;
     if (soldVal <= 0) return 0;
     return Math.max(0, soldVal + subjAdjust);
@@ -2073,10 +2076,18 @@ export default function App() {
     setRentEst(null); setRentSaved(null);
     setSqft(""); setArvSource("");
     setCompMsg(null); setSoldMsg(null);
+    setArvOverride(""); setRepairOverride("");
+    setAdjBeds(0); setAdjBaths(0);
+    // The call is about a seller and a house. Carrying it to a different address would put the
+    // wrong seller's name, notes and numbers on the new property, and autosave would then write
+    // them into that property's record for the whole team. A saved call for the new address is
+    // restored immediately after this by the effect below.
+    setCallState(INITIAL_CALL); setCallTouched(false);
+    setCallLoadedAt(null); setCallSavedAt(null);
   }, [address]);
 
-  // Restore a saved call when the rep lands on an address that already has one. We never wipe an
-  // in-progress call: with no saved record, whatever is on screen simply follows to the new address.
+  // Restore a saved call when the rep lands on an address that already has one. The effect above
+  // has already cleared anything belonging to the previous property, so nothing leaks across.
   useEffect(() => {
     if (!addressSavable(address)) return;
     const k = callStoreKey(address);
@@ -2374,7 +2385,7 @@ export default function App() {
                 <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
                 <span className="text-[10px] text-slate-400">×</span>
-                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="20000" /></div>
+                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="15000" /></div>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-slate-500">Baths</span>
@@ -2396,7 +2407,7 @@ export default function App() {
               )}
             </div>
             <div className="mt-1 text-[10px] text-slate-400">
-              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of whichever ARV source is driving. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($20K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
+              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of the Deal Desk comp number. It does not apply when you type your own ARV, since a number you comped yourself already reflects the real room count. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($15K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
             </div>
           </div>
         </div>
@@ -2633,7 +2644,7 @@ export default function App() {
                       <b className="text-slate-700">Your number is being used.</b> It overrides the Deal Desk comps
                       {soldSummary && soldSummary.arv > 0 ? <>, which say <b className="text-slate-700">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b></> : null}
                       {arvSource ? <>. Tagged {(ARV_SOURCE_LABEL[arvSource] || "").toLowerCase()}</> : null}.
-                      {subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} Clear the box below to go back to the comps.
+                      {subjAdjust !== 0 ? <> The {subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(subjAdjust))} bed/bath correction is <b>not</b> added, since you comped this yourself and already counted the rooms.</> : null} Clear the box to go back to the comps.
                     </>
                   : <>Calculated from the recorded sold comps that Auto-comp pulled from RentCast, shown above.{subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} <b className="text-slate-700">Anything you type here wins over this.</b></>}
             </div>
