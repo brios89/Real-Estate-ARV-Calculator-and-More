@@ -1166,6 +1166,14 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
           <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
+          {(deal.ownerType === "Organization" || deal.heldFor) && (
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-600">
+              {deal.ownerType === "Organization" && (
+                <div className="font-semibold text-amber-700">Owned by an entity, not a person. Find out who actually has authority to sign before you pitch anything.</div>
+              )}
+              {deal.heldFor && <div className={deal.ownerType === "Organization" ? "mt-0.5" : ""}>Owned for <b className="text-slate-800">{deal.heldFor}</b>.</div>}
+            </div>
+          )}
           {deal.ownerNames && deal.ownerNames.length > 0 && (
             <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
               Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
@@ -1396,6 +1404,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <WField label="Is there an HOA?">
               <WChips value={cs.hoa} onChange={(v) => upd("hoa", v)} opts={[["yes", "Yes"], ["no", "No"]]} />
             </WField>
+            {typeof deal.hoaKnown === "boolean" && (
+              <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+                The property record says {deal.hoaKnown ? "there is an HOA" : "there is no HOA"}. Confirm it with the seller, since records lag.
+              </div>
+            )}
             {cs.hoa === "yes" && (
               <>
                 <WField label="HOA dues (monthly)">
@@ -1790,8 +1803,11 @@ export default function App() {
           const raw = sd.raw || {};
           if (raw.sqft) setSqft(String(raw.sqft));
           setOwnerNames(raw.ownerNames || null);
+          // The record often knows whether there is an HOA. Answer it for them rather than making
+          // them ask, but never overwrite an answer a rep already gave.
+          if (typeof raw.hoa === "boolean") setCallState((prev) => (prev.hoa ? prev : { ...prev, hoa: raw.hoa ? "yes" : "no" }));
           setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFullName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
-          setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
+          setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, ownerType: raw.ownerType ?? null, heldFor: raw.heldFor ?? null, hoa: raw.hoa ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
         }
       } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
@@ -2354,7 +2370,8 @@ export default function App() {
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: () => fetchRent(address), sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust,
-                  recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null }}
+                  recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
+                  ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
                 onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
               />
