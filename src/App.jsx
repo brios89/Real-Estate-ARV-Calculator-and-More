@@ -1900,12 +1900,9 @@ export default function App() {
   const [wholesaleFee, setWholesaleFee] = useState("20000");   // YLHB standard assignment fee (raised from 15k, Sep 2026)
 
 
-  // Buyer-deck flip assumptions, shown next to the deck button on the Cash/MAO tab.
   const [sellingPct, setSellingPct] = useState("10");
-  const [carryPerMonth, setCarryPerMonth] = useState("1200");   // loan interest + taxes + insurance + utilities
-  const [rehabPerMonth, setRehabPerMonth] = useState("20000");  // how much work your crew turns out in a month
-  const [holdingOverride, setHoldingOverride] = useState("");   // type a number to ignore the derivation
-  const SELL_MONTHS = 3;                                        // list, contract, close after the work is done
+  const [holding, setHolding] = useState("7500");
+  const [desiredProfit, setDesiredProfit] = useState("25000");
   const [askingPrice, setAskingPrice] = useState("");
 
   // sub-to
@@ -2072,12 +2069,6 @@ export default function App() {
   // Unknown is not zero. Without a repair number there is no honest MAO, and the MAO is the figure
   // a rep says out loud to a seller, so it stays blank rather than assuming the house needs nothing.
   const repairsKnown = num(repairOverride) > 0 || (rehabLevel !== "" && repairPsf > 0 && num(sqft) > 0);
-  // Holding cost scales with the job. A gut sits for months and a paint-and-carpet does not, so the
-  // months come from the rehab size and the dollars come from your monthly carry. A typed number wins.
-  const rehabMonths = num(rehabPerMonth) > 0 && repairs > 0 ? repairs / num(rehabPerMonth) : 0;
-  const holdMonths = repairs > 0 ? rehabMonths + SELL_MONTHS : 0;
-  const derivedHolding = Math.round(holdMonths * num(carryPerMonth));
-  const holding = num(holdingOverride) > 0 ? String(num(holdingOverride)) : String(derivedHolding);
 
   // ---- rental ----
   // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
@@ -2217,6 +2208,8 @@ export default function App() {
   const ruleMaoOver = arv * (num(overPct) / 100) - repairs;
   const investorMaoUnder = ruleMaoUnder - num(wholesaleFee);
   const investorMaoOver = ruleMaoOver - num(wholesaleFee);
+  const itemizedMao =
+    arv - repairs - arv * (num(sellingPct) / 100) - num(holding) - num(desiredProfit) - num(wholesaleFee);
 
   // which band applies to THIS deal (by ARV) — used for the verdict
   const isOver = arv >= 200000;
@@ -2854,7 +2847,7 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, deckCommon, onGenerateRent: () => fetchRent(address), rentLoading, rentMsg, hasAddress: !!address.trim() }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -3521,7 +3514,7 @@ function TabEducation({ id }) {
 
 // ---------- CASH ----------
 function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
+  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, itemizedMao, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, setHolding, desiredProfit, setDesiredProfit, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
   const ask = num(askingPrice);
   let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
   if (ask > 0 && arv > 0) {
@@ -3584,6 +3577,69 @@ function CashTab(props) {
         </div>
       </div>
 
+      {/* OPTIONAL — Itemized max offer: the flipper's inputs and the resulting number sit together so the cause/effect is obvious */}
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-4 shadow-sm">
+        <div className="flex items-start gap-2">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Itemized max offer</span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Optional</span>
+            </div>
+            <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+              A second, optional way to find your max offer — back into it from your <b className="font-semibold text-slate-600">end buyer's</b> costs and target profit (the investor who buys this from you and flips it — <b className="font-semibold text-slate-600">not you</b>). You don't have to fill this in — the Rule and MAO (Max Allowable Offer) above already work. When you do, the number on the right updates the instant you change a field on the left.
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 grid items-stretch gap-4 md:grid-cols-2">
+          {/* left: the flipper's inputs */}
+          <div className="space-y-3">
+            <Field label="Selling costs" hint="% of ARV" info="Cost to SELL the fixed-up house: agent commissions, title, closing. Roughly 8–10% of ARV."><PlainInput value={sellingPct} onChange={setSellingPct} suffix="%" /></Field>
+            <Field label="Holding costs" info="Cost to OWN it during rehab and sale: loan interest, taxes, insurance, utilities. ~$3k–$8k on a typical flip."><MoneyInput value={holding} onChange={setHolding} /></Field>
+            <Field label="Flipper's desired profit" hint="optional — your end buyer, not you" info="The profit the END BUYER (the investor who buys this from you and flips it) wants to clear after all their costs. This is THEIR cushion, not your wholesale fee. Commonly $25k–$40k+. Leave the default if you don't know it.">
+              <MoneyInput value={desiredProfit} onChange={setDesiredProfit} />
+              {num(desiredProfit) > 50000 && <div className="mt-1 flex items-start gap-1 text-[10px] font-medium text-amber-600"><span>⚠</span><span>That's high for a flip cushion — most flippers target $25k–$40k. A big number here pushes your max offer way down. Double-check this is really the buyer's number, not your wholesale fee.</span></div>}
+            </Field>
+          </div>
+          {/* right: the live result, right next to the inputs that drive it */}
+          <div className="flex flex-col justify-center rounded-xl border border-slate-200 bg-white p-5 text-center">
+            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Itemized max offer</div>
+            <div className="mt-1 text-4xl font-bold tabular-nums text-slate-900">{usd(itemizedMao)}</div>
+            <div className="mt-2 text-[11px] leading-snug text-slate-500">Buy at this price or lower and the flipper still clears the profit you entered.</div>
+            <div className="mt-3 text-[10px] font-medium text-amber-700">↻ Updates the instant you change the flipper's desired profit.</div>
+            {(() => {
+              // Buyer's ceiling: the most the END BUYER can pay all-in (contract + your fee) and still clear
+              // their target profit. itemizedMao already nets out the fee, so ceiling = itemizedMao + fee.
+              const fee = num(wholesaleFee);
+              const asking = num(askingPrice);
+              const maxAssign = itemizedMao + fee;
+              const planned = asking + fee;          // what you'd actually assign it for today
+              const slack = maxAssign - planned;     // = itemizedMao - asking (the fee cancels)
+              const maxFee = maxAssign - asking;     // fee ceiling at the current contract price
+              return (
+                <div className="mt-3 w-full border-t border-slate-200 pt-3 text-left">
+                  <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Assign it for</div>
+                  <div className="mt-1 font-mono text-2xl font-bold tabular-nums text-slate-900">{usd(maxAssign)} <span className="text-sm font-semibold text-slate-400">max</span></div>
+                  <div className="text-[10px] leading-snug text-slate-400">The most your end buyer can pay all-in — contract price + your fee — and still clear {usd(num(desiredProfit))} on the numbers at left.</div>
+                  {asking > 0 ? (
+                    slack >= 0 ? (
+                      <div className="mt-2 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-700">
+                        ✓ Your plan — {usd(asking)} contract + {usd(fee)} fee = <b>{usd(planned)}</b> — works{slack === 0 ? <>, <b>exactly at the ceiling</b> (zero room)</> : <> with <b>{usd(slack)}</b> of room</>}.
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-700">
+                        ⚠ Your plan — {usd(asking)} contract + {usd(fee)} fee = <b>{usd(planned)}</b> — is <b>{usd(-slack)}</b> over the ceiling. {maxFee > 0 ? <>Max fee at this contract price: <b>{usd(maxFee)}</b> — or renegotiate the price down.</> : <>Even a $0 fee doesn't work at this contract price — renegotiate the price.</>}
+                      </div>
+                    )
+                  ) : (
+                    <div className="mt-2 text-[10px] italic text-slate-400">Enter the Seller asking price up top and this checks your actual assignment against the ceiling.</div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
 
       <BrrrrPanel
         arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
@@ -3593,8 +3649,6 @@ function CashTab(props) {
           sellingCost: arv * num(sellingPct) / 100,
           holdingCost: num(holding),
           sellingPct: num(sellingPct),
-          holdMonths,
-          assumptions: { sellingPct, setSellingPct, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride },
         }}
       />
       <TabEducation id="cash" />
@@ -3751,34 +3805,10 @@ function BrrrrPanel({ arv, repairs, rentDefault, rentOverride, setRentOverride, 
       <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">{brrrrLine}</div>
       <div className="mt-2 text-[10px] text-slate-400">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
 
-      {deckCommon && flipDeck && flipDeck.assumptions && (
-        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Buyer deck assumptions</div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <Field label="Selling costs" hint="% of ARV"><PlainInput value={flipDeck.assumptions.sellingPct} onChange={flipDeck.assumptions.setSellingPct} suffix="%" /></Field>
-            <Field label="Carry per month" hint="interest, tax, ins, utils"><MoneyInput value={flipDeck.assumptions.carryPerMonth} onChange={flipDeck.assumptions.setCarryPerMonth} placeholder="1200" /></Field>
-            <Field label="Rehab pace" hint="work per month"><MoneyInput value={flipDeck.assumptions.rehabPerMonth} onChange={flipDeck.assumptions.setRehabPerMonth} placeholder="20000" /></Field>
-          </div>
-          <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 rounded-md bg-white px-3 py-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Holding cost</span>
-            <span className="font-mono text-lg font-bold tabular-nums text-slate-800">{flipDeck.holdingCost > 0 ? usd(flipDeck.holdingCost) : "—"}</span>
-          </div>
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
-            {num(flipDeck.assumptions.holdingOverride) > 0
-              ? <>Your number, overriding the calculation. Clear it to go back.</>
-              : flipDeck.holdMonths > 0
-                ? <>{flipDeck.holdMonths.toFixed(1)} months at {usd(num(flipDeck.assumptions.carryPerMonth))}/mo. That is {(flipDeck.holdMonths - 3).toFixed(1)} months of work on {usd(repairs)} of repairs, plus 3 months to list, contract and close.</>
-                : <>Set a repair number above and this calculates itself.</>}
-          </div>
-          <div className="mt-2">
-            <Field label="Or type a holding cost" hint="overrides the calculation"><MoneyInput value={flipDeck.assumptions.holdingOverride} onChange={flipDeck.assumptions.setHoldingOverride} placeholder={flipDeck.holdingCost > 0 ? String(flipDeck.holdingCost) : "optional"} /></Field>
-          </div>
-        </div>
-      )}
       {deckCommon && flipDeck && (
         <div className="mt-3">
           <BuyerDeckButton
-            label="Download buyer deck — Flip + BRRRR (.pptx)"
+            label="Download deal deck — Flip + BRRRR (.pptx)"
             common={{ ...deckCommon, rent: rnt }}
             generateOverride={async (form) => {
               await generateDualDeck({
