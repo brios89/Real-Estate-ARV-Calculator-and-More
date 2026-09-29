@@ -1280,9 +1280,7 @@ const NumbersPlanBody = ({ cs, upd, deal, gap, goStage }) => {
     <Line>Pivot to terms: “I understand that number is important to you. If I could get you closer to it, would you be open to receiving part of it over time instead of all at closing?”</Line>
     {terms("Open to payments over time?")}
     {need > 0 && <Hint>They told you they need {usd(need)} at closing. That, not their asking price, is what a creative offer has to solve.</Hint>}
-    {cs.terms === "no"
-      ? <>{takeaway}<Hint>All cash at their number and no terms means there is no deal today. Be polite, log it, and set a follow-up. Sellers who test the market often call back.</Hint></>
-      : stageBtn(7, "Open to terms? Go to Strategy")}
+    {cs.terms === "no" && <>{takeaway}<Hint>All cash at their number and no terms means there is no deal today. Be polite, log it, and set a follow-up. Sellers who test the market often call back.</Hint></>}
   </>);
 };
 
