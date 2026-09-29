@@ -572,6 +572,48 @@ const rateNum = (v) => {
 const isLowRate = (v) => { const n = rateNum(v); return n != null && n < LOW_RATE; };
 
 const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
+
+// How far the seller's number sits from our cash max decides what the Numbers stage should coach.
+// "Close" uses the same 15% line the strategy engine already uses for "well above cash", so the two
+// screens never disagree. Tunable once real calls show where YLHB sellers actually land.
+const CLOSE_BAND_PCT = 0.15;
+const priceBand = (ask, maxCash) => {
+  if (!(maxCash > 0)) return "no-max";
+  if (!(ask > 0)) return "no-ask";
+  if (ask <= Math.round(maxCash * ANCHOR_PCT)) return "under-anchor";
+  if (ask <= maxCash) return "in-range";
+  if (ask - maxCash <= maxCash * CLOSE_BAND_PCT) return "close";
+  return "far";
+};
+// Turns the anchor into how a rep says it out loud: $41,000 -> "low 40s", $187,000 -> "high 180s".
+const anchorWords = (n) => {
+  const k = Math.floor(num(n) / 1000);
+  if (k <= 0) return "";
+  const d = k % 10, tens = k - d;
+  return `${d <= 3 ? "low" : d <= 6 ? "mid" : "high"} ${tens}s`;
+};
+
+// Reads the seller's "cash I need at closing" against their own number, the loan payoff and our cash
+// offer. The ladder asks for money in their pocket AFTER the loan is paid off, so the honest ceiling on
+// that need is their number minus the payoff, not their number. A need above that ceiling is a
+// misunderstanding to clear up on the call, never "room" for a creative deal.
+const readCashNeed = (cs, maxCash) => {
+  const need = num(cs.needCash), ask = num(cs.ask);
+  if (need <= 0) return null;
+  const hasLoan = cs.loan === "yes";
+  const payoff = hasLoan ? num(cs.balance) : 0;
+  const loanUnasked = !cs.loan;
+  const equity = ask > 0 ? ask - payoff : null;            // what their own number leaves after the payoff
+  const cashNet = maxCash > 0 ? Math.round(maxCash) - payoff : null;   // what our max cash offer leaves them
+  const anchor = maxCash > 0 ? Math.round(maxCash * ANCHOR_PCT) : 0;
+  const anchorNet = maxCash > 0 ? anchor - payoff : null;
+  let status = "ok";
+  if (hasLoan && payoff <= 0) status = "no-balance";
+  else if (equity == null) status = "no-ask";
+  else if (equity <= 0 || need > equity) status = "over";
+  const termsRoom = status === "ok" ? equity - need : null;
+  return { need, ask, hasLoan, payoff, loanUnasked, equity, cashNet, anchor, anchorNet, maxCash: Math.round(maxCash || 0), status, termsRoom };
+};
 const PITI_GOOD = 0.65, PITI_LIMIT = 0.75;
 const pitiCheck = (cs, rent) => {
   const base = num(cs.payment);
@@ -821,7 +863,14 @@ const buildCallNarrative = (cs, deal, strat) => {
   const s3 = [];
   if (cs.timeline) s3.push(`Timeline is ${L[cs.timeline]}.`);
   if (cs.others.trim()) s3.push(`Other decision makers: ${cs.others.trim()}.`);
-  if (num(cs.needCash) > 0) s3.push(`They only need ${money(cs.needCash)} in cash at closing${cs.needCashNotes.trim() ? ` (${cs.needCashNotes.trim()})` : ""}, so the rest does not have to come as cash.`);
+  const nd = readCashNeed(cs, deal && deal.maxCash);
+  if (nd) {
+    const why = cs.needCashNotes.trim() ? ` (${cs.needCashNotes.trim()})` : "";
+    if (nd.status === "over") s3.push(`Seller said they need ${money(nd.need)} in their pocket at closing${why}, but their number of ${money(nd.ask)} only leaves ${money(Math.max(0, nd.equity))}${nd.payoff > 0 ? ` after the ${money(nd.payoff)} loan payoff` : ""}. This needs to be rechecked with the seller.`);
+    else if (nd.status === "no-balance") s3.push(`Seller needs ${money(nd.need)} in their pocket at closing after the loan is paid off${why}. Loan balance not captured yet.`);
+    else if (nd.status === "no-ask") s3.push(`Seller needs ${money(nd.need)} in their pocket at closing${why}.`);
+    else s3.push(`Seller needs ${money(nd.need)} in their pocket at closing${why}. Their number leaves ${money(nd.equity)}${nd.payoff > 0 ? " after the loan payoff" : ""}, so ${nd.termsRoom > 0 ? `${money(nd.termsRoom)} could be paid over time` : "all of their equity has to come at closing"}.`);
+  }
   if (num(cs.ask) > 0) s3.push(`Seller's number is ${money(cs.ask)}${cs.priceBasis.trim() ? `, based on: "${cs.priceBasis.trim()}"` : ""}.`);
   if (cs.terms === "yes") s3.push("Seller is open to payments over time.");
   if (cs.terms === "maybe") s3.push("Seller may be open to payments over time.");
@@ -928,7 +977,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("Timeline", v(cs.timeline))}${row("Other decision makers", v(cs.others))}
       ${row("Their number", v(cs.ask, true))}
       ${row("Cash needed at closing", v(cs.needCash, true))}
-      ${row("What the cash is for", v(cs.needCashNotes))}${row("How they got that number", v(cs.priceBasis))}
+      ${row("What the cash is for", v(cs.needCashNotes))}${(() => { const nd = readCashNeed(cs, deal && deal.maxCash); if (!nd || nd.status === "no-ask") return ""; const t = nd.status === "over" ? `<span style="color:#b91c1c">Does not add up: their number leaves ${usd(Math.max(0, nd.equity))}${nd.payoff > 0 ? " after the payoff" : ""}, less than the ${usd(nd.need)} they need. Recheck with the seller.</span>` : nd.status === "no-balance" ? `<span style="color:#b45309">Loan balance missing, cannot check</span>` : `Their number leaves ${usd(nd.equity)}${nd.payoff > 0 ? " after the payoff" : ""}. ${nd.termsRoom > 0 ? `${usd(nd.termsRoom)} could be paid over time.` : "All of it is needed at closing."}${nd.cashNet != null ? ` Max cash offer nets them ${usd(Math.max(0, nd.cashNet))}.` : ""}`; return row("Need vs their number", t); })()}${row("How they got that number", v(cs.priceBasis))}
       ${row("Open to payments over time", v(cs.terms))}
     </table>
     <h2>Deal numbers at download</h2><table>
@@ -936,7 +985,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("ARV source", deal.arvSource ? esc(deal.arvSource) : "<span style=\"color:#b45309\">not tagged</span>")}
       ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) : "&mdash;")}
       ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
-      ${row("Gap (ask &minus; MAO)", strat.gap != null ? (strat.gap > 0 ? "+" : "") + esc(usd(strat.gap)) : "&mdash;")}
+      ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
     </table>
     <h2>Strategy ranking</h2>
     ${(() => {
@@ -1013,6 +1062,158 @@ const COND_ITEMS = [
 const readItems = (raw) => { try { const v = JSON.parse(raw || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
 
 const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Price", "Numbers", "Strategy", "Close"];
+
+// The need-vs-number panel on the Price stage. Red when the numbers cannot both be true, amber when a
+// missing input keeps it from being checked, green only when there is real room to work with.
+const NeedCheck = ({ nd }) => {
+  if (!nd) return null;
+  const box = (tone, children) => (
+    <div className={`mt-1.5 rounded-md border px-2.5 py-1.5 text-[11px] leading-snug ${tone === "red" ? "border-rose-300 bg-rose-50 text-rose-800" : tone === "amber" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>{children}</div>
+  );
+  if (nd.status === "no-ask") return box("amber", <>Get their number first so this can be checked against it.</>);
+  if (nd.status === "no-balance") return box("amber", <>This is what they need in their pocket <b>after</b> the loan is paid off, but the loan balance is blank. Go back to Property and get the rough balance, or this cannot be checked.</>);
+  if (nd.status === "over") return box("red", <>
+    <b>These numbers cannot both be true.</b> Their number is {usd(nd.ask)}{nd.payoff > 0 ? <>, and paying off the {usd(nd.payoff)} loan leaves {usd(Math.max(0, nd.equity))}</> : null}. The most they can walk away with at their own price is <b>{usd(Math.max(0, nd.equity))}</b>, and they said they need <b>{usd(nd.need)}</b>.
+    <div className="mt-1">Read it back: “Just so I have this right, after everything is paid off you need {usd(nd.need)} in your pocket?” Usually they gave you the full price, or forgot about the loan. Fix whichever number is wrong before you talk about any structure.</div>
+    {nd.loanUnasked && <div className="mt-1">The loan question on Property has not been answered, so this reads as free and clear.</div>}
+  </>);
+  // ok
+  const cashLine = nd.cashNet == null ? null
+    : nd.cashNet >= nd.need
+      ? <>Cash can solve this one. Your max cash offer of {usd(nd.maxCash)} nets them {usd(nd.cashNet)}{nd.payoff > 0 ? " after the payoff" : ""}, which covers the {usd(nd.need)}. {nd.anchorNet >= nd.need ? <>Even your anchor at {usd(nd.anchor)} covers it, so open there.</> : <>Your anchor at {usd(nd.anchor)} nets them {usd(Math.max(0, nd.anchorNet))}, {usd(nd.need - nd.anchorNet)} short, so you have room to move up from the anchor.</>}</>
+      : <>Cash alone will not get there. Your max cash offer of {usd(nd.maxCash)} {nd.cashNet > 0 ? <>nets them only {usd(nd.cashNet)}{nd.payoff > 0 ? " after the payoff" : ""}</> : <>does not even cover the loan payoff</>}, {usd(nd.need - Math.max(0, nd.cashNet))} short of what they need. Still pitch cash first to anchor, then solve the need with terms.</>;
+  return box("green", <>
+    <div>
+      {nd.payoff > 0
+        ? <>Their number of {usd(nd.ask)} is {usd(nd.payoff)} to pay off the loan plus <b>{usd(nd.equity)}</b> of equity.</>
+        : <>Their number is {usd(nd.ask)}{nd.loanUnasked ? " (loan question not answered yet, reading it as free and clear)" : " with no loan"}.</>}{" "}
+      {nd.termsRoom > 0
+        ? <>They need <b>{usd(nd.need)}</b> of that at closing, so <b>{usd(nd.termsRoom)}</b> can come to them over time. That is the room a creative structure works with.</>
+        : <>They need all of it, <b>{usd(nd.need)}</b>, at closing. There is no room for terms, so this is a cash price negotiation.</>}
+    </div>
+    {cashLine && <div className="mt-1 border-t border-emerald-200 pt-1">{cashLine}</div>}
+  </>);
+};
+
+// The Numbers stage, rebuilt around one question: where is their number against our max? Each band
+// gets only the moves that fit it. A seller asking 2.5x the max does not need a roof-and-HVAC hold,
+// and a seller already under the anchor does not need to be negotiated down.
+const NumbersPlan = ({ cs, upd, deal, gap, goStage }) => {
+  const ask = num(cs.ask), max = deal.maxCash > 0 ? Math.round(deal.maxCash) : 0;
+  const anchor = max > 0 ? Math.round(max * ANCHOR_PCT) : 0;
+  const band = priceBand(ask, max);
+  const say = anchorWords(anchor);
+  const overPct = max > 0 && ask > max ? Math.round(((ask - max) / max) * 100) : 0;
+  const head = (tone, title, body) => (
+    <div className={`mt-2 rounded-lg border-l-4 px-3 py-2 ${tone === "green" ? "border-emerald-600 bg-emerald-50" : tone === "amber" ? "border-amber-500 bg-amber-50" : tone === "red" ? "border-rose-600 bg-rose-50" : "border-slate-900 bg-slate-100"}`}>
+      <div className={`text-[12px] font-bold ${tone === "green" ? "text-emerald-900" : tone === "amber" ? "text-amber-900" : tone === "red" ? "text-rose-900" : "text-slate-900"}`}>{title}</div>
+      <div className="mt-0.5 text-[11px] leading-snug text-slate-700">{body}</div>
+    </div>
+  );
+  const valueFrame = <Line>Value framing: “What Zillow doesn't know is the actual condition of the property.” · “We buy houses as-is. No repairs, no commissions, no inspections, and no showings.” · “We can close quickly and make this process simple.”</Line>;
+  const anchorLine = anchor > 0 && (
+    <>
+      <Line>“In a perfect world, we would probably need to be somewhere in the {say}. Now obviously the world isn't perfect, but how close could you get me to that?”</Line>
+      <Hint>That is your anchor, {usd(anchor)}. Say it once, then stop talking. Every move after this goes up toward the seller, and none of them go past {usd(max)}.</Hint>
+    </>
+  );
+  const hold = (
+    <details className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2" open={band === "close"}>
+      <summary className="cursor-pointer text-[11.5px] font-bold text-slate-800">Stuck on price? Use the roof and the HVAC.</summary>
+      <div className="mt-1 text-[11px] leading-snug text-slate-600">This is what the checklist answers were for. Put them on a brief hold, come back, and use the condition of the big-ticket items as the reason for a better number.</div>
+      <Line>“Do you mind holding for just a minute? Let me see what I can do.”</Line>
+      <Line>Come back with: “I went back and looked at this again. You said the roof was ____ and the HVAC was ____. Based on that, let me see if I can get this approved at a better number for you.”</Line>
+      <Hint>Only works if you actually logged those answers in the Property stage. Never invent condition details you were not told.</Hint>
+    </details>
+  );
+  const takeaway = <Line>Takeaway close if they hold firm: “If that's truly what you need to accomplish your goal, then honestly listing it with an agent might make more sense.”</Line>;
+  const terms = (label) => (
+    <WField label={label}>
+      <WChips value={cs.terms} onChange={(v) => upd("terms", v)} opts={[["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]]} />
+    </WField>
+  );
+  const stageBtn = (i, text) => (
+    <button type="button" onClick={() => goStage(i)} className="mt-2 w-full rounded-lg bg-slate-900 px-3 py-2 text-[12px] font-bold text-white hover:bg-slate-800">{text}</button>
+  );
+
+  if (band === "no-max") return (<>
+    {head("slate", "No max offer yet", <>This needs an ARV and a repair number before it can coach the price. Run Auto-comp or type an ARV up top, and set a condition or repair number on the Property stage.</>)}
+    {valueFrame}
+    <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
+    {terms("Open to payments over time? (sets up creative)")}
+  </>);
+
+  if (band === "no-ask") return (<>
+    {head("slate", "Get their number first", <>Your max cash offer is {usd(max)}. Everything on this screen depends on how far their number is from it, so do not say yours until you have theirs.</>)}
+    {valueFrame}
+    <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
+    <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="their asking price" /></WField>
+  </>);
+
+  if (band === "under-anchor") return (<>
+    {head("green", "Their number is under your anchor. Lock it up.", <>They are asking {usd(ask)}. Your anchor is {usd(anchor)} and your max is {usd(max)}. Do not counter lower and do not offer more than they asked. Agree to their number and move to paperwork.</>)}
+    <Line>“So if we can do {usd(ask)}, buy it as-is, and close on your timeline, is that something you would want to move forward with?”</Line>
+    <Hint>A number this far under the max is worth one sanity check. Make sure the repairs were captured and that nothing like a lien, a second loan or an estate issue is hiding behind the low price.</Hint>
+    {stageBtn(8, "Go to Close")}
+  </>);
+
+  if (band === "in-range") return (<>
+    {head("green", "Cash works. Their number is between your anchor and your max.", <>They are asking {usd(ask)}. Open at your anchor of {usd(anchor)}, and let them pull you up toward their number. You can pay up to {usd(max)}, but there is no reason to go past {usd(ask)}.</>)}
+    {valueFrame}
+    {anchorLine}
+    {hold}
+    {stageBtn(8, "Agreed on a number? Go to Close")}
+  </>);
+
+  if (band === "close") return (<>
+    {head("amber", "Within reach of cash.", <>They are asking {usd(ask)}, which is {usd(ask - max)} ({overPct}%) over your max of {usd(max)}. That is close enough to negotiate. Anchor low, then use the roof and HVAC to earn the move down. If they will not come to your max, ask about terms before you let them go.</>)}
+    {valueFrame}
+    {anchorLine}
+    {hold}
+    {takeaway}
+    {terms("If they will not come to your max: open to payments over time?")}
+  </>);
+
+  // far
+  const need = num(cs.needCash);
+  return (<>
+    {head("red", "Cash will not close this gap.", <>They are asking {usd(ask)}, which is {usd(ask - max)} ({overPct}%) over your max of {usd(max)}. No hold or roof story moves a seller that far. Still say the cash number, because it anchors everything after it, then move to terms.</>)}
+    {valueFrame}
+    {anchorLine}
+    <Line>Pivot to terms: “I understand that number is important to you. If I could get you closer to it, would you be open to receiving part of it over time instead of all at closing?”</Line>
+    {terms("Open to payments over time?")}
+    {need > 0 && <Hint>They told you they need {usd(need)} at closing. That, not their asking price, is what a creative offer has to solve.</Hint>}
+    {cs.terms === "no"
+      ? <>{takeaway}<Hint>All cash at their number and no terms means there is no deal today. Be polite, log it, and set a follow-up. Sellers who test the market often call back.</Hint></>
+      : stageBtn(7, "Open to terms? Go to Strategy")}
+  </>);
+};
+
+// The amber triangle on a strategy card used to be a bare icon. Hover (or tap, on a phone) now opens
+// the actual warnings behind it. Tapping the triangle does not also select the card underneath.
+const WarnTip = ({ label, warns }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="relative inline-flex"
+      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}
+      onClick={(e) => { e.stopPropagation(); setShow((v) => !v); }}
+      aria-label={`${label} warnings`} role="note">
+      <AlertTriangle className="h-3.5 w-3.5 cursor-help text-amber-500" />
+      {show && (
+        <span className="absolute left-0 top-full z-40 block w-72 pt-1.5" role="tooltip">
+          <span className="block rounded-lg border border-amber-300 bg-white p-2.5 text-left shadow-xl">
+            <span className="block text-[11.5px] font-bold text-amber-900">Watch out on {label}</span>
+            {warns.map((w, k) => (
+              <span key={k} className="mt-1 flex items-start gap-1.5 text-[11px] font-normal leading-snug text-slate-700">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}
+              </span>
+            ))}
+          </span>
+        </span>
+      )}
+    </span>
+  );
+};
 
 const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, save }) => {
   const [stage, setStage] = useState(0);
@@ -1362,11 +1563,14 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
             </div>
           )}
+          <Line>“Is anyone living in the house right now?”</Line>
+          <Hint>If yes, follow with “Is that you, or do you have a tenant in there?” If it's a tenant, ask when the lease ends and what they pay each month.</Hint>
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
           <Line>“Do you still owe anything on it?”</Line>
-          <Hint>Ask it exactly that casually. If yes, follow with “What's your current payment?” — the payment and balance quietly decide Sub-To vs Hybrid vs Seller Finance.</Hint>
+          <Line>“At closing, will we need to pay off any loan?”</Line>
+          <Hint>Ask either one, exactly that casually. If yes, follow with “What's your current payment?” — the payment and balance quietly decide Sub-To vs Hybrid vs Seller Finance.</Hint>
           <WField label="Loan on the property?">
             <WChips value={cs.loan} onChange={(v) => upd("loan", v)} opts={[["yes", "Yes"], ["no", "Free & clear"]]} />
           </WField>
@@ -1500,11 +1704,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <WField label="Cash they need at closing"><WText money value={cs.needCash} onChange={(v) => upd("needCash", v)} placeholder="8000" /></WField>
             <WField label="What is it for?"><WText value={cs.needCashNotes} onChange={(v) => upd("needCashNotes", v)} placeholder="movers + deposit" /></WField>
           </div>
-          {num(cs.needCash) > 0 && num(cs.ask) > 0 && (
-            <div className="mt-1.5 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-800">
-              They are asking {usd(num(cs.ask))} but only need <b>{usd(num(cs.needCash))}</b> at closing. That is <b>{usd(num(cs.ask) - num(cs.needCash))}</b> that does not have to be cash, and it is the room a creative structure lives in.
-            </div>
-          )}
+          <NeedCheck nd={readCashNeed(cs, deal.maxCash)} />
           <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Rebuttals — tap to open</div>
           {REBUTTALS.map((r, i) => (
             <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -1519,26 +1719,10 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
             <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">ARV</div><div className="font-mono text-sm font-bold text-slate-800">{deal.arv > 0 ? usd(deal.arv) : "—"}</div></div>
             <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Max cash</div><div className="font-mono text-sm font-bold text-slate-800">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div></div>
-            <div className={`rounded-lg border p-2 ${strat.gap != null && strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Gap</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? (strat.gap > 0 ? "+" : "") + usd(strat.gap) : "—"}</div></div>
+            {/* "Gap" meant nothing to a new VA. Say which direction and against what. */}
+            <div className={`rounded-lg border p-2 ${strat.gap == null ? "border-slate-200 bg-slate-50/60" : strat.gap > deal.maxCash * CLOSE_BAND_PCT ? "border-rose-300 bg-rose-50" : strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{strat.gap == null ? "Ask vs max" : strat.gap > 0 ? "Ask over max by" : "Ask under max by"}</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? usd(Math.abs(strat.gap)) : "—"}</div></div>
           </div>
-          {deal.maxCash <= 0 && <Hint>No ARV yet — hit <b>Auto-comp</b> up top. The strategy stage needs the max cash number to rank against their ask.</Hint>}
-          <Line>Value framing: “What Zillow doesn't know is the actual condition of the property.” · “We buy houses as-is. No repairs, no commissions, no inspections, and no showings.” · “We can close quickly and make this process simple.”</Line>
-          <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
-          <Hint>Negotiation anchor, script-style: “In a perfect world, we would probably need to be somewhere in the low ____s. Now obviously the world isn't perfect — but how close could you get me to that?” Anchor a bit under your max cash so there's room to move.</Hint>
-          {/* The move the roof/HVAC answers were being saved for. */}
-          <div className="mt-3 rounded-lg border-l-4 border-slate-900 bg-slate-100 px-3 py-2">
-            <div className="text-[11.5px] font-bold text-slate-900">Stuck on price? Use the roof and the HVAC.</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-600">
-              If they will not move and you need room, this is what the checklist answers were for. Put them on a brief hold, come back, and use the condition of the big-ticket items as the reason you can ask for more.
-            </div>
-          </div>
-          <Line>“Do you mind holding for just a minute? Let me see what I can do.”</Line>
-          <Line>Come back with: “I went back and looked at this again. You said the roof was ____ and the HVAC was ____. Based on that, let me see if I can get this approved at a better number for you.”</Line>
-          <Hint>Only works if you actually logged those answers in the Property stage. This is a real reason to revisit the number, not a script trick, so do not invent condition details you were never told.</Hint>
-          <Line>Takeaway close if they hold firm: “If that's truly what you need to accomplish your goal, then honestly listing it with an agent might make more sense.”</Line>
-          <WField label="Open to payments over time? (sets up creative)">
-            <WChips value={cs.terms} onChange={(v) => upd("terms", v)} opts={[["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]]} />
-          </WField>
+          <NumbersPlan cs={cs} upd={upd} deal={deal} gap={strat.gap} goStage={setStage} />
         </div>)}
 
         {stage === 7 && (() => {
@@ -1597,7 +1781,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     <span className="flex items-center gap-1.5">
                       <span className={`text-[12px] font-bold ${on ? "text-emerald-900" : "text-slate-700"}`}>{o.label}</span>
                       {i === 0 && o.sc > 0 && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
-                      {o.warn.length > 0 && <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                      {o.warn.length > 0 && <WarnTip label={o.label} warns={o.warn} />}
                     </span>
                     <span className={`font-mono text-[11px] font-bold ${on ? "text-emerald-700" : "text-slate-400"}`}>{o.sc}</span>
                   </button>
