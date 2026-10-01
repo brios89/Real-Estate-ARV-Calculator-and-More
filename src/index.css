@@ -13,3 +13,7 @@
 .ylhb-gmap .gm-style-iw-c { padding: 0 !important; max-height: none !important; border-radius: 10px !important; }
 .ylhb-gmap .gm-style-iw-d { overflow: visible !important; max-height: none !important; }
 .ylhb-gmap .ylhb-card { cursor: default; }
+
+/* Comp hover card on the Leaflet maps (popup so its links can be clicked). */
+.comp-pop .leaflet-popup-content-wrapper { padding: 0; border-radius: 10px; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.18); }
+.comp-pop .leaflet-popup-content { margin: 0; }

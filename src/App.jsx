@@ -206,7 +206,7 @@ const InfoDot = ({ text }) => {
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
-        className="text-slate-300 hover:text-emerald-600" aria-label="more info">
+        className="text-slate-500 hover:text-emerald-600" aria-label="more info">
         <Info className="h-3.5 w-3.5" />
       </button>
       {open && (
@@ -221,10 +221,10 @@ const InfoDot = ({ text }) => {
 const Field = ({ label, hint, info, children }) => (
   <label className="block">
     <div className="flex items-baseline justify-between gap-2">
-      <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+      <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
         {label}{info && <InfoDot text={info} />}
       </span>
-      {hint && <span className="text-[10px] text-slate-400">{hint}</span>}
+      {hint && <span className="text-[10px] text-slate-600">{hint}</span>}
     </div>
     <div className="mt-1">{children}</div>
   </label>
@@ -295,7 +295,7 @@ const AddressAutocomplete = ({ value, onChange, onPick, placeholder }) => {
                 onClick={() => pick(s)}
                 className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm ${i === hi ? "bg-emerald-50 text-emerald-800" : "text-slate-700 hover:bg-slate-50"}`}
               >
-                <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-600" />
                 <span>{s}</span>
               </button>
             </li>
@@ -310,7 +310,7 @@ const AddressAutocomplete = ({ value, onChange, onPick, placeholder }) => {
 // data. Still a placeholder underneath, so typing replaces it and a fresh pull can update it.
 const MoneyInput = ({ value, onChange, placeholder, filled }) => (
   <div className="flex items-center rounded-lg border border-slate-200 bg-white transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
-    <span className="pl-3 pr-1 text-sm text-slate-400">$</span>
+    <span className="pl-3 pr-1 text-sm text-slate-600">$</span>
     <input type="text" inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
       className={`w-full bg-transparent py-2 pr-3 text-sm tabular-nums text-slate-900 outline-none font-mono ${filled && !value ? "placeholder:font-semibold placeholder:text-slate-800" : ""}`} />
   </div>
@@ -320,7 +320,7 @@ const PlainInput = ({ value, onChange, placeholder, suffix }) => (
   <div className="flex items-center rounded-lg border border-slate-200 bg-white transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
     <input type="text" inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
       className="w-full bg-transparent px-3 py-2 text-sm tabular-nums text-slate-900 outline-none font-mono" />
-    {suffix && <span className="pr-3 text-sm text-slate-400">{suffix}</span>}
+    {suffix && <span className="pr-3 text-sm text-slate-600">{suffix}</span>}
   </div>
 );
 
@@ -328,9 +328,9 @@ const Stat = ({ label, value, tone = "default", big = false, sub }) => {
   const tones = { default: "text-slate-900", good: "text-emerald-600", bad: "text-rose-600", warn: "text-amber-600" };
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}</div>
       <div className={`mt-0.5 font-mono tabular-nums ${big ? "text-2xl" : "text-lg"} font-bold ${tones[tone]}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}
+      {sub && <div className="mt-0.5 text-[11px] text-slate-600">{sub}</div>}
     </div>
   );
 };
@@ -355,7 +355,7 @@ const Verdict = ({ status, headline, detail }) => {
 };
 
 const SectionTitle = ({ children }) => (
-  <h3 className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400">{children}</h3>
+  <h3 className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-600">{children}</h3>
 );
 
 // ---------- comp hover card ----------
@@ -367,7 +367,16 @@ const longDate = (d) => {
   const t = Date.parse(d);
   return Number.isFinite(t) ? new Date(t).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }) : null;
 };
-const compCardHtml = ({ n, address, distance, beds, baths, sqft, price, priceSuffix = "", priceColor = "#06b6d4", dateLine, note, noteColor = "#64748b" }) => {
+// Google / Street View / Maps links for any comp, opened in a new tab. Street View needs coordinates.
+const compLinks = (c) => {
+  const a = String(c.address || "").trim();
+  if (!a) return [];
+  const out = [{ label: "Google", href: gsearch(a) }];
+  if (c.lat != null && c.lng != null) out.push({ label: "Street View", href: `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lng}` });
+  out.push({ label: "Google Maps", href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a)}` });
+  return out;
+};
+const compCardHtml = ({ n, address, distance, beds, baths, sqft, price, priceSuffix = "", priceColor = "#06b6d4", dateLine, note, noteColor = "#475569", links = [] }) => {
   const parts = String(address || "").split(",").map((x) => x.trim()).filter(Boolean);
   const line1 = parts.length > 2 ? parts.slice(0, -2).join(", ") : parts[0] || "";
   const line2 = parts.length > 2 ? parts.slice(-2).join(", ") : parts.slice(1).join(", ");
@@ -379,11 +388,12 @@ const compCardHtml = ({ n, address, distance, beds, baths, sqft, price, priceSuf
   ].filter(Boolean);
   const sep = '<span style="color:#cbd5e1;margin:0 7px">|</span>';
   return `<div style="font-family:inherit;min-width:220px;max-width:290px;padding:10px 12px;line-height:1.35;color:#0f172a">
-    <div style="font-size:13.5px">${n ? `<span style="color:#94a3b8;font-weight:700;margin-right:4px">#${n}</span>` : ""}${escHtml(line1)}</div>
+    <div style="font-size:13.5px">${n ? `<span style="color:#64748b;font-weight:700;margin-right:4px">#${n}</span>` : ""}${escHtml(line1)}</div>
     ${line2 ? `<div style="font-size:13.5px">${escHtml(line2)}</div>` : ""}
     ${facts.length ? `<div style="margin-top:6px;font-size:12.5px;color:#475569">${facts.join(sep)}</div>` : ""}
     <div style="margin-top:6px;font-size:12.5px;color:#475569">${price ? `<span style="color:${priceColor};font-size:16px;font-weight:600">${usd(price)}</span>${priceSuffix ? ` ${priceSuffix}` : ""}` : ""}${price && dateLine ? sep : ""}${dateLine ? escHtml(dateLine) : ""}</div>
     ${note ? `<div style="margin-top:5px;font-size:11.5px;color:${noteColor}">${escHtml(note)}</div>` : ""}
+    ${links.length ? `<div style="margin-top:7px;padding-top:6px;border-top:1px solid #e2e8f0;font-size:12px">${links.map((l) => `<a href="${escHtml(l.href)}" target="_blank" rel="noopener noreferrer" style="color:#047857;font-weight:600;text-decoration:none;margin-right:12px">${escHtml(l.label)} &#8599;</a>`).join("")}</div>` : ""}
   </div>`;
 };
 // Rent comp and sold comp flavors of the card.
@@ -392,6 +402,7 @@ const rentCompHtml = (c, n) => compCardHtml({
   price: c.rent, priceSuffix: "/mo",
   dateLine: c.listedDate ? `Listed ${longDate(c.listedDate)}` : (c.daysOld != null ? `Seen ${c.daysOld} days ago` : null),
   note: [c.removedDate ? `Off market ${longDate(c.removedDate)}` : (c.status === "Active" ? "Still listed" : null), c.match != null ? `${c.match}% match` : null].filter(Boolean).join(" · ") || null,
+  links: compLinks(c),
 });
 const soldCompHtml = (c, n) => compCardHtml({
   n, address: c.address, distance: c.distance, beds: c.beds, baths: c.baths, sqft: c.sqft,
@@ -399,6 +410,7 @@ const soldCompHtml = (c, n) => compCardHtml({
   dateLine: c.saleDate ? `Sold ${longDate(c.saleDate)}` : null,
   note: `${c.ppsf ? `$${c.ppsf}/sf · ` : ""}${c.included ? "In the ARV · click to remove" : `Out of the ARV${c.flags && c.flags.length ? ` (${c.flags.join(", ")})` : ""} · click to include`}`,
   noteColor: c.included ? "#047857" : "#b45309",
+  links: compLinks(c),
 });
 
 // ---------- main ----------
@@ -435,6 +447,7 @@ const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, pinHtml, teardrop 
     const L = window.L;
     if (!ready || !L || !mapRef.current) return;
     const { m, layer } = mapRef.current;
+    m.closePopup();
     layer.clearLayers();
     const pts = [];
     const dot = (bg, txt, size = 24, fs = 11) => L.divIcon({
@@ -454,8 +467,20 @@ const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, pinHtml, teardrop 
       if (p.lat == null || p.lng == null) return;
       const bg = pinColor ? pinColor(p) : p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
       const mk = L.marker([p.lat, p.lng], { icon: teardrop ? drop(bg, String(p.n)) : dot(bg, String(p.n)) }).addTo(layer);
-      if (pinHtml) mk.bindTooltip(pinHtml(p), { direction: "top", offset: [0, teardrop ? -36 : -12], className: "comp-tip", opacity: 1 });
-      else mk.bindTooltip(pinTip ? pinTip(p) : `#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
+      if (pinHtml) {
+        // A popup, not a tooltip: tooltips vanish the moment the mouse leaves the pin, so the links in
+        // the card could never be clicked. This one stays while the mouse is on the pin or the card.
+        const el = document.createElement("div");
+        el.innerHTML = pinHtml(p);
+        const pop = L.popup({ closeButton: false, autoPan: false, className: "comp-pop", offset: [0, teardrop ? -32 : -8], maxWidth: 320 }).setContent(el);
+        let t = null;
+        const keep = () => clearTimeout(t);
+        const later = () => { clearTimeout(t); t = setTimeout(() => m.closePopup(pop), 350); };
+        el.addEventListener("mouseenter", keep);
+        el.addEventListener("mouseleave", later);
+        mk.on("mouseover", () => { keep(); pop.setLatLng(mk.getLatLng()); m.openPopup(pop); });
+        mk.on("mouseout", later);
+      } else mk.bindTooltip(pinTip ? pinTip(p) : `#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
       if (onToggle) mk.on("click", () => onToggle(p.i));
       pts.push([p.lat, p.lng]);
     });
@@ -483,7 +508,7 @@ const fmtLot = (sf) => {
 // View, and the Include button is the exact same toggle as the card's checkbox and the map pin.
 const DetailTile = ({ label, value, amber }) => (value == null || value === "" ? null : (
   <div className={`rounded-lg border p-2.5 ${amber ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/50"}`}>
-    <div className={`text-[10px] font-semibold uppercase tracking-wide ${amber ? "text-amber-600" : "text-slate-400"}`}>{label}</div>
+    <div className={`text-[10px] font-semibold uppercase tracking-wide ${amber ? "text-amber-600" : "text-slate-600"}`}>{label}</div>
     <div className={`mt-0.5 text-sm font-semibold ${amber ? "text-amber-800" : "text-slate-800"}`}>{value}</div>
   </div>
 ));
@@ -501,10 +526,10 @@ const CompDetailModal = ({ data, onClose, onToggle }) => {
       <div className="mx-auto my-4 w-full max-w-2xl rounded-2xl bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Comp #{d.n} · {d.source}</div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Comp #{d.n} · {d.source}</div>
             <div className="mt-0.5 truncate text-sm font-bold text-slate-900">{d.address || "(address withheld)"}</div>
           </div>
-          <button type="button" onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"><X className="h-4 w-4" /></button>
         </div>
         {d.address && (
           <a href={d.sv} target="_blank" rel="noopener noreferrer" title="Open interactive Street View"
@@ -527,22 +552,22 @@ const CompDetailModal = ({ data, onClose, onToggle }) => {
         </div>
         {d.history && d.history.length > 0 && (
           <div className="mt-4">
-            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Recorded sale history</div>
+            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-600">Recorded sale history</div>
             <div className="mt-1.5 overflow-hidden rounded-lg border border-slate-200">
               <table className="w-full text-left text-[11px]">
-                <thead><tr className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-400"><th className="px-2.5 py-1.5 font-semibold">Date</th><th className="px-2.5 py-1.5 font-semibold">Price</th><th className="px-2.5 py-1.5 font-semibold">$ / sqft</th></tr></thead>
+                <thead><tr className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-600"><th className="px-2.5 py-1.5 font-semibold">Date</th><th className="px-2.5 py-1.5 font-semibold">Price</th><th className="px-2.5 py-1.5 font-semibold">$ / sqft</th></tr></thead>
                 <tbody>
                   {d.history.map((h, ix) => (
                     <tr key={ix} className="border-t border-slate-100">
                       <td className="px-2.5 py-1.5 font-mono text-slate-600">{mediumDate(h.date)}</td>
                       <td className="px-2.5 py-1.5 font-mono font-bold text-slate-800">{h.price ? usd(h.price) : "—"}</td>
-                      <td className="px-2.5 py-1.5 font-mono text-slate-500">{h.price && d.sqftNum > 0 ? `$${Math.round(h.price / d.sqftNum)}` : "—"}</td>
+                      <td className="px-2.5 py-1.5 font-mono text-slate-700">{h.price && d.sqftNum > 0 ? `$${Math.round(h.price / d.sqftNum)}` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="mt-1 text-[10px] text-slate-400">County-recorded sales only — MLS listing history and price changes aren't in RentCast's data.</div>
+            <div className="mt-1 text-[10px] text-slate-600">County-recorded sales only — MLS listing history and price changes aren't in RentCast's data.</div>
           </div>
         )}
         <div className="mt-4 flex items-center justify-between gap-2">
@@ -988,13 +1013,13 @@ const WChips = ({ value, onChange, opts, auto }) => (
 );
 const WField = ({ label, children }) => (
   <div className="mt-3">
-    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</div>
+    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">{label}</div>
     {children}
   </div>
 );
 const WText = ({ value, onChange, placeholder, money }) => (
   <div className="relative mt-1.5">
-    {money && <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">$</span>}
+    {money && <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-600">$</span>}
     <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} inputMode={money ? "numeric" : "text"}
       className={`w-full rounded-md border border-slate-200 bg-white py-1.5 pr-2.5 font-mono text-xs text-slate-800 outline-none focus:border-emerald-400 ${money ? "pl-6" : "pl-2.5"}`} />
   </div>
@@ -1512,9 +1537,9 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
         <div className="mt-3 text-center text-5xl font-bold tracking-tight text-slate-900">{usd(est)}</div>
         {(perSq(est) || perBed) && (
           <div className="mt-3 flex items-stretch justify-center gap-5 text-center">
-            {perSq(est) && <div><div className="text-[15px] font-bold text-slate-800">{perSq(est)}</div><div className="text-[12px] text-slate-500">per sq.ft.</div></div>}
+            {perSq(est) && <div><div className="text-[15px] font-bold text-slate-800">{perSq(est)}</div><div className="text-[12px] text-slate-700">per sq.ft.</div></div>}
             {perSq(est) && perBed && <div className="w-px bg-slate-200" />}
-            {perBed && <div><div className="text-[15px] font-bold text-slate-800">{perBed}</div><div className="text-[12px] text-slate-500">per bedroom</div></div>}
+            {perBed && <div><div className="text-[15px] font-bold text-slate-800">{perBed}</div><div className="text-[12px] text-slate-700">per bedroom</div></div>}
           </div>
         )}
         {hasRange ? (
@@ -1529,17 +1554,17 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
               )}
             </div>
             <div className="mt-2 flex justify-between">
-              <div><div className="text-[15px] font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[12px] text-slate-500">{perSq(low)} /sq.ft.</div>}</div>
-              <div className="text-right"><div className="text-[15px] font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[12px] text-slate-500">{perSq(high)} /sq.ft.</div>}</div>
+              <div><div className="text-[15px] font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[12px] text-slate-700">{perSq(low)} /sq.ft.</div>}</div>
+              <div className="text-right"><div className="text-[15px] font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[12px] text-slate-700">{perSq(high)} /sq.ft.</div>}</div>
             </div>
             {typed > 0 && (typed < low || typed > high) && (
               <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Your typed rent of {usd(typed)} is {typed > high ? "above" : "below"} RentCast's whole range. Make sure you have a comp that supports it.</div>
             )}
           </div>
         ) : (
-          <div className="mt-3 text-center text-[11px] text-slate-500">Re-pull the rent to see RentCast's low and high range.</div>
+          <div className="mt-3 text-center text-[11px] text-slate-700">Re-pull the rent to see RentCast's low and high range.</div>
         )}
-        <div className="mt-auto pt-3 text-center text-[11px] leading-snug text-slate-500">
+        <div className="mt-auto pt-3 text-center text-[11px] leading-snug text-slate-700">
           {info && info.basis ? <>For {fmtBasis(info.basis)}</> : <>For the county record's beds and baths</>}
           {info && info.basis && info.basis.comps ? <> · {info.basis.comps} comps {info.basis.search || ""}</> : null}
         </div>
@@ -1572,7 +1597,7 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
       </div>
       {hasMap && (
         <>
-          <div className="mt-1.5 flex items-center justify-between px-1 text-[11px] text-slate-500">
+          <div className="mt-1.5 flex items-center justify-between px-1 text-[11px] text-slate-700">
             <span><span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold" style={{ color: RENT_PIN }}>●</span> rental comps RentCast priced it from</span>
             <button type="button" onClick={() => setShowList((v) => !v)} className="font-semibold text-emerald-700 hover:underline">{showList ? "Hide list" : `Show all ${comps.length}`}</button>
           </div>
@@ -1581,14 +1606,14 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
               {comps.map((c, i) => (
                 <div key={i} className="flex items-start justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] last:border-0">
                   <div className="min-w-0">
-                    <div className="truncate font-semibold text-slate-800"><span className="mr-1 inline-block w-6 text-slate-500">#{i + 1}</span>{c.address}</div>
-                    <div className="pl-7 text-slate-500">
+                    <div className="truncate font-semibold text-slate-800"><span className="mr-1 inline-block w-6 text-slate-700">#{i + 1}</span>{c.address}</div>
+                    <div className="pl-7 text-slate-700">
                       {[c.beds != null && c.baths != null ? `${c.beds} bd / ${c.baths} ba` : null, c.sqft ? `${Math.round(c.sqft).toLocaleString()} sf` : null, c.distance != null ? `${c.distance} mi away` : null, c.daysOld != null ? `seen ${c.daysOld}d ago` : null, c.match != null ? `${c.match}% match` : null].filter(Boolean).join(" · ")}
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="font-mono font-bold text-slate-900">{c.rent ? usd(c.rent) : "—"}</div>
-                    {c.rent && c.sqft ? <div className="text-[10px] text-slate-500">${(c.rent / c.sqft).toFixed(2)}/sf</div> : null}
+                    {c.rent && c.sqft ? <div className="text-[10px] text-slate-700">${(c.rent / c.sqft).toFixed(2)}/sf</div> : null}
                   </div>
                 </div>
               ))}
@@ -1653,7 +1678,7 @@ const PayoffAlert = ({ cs, maxCash }) => {
     </div>
   );
   return (
-    <div className="mt-2 text-[10.5px] leading-snug text-slate-500">Your anchor clears their {usd(bal)} loan payoff, leaving them {usd(anchor - bal)} at the anchor and up to {usd(max - bal)} at your max.</div>
+    <div className="mt-2 text-[10.5px] leading-snug text-slate-700">Your anchor clears their {usd(bal)} loan payoff, leaving them {usd(anchor - bal)} at the anchor and up to {usd(max - bal)} at your max.</div>
   );
 };
 
@@ -1800,19 +1825,19 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Phone className="h-4 w-4 text-emerald-600" /> Offer Call</div>
           <div className="flex items-center gap-1.5">
-            <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">New call</button>
-            <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
+            <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-50">New call</button>
+            <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
           </div>
         </div>
         {/* The drawer covers the address field, so the call has to say which house it is about. */}
         <div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-slate-100 px-2.5 py-1.5">
-          <MapPin className="mt-px h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <MapPin className="mt-px h-3.5 w-3.5 shrink-0 text-slate-600" />
           <div className="min-w-0">
             <div className="text-[11.5px] font-bold leading-snug text-slate-800">
               {deal.address ? deal.address : <span className="font-semibold text-amber-700">No address set. Close this and pick one up top before you dial.</span>}
             </div>
             {deal.address && (deal.arv > 0 || deal.maxCash > 0) && (
-              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
                 {deal.arv > 0 ? <>ARV {usd(deal.arv)}</> : null}
                 {deal.arv > 0 && deal.maxCash > 0 ? " · " : ""}
                 {deal.maxCash > 0 ? <>max allowable cash offer <b className="text-slate-700">{usd(deal.maxCash)}</b> · anchor at <b className="text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</b></> : null}
@@ -1824,7 +1849,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         {/* four pillars */}
         <div className="mt-2 flex items-center gap-1.5">
           {PILLARS.map((p) => (
-            <span key={p.id} className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${p.done(cs) ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400"}`}>
+            <span key={p.id} className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${p.done(cs) ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
               {p.done(cs) ? <CheckCircle2 className="h-3 w-3" /> : <MinusCircle className="h-3 w-3" />}{p.label}
             </span>
           ))}
@@ -1833,26 +1858,26 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         <div className="mt-2 flex flex-wrap gap-1">
           {CALL_STAGES.map((t, i) => (
             <button key={t} type="button" onClick={() => setStage(i)}
-              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${i === stage ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>{t}</button>
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${i === stage ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{t}</button>
           ))}
         </div>
-        <div className="mt-1.5 text-[10px] leading-snug text-slate-400">
+        <div className="mt-1.5 text-[10px] leading-snug text-slate-600">
           {!save.savable
             ? "Pick the subject address up top and this call saves itself."
             : save.sync.status === "synced" && save.sync.by
-              ? <>Shared with the team. Last saved by <b className="text-slate-500">{save.sync.by}</b>{save.sync.at ? <> at <b className="text-slate-500">{fmtSavedAt(save.sync.at)}</b></> : null}.</>
+              ? <>Shared with the team. Last saved by <b className="text-slate-700">{save.sync.by}</b>{save.sync.at ? <> at <b className="text-slate-700">{fmtSavedAt(save.sync.at)}</b></> : null}.</>
               : save.sync.status === "saving"
                 ? "Saving to the team…"
                 : save.sync.status === "synced"
-                  ? <>Shared with the team{save.sync.at ? <> · saved <b className="text-slate-500">{fmtSavedAt(save.sync.at)}</b></> : ""}.</>
+                  ? <>Shared with the team{save.sync.at ? <> · saved <b className="text-slate-700">{fmtSavedAt(save.sync.at)}</b></> : ""}.</>
                   : save.sync.status === "denied"
                     ? <span className="text-amber-600">Team passcode was rejected. Saving to this browser only until it is fixed.</span>
                     : save.sync.status === "error"
                       ? <span className="text-amber-600">Cannot reach the team store right now. Your work is safe in this browser.</span>
                       : save.loadedAt
-                        ? <>Picked up your saved call from <b className="text-slate-500">{fmtSavedAt(save.loadedAt)}</b>.</>
+                        ? <>Picked up your saved call from <b className="text-slate-700">{fmtSavedAt(save.loadedAt)}</b>.</>
                         : save.savedAt
-                          ? <>Saved <b className="text-slate-500">{fmtSavedAt(save.savedAt)}</b> to this address.</>
+                          ? <>Saved <b className="text-slate-700">{fmtSavedAt(save.savedAt)}</b> to this address.</>
                           : "Saves itself to this address as you type."}
           {" "}
           <button type="button" onClick={() => setSyncOpen((v) => !v)} className="font-semibold text-emerald-600 hover:underline">
@@ -1861,8 +1886,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         </div>
         {syncOpen && (
           <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Team sync</div>
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Team sync</div>
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
               Your name gets stamped on every call you save, so whoever opens this address next knows who captured it. The passcode is the same one for the whole team — get it from B.
             </div>
             <input value={idDraft.name} onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} placeholder="Your name"
@@ -1872,7 +1897,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 type={showCode ? "text" : "password"} autoCapitalize="off" autoCorrect="off" spellCheck={false}
                 className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 pr-14 text-xs text-slate-800 outline-none focus:border-emerald-400" />
               <button type="button" onClick={() => setShowCode((v) => !v)}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600 hover:bg-slate-100 hover:text-slate-600">
                 {showCode ? "hide" : "show"}
               </button>
             </div>
@@ -1920,7 +1945,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           </div>
         )}
         {stage === 0 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Before you dial (SOP Step 1)</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Before you dial (SOP Step 1)</div>
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
           <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
@@ -1933,7 +1958,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             </div>
           )}
           {deal.ownerNames && deal.ownerNames.length > 0 && (
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
               Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
             </div>
           )}
@@ -1941,21 +1966,21 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <WField label="Your wholesale / assignment fee">
             <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder={FEE_DEFAULT} />
           </WField>
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+          <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
             You get paid first. Your fee comes out of the deal before the seller's offer, so the number you quote already pays you.
           </div>
-          <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-500">“People do not care how much you know, until they know how much you care.”</div>
+          <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-700">“People do not care how much you know, until they know how much you care.”</div>
         </div>)}
 
         {stage === 1 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Opening</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening</div>
           <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and my partner {cs.bookedBy.trim() || "Mary"} scheduled a call for us today because you were looking to sell your property on ____. Is that right?”</Line>
           <Line>Or simply: “Hi {nm}, my name is ____ and I'm partners with {cs.bookedBy.trim() || "Mary"}. How are you doing today?”</Line>
           <Hint>Acknowledge their surroundings and mirror their energy. Slow it down — comfort first, authority second, numbers later.</Hint>
         </div>)}
 
         {stage === 2 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Rapport &amp; motivation</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Rapport &amp; motivation</div>
           <Line>“Catch me up to speed — what's going on with the house?”</Line>
           <Line>“What has you thinking about selling?”</Line>
           <Line>“How were you hoping we could help?”</Line>
@@ -1967,7 +1992,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           {/* Pick-one guidance. Reps hear three problems at once and freeze, so this names what each
               bucket actually sounds like and tells them to pick the one driving the decision. */}
           <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2.5 text-[11px] leading-snug text-slate-600">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">What these mean</div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">What these mean</div>
             <div className="mt-1.5"><b className="text-slate-800">Property distress</b> is the house itself being the problem. Repairs they cannot afford or manage, a bad tenant, code issues, a place they inherited and cannot keep up.</div>
             <div className="mt-1.5"><b className="text-slate-800">Financial hardship</b> is money pressure pushing the sale. Behind on payments, medical bills, divorce, job loss, taxes owed, a payment they can no longer carry.</div>
             <div className="mt-1.5"><b className="text-slate-800">Urgency</b> is a clock. A job transfer, a closing date on another house, a move, an estate that has to settle, or a life change that will not wait.</div>
@@ -1977,17 +2002,17 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         </div>)}
 
         {stage === 3 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Property discovery</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Property discovery</div>
           {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
               walks a legit 4th bedroom can add it without leaving the call. */}
           <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
-            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Beds and baths the record missed</div>
+            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
               County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here, then re-pull so the ARV and rent come from houses with that room count.
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra beds</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Extra beds</div>
                 <div className="mt-1 flex items-center gap-1.5">
                   <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
                   <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
@@ -1995,7 +2020,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 </div>
               </div>
               <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Extra baths</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Extra baths</div>
                 <div className="mt-1 flex items-center gap-1.5">
                   <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
                   <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
@@ -2004,7 +2029,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
             </div>
             <RepullNote info={deal.changeInfo} />
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
               If the extra room also means extra square footage, fix the sq ft up top before re-pulling.
             </div>
           </div>
@@ -2025,8 +2050,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             return (
               <div className="mt-3">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Walkthrough checklist</div>
-                  <div className="text-[10px] font-semibold text-slate-400">{logged} of {COND_ITEMS.length} logged</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Walkthrough checklist</div>
+                  <div className="text-[10px] font-semibold text-slate-600">{logged} of {COND_ITEMS.length} logged</div>
                 </div>
                 <div className="mt-1.5 space-y-1">
                   {COND_ITEMS.map(([k, label]) => {
@@ -2037,7 +2062,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                           className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
                           <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${on ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 text-transparent"}`}>✓</span>
                           <span className={`text-[11.5px] font-semibold ${on ? "text-emerald-900" : "text-slate-600"}`}>{label}</span>
-                          {on && items[k] ? <span className="ml-auto truncate text-[10.5px] text-slate-500">{items[k]}</span> : null}
+                          {on && items[k] ? <span className="ml-auto truncate text-[10.5px] text-slate-700">{items[k]}</span> : null}
                         </button>
                         {on && (
                           <div className="px-2.5 pb-2">
@@ -2050,7 +2075,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     );
                   })}
                 </div>
-                <div className="mt-1.5 text-[10.5px] leading-snug text-slate-400">
+                <div className="mt-1.5 text-[10.5px] leading-snug text-slate-600">
                   Log the age of anything they volunteer. An old roof or original HVAC is both a real repair number and the reason you can go back for more room later.
                 </div>
               </div>
@@ -2069,17 +2094,17 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
           </WField>
           {cs.conditionAuto === "yes" && cs.condition && num(deal.repairOverride) > 0 && num(deal.sqft) > 0 && (
-            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-500">
+            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-700">
               Matched to your {usd(num(deal.repairOverride))}, about ${Math.round(num(deal.repairOverride) / num(deal.sqft))}/sf on {num(deal.sqft).toLocaleString()} sq ft. Tap it once the seller confirms, or tap a different condition to swap in that estimate instead.
             </div>
           )}
           {num(deal.repairOverride) > 0 && !(num(deal.sqft) > 0) && (
-            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-500">Condition cannot match your repair number until the square footage is known. Run Auto-comp or enter sq ft.</div>
+            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-700">Condition cannot match your repair number until the square footage is known. Run Auto-comp or enter sq ft.</div>
           )}
           <WField label="Estimated repairs">
             <WText money value={deal.repairOverride} onChange={deal.setRepairOverride} placeholder={deal.repairs > 0 ? String(Math.round(deal.repairs)) : "type a number"} />
           </WField>
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+          <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
             {num(deal.repairOverride) > 0
               ? <>Using your number: <span className="font-semibold text-slate-600">{usd(num(deal.repairOverride))}</span>. Clear the box to go back to the condition estimate. This drives the MAO.</>
               : deal.repairs > 0
@@ -2095,8 +2120,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             </div>
           )}
           {!cs.condition && impliedCondition(deal.repairs, deal.sqft) && (
-            <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-slate-500">
-              <Info className="mt-px h-3 w-3 shrink-0 text-slate-400" />
+            <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-slate-700">
+              <Info className="mt-px h-3 w-3 shrink-0 text-slate-600" />
               <span>
                 {usd(deal.repairs)} on {num(deal.sqft).toLocaleString()} sq ft works out to about ${Math.round(num(deal.repairs) / num(deal.sqft))}/sf, which reads as a <b className="text-slate-700">{impliedCondition(deal.repairs, deal.sqft)} rehab</b>. The strategy scoring is using that until you tap a chip. Confirm it with the seller.
               </span>
@@ -2112,24 +2137,24 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           )}
           {deal.arv > 0 && deal.repairsKnown && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">What this does to your offer</div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">What this does to your offer</div>
               <div className="mt-1 flex items-center justify-between gap-2">
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">ARV</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">ARV</div>
                 <div className="font-mono text-sm font-bold text-slate-800">{usd(deal.arv)}</div>
               </div>
               <div className="text-slate-300">−</div>
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Repairs</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Repairs</div>
                 <div className="font-mono text-sm font-bold text-slate-800">{deal.repairs > 0 ? usd(deal.repairs) : "—"}</div>
               </div>
               <div className="text-slate-300">=</div>
               <div className="text-right">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Max offer</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Max offer</div>
                 <div className="font-mono text-sm font-bold text-emerald-700">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div>
               </div>
               </div>
-              <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+              <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
                 Repairs come straight off what you can pay, so every item on the checklist above is worth real money. Anchor at <b className="text-emerald-700">{deal.maxCash > 0 ? usd(Math.round(deal.maxCash * ANCHOR_PCT)) : "—"}</b>, never go past the max.
               </div>
             </div>
@@ -2186,7 +2211,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <WChips value={cs.hoa} onChange={(v) => upd("hoa", v)} opts={[["yes", "Yes"], ["no", "No"]]} />
             </WField>
             {typeof deal.hoaKnown === "boolean" && (
-              <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
+              <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
                 The property record says {deal.hoaKnown ? "there is an HOA" : "there is no HOA"}. Confirm it with the seller, since records lag.
               </div>
             )}
@@ -2202,7 +2227,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             {/* The hold test */}
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
               <div className="flex items-center justify-between gap-2">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Payment vs market rent</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Payment vs market rent</div>
                 {!deal.rent && (
                   <button type="button" onClick={deal.onGetRent} disabled={deal.rentLoading}
                     className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
@@ -2212,8 +2237,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
               {(() => {
                 const pc = pitiCheck(cs, deal.rent);
-                if (!deal.rent) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Pull the market rent to test whether this payment can carry the house.</div>;
-                if (!pc) return <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Market rent {usd(deal.rent)}/mo. Add their payment above to run the test.<RentBasisNote info={deal.rentInfo} /></div>;
+                if (!deal.rent) return <div className="mt-1 text-[10.5px] leading-snug text-slate-700">Pull the market rent to test whether this payment can carry the house.</div>;
+                if (!pc) return <div className="mt-1 text-[10.5px] leading-snug text-slate-700">Market rent {usd(deal.rent)}/mo. Add their payment above to run the test.<RentBasisNote info={deal.rentInfo} /></div>;
                 const pct = Math.round(pc.ratio * 100);
                 const tone = pc.verdict === "good" ? "text-emerald-700" : pc.verdict === "thin" ? "text-amber-700" : "text-red-700";
                 return (
@@ -2221,7 +2246,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     <div className="text-[12px] font-bold text-slate-800">
                       {usd(Math.round(pc.piti))} payment vs {usd(pc.rent)} rent = <span className={tone}>{pct}%</span>
                     </div>
-                    {pc.hoa > 0 && <div className="mt-0.5 text-[10.5px] text-slate-500">Includes {usd(pc.hoa)}/mo HOA dues.</div>}
+                    {pc.hoa > 0 && <div className="mt-0.5 text-[10.5px] text-slate-700">Includes {usd(pc.hoa)}/mo HOA dues.</div>}
                     <div className={`mt-0.5 text-[11px] font-semibold leading-snug ${tone}`}>
                       {pc.verdict === "good"
                         ? "Under 65%. This one can carry itself as a rental."
@@ -2231,7 +2256,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     </div>
                     {pc.missingTI && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">Taxes and insurance are not in that payment yet, so the real number is worse than this.</div>}
                     {pc.missingHOA && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">There is an HOA but the dues are not entered yet, so the real number is worse than this.</div>}
-                    {pc.unknownEscrow && <div className="mt-1 text-[10.5px] leading-snug text-slate-500">Confirm whether taxes and insurance are in that payment, or this ratio may be understated.</div>}
+                    {pc.unknownEscrow && <div className="mt-1 text-[10.5px] leading-snug text-slate-700">Confirm whether taxes and insurance are in that payment, or this ratio may be understated.</div>}
                   </div>
                 );
               })()}
@@ -2240,7 +2265,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         </div>)}
 
         {stage === 4 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Timeline</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Timeline</div>
           <Line>“How soon are you hoping to close?”</Line>
           <Line>“Is there anyone else involved in the decision?”</Line>
           <Line>“In a perfect world, what would this situation look like for you?”</Line>
@@ -2251,7 +2276,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         </div>)}
 
         {stage === 5 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Price discovery</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Price discovery</div>
           <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>
           <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
           <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
@@ -2276,7 +2301,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <WField label="What is it for?"><WText value={cs.needCashNotes} onChange={(v) => upd("needCashNotes", v)} placeholder="movers + deposit" /></WField>
           </div>
           <NeedCheck nd={readCashNeed(cs, deal.maxCash)} />
-          <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Rebuttals — tap to open</div>
+          <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-600">Rebuttals — tap to open</div>
           {REBUTTALS.map((r, i) => (
             <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
               <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">{r.t}</summary>
@@ -2286,12 +2311,12 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         </div>)}
 
         {stage === 6 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Run the numbers</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Run the numbers</div>
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">ARV</div><div className="font-mono text-sm font-bold text-slate-800">{deal.arv > 0 ? usd(deal.arv) : "—"}</div></div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Max cash</div><div className="font-mono text-sm font-bold text-slate-800">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div></div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-600">ARV</div><div className="font-mono text-sm font-bold text-slate-800">{deal.arv > 0 ? usd(deal.arv) : "—"}</div></div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-600">Max cash</div><div className="font-mono text-sm font-bold text-slate-800">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div></div>
             {/* "Gap" meant nothing to a new VA. Say which direction and against what. */}
-            <div className={`rounded-lg border p-2 ${strat.gap == null ? "border-slate-200 bg-slate-50/60" : strat.gap > deal.maxCash * CLOSE_BAND_PCT ? "border-rose-300 bg-rose-50" : strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{strat.gap == null ? "Ask vs max" : strat.gap > 0 ? "Ask over max by" : "Ask under max by"}</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? usd(Math.abs(strat.gap)) : "—"}</div></div>
+            <div className={`rounded-lg border p-2 ${strat.gap == null ? "border-slate-200 bg-slate-50/60" : strat.gap > deal.maxCash * CLOSE_BAND_PCT ? "border-rose-300 bg-rose-50" : strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-600">{strat.gap == null ? "Ask vs max" : strat.gap > 0 ? "Ask over max by" : "Ask under max by"}</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? usd(Math.abs(strat.gap)) : "—"}</div></div>
           </div>
           <NumbersPlan cs={cs} upd={upd} deal={deal} gap={strat.gap} />
           {/* No shortcuts past Strategy. Every rep walks through it so they see what fits, what does not, and why. */}
@@ -2322,8 +2347,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           }[id] || "");
           const overAsk = strat.gap != null && strat.gap > 0;
           return (<div>
-            <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Strategy</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">Tap the one you are pitching, or tap two to present options. Scored by fit, but you decide.</div>
+            <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Strategy</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-700">Tap the one you are pitching, or tap two to present options. Scored by fit, but you decide.</div>
             {/* Styled like a road warning sign so it cannot be skimmed past: yellow band, black type, triangle. */}
             <div className="mt-2 overflow-hidden rounded-lg border-2 border-amber-500 bg-amber-50 px-3 pb-2">
               <div className="-mx-3 mb-2 flex items-center gap-2 bg-amber-400 px-3 py-2" role="alert">
@@ -2335,11 +2360,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
               {deal.maxCash > 0 && (
                 <div className="mt-2 border-t border-amber-300 pt-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Open here — your anchor</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-700">Open here — your anchor</div>
                   <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</div>
-                  <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Max allowable cash offer</div>
+                  <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-700">Max allowable cash offer</div>
                   <div className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(deal.maxCash)}</div>
-                  <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+                  <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
                     Say the anchor, not the ceiling. That leaves {usd(deal.maxCash - Math.round(deal.maxCash * ANCHOR_PCT))} of room to move toward them and still keep your {usd(num(deal.wholesaleFee))} fee. Never go above the ceiling.
                     {strat.gap != null && strat.gap > 0 ? <> They want <b className="text-slate-700">{usd(strat.gap)}</b> more than this.</> : strat.gap != null ? <> Their number is already under it.</> : null}
                   </div>
@@ -2384,7 +2409,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                       {i === 0 && strat.fits && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
                       {o.warn.length > 0 && <WarnTip label={o.label} warns={o.warn} />}
                     </span>
-                    <span className={`font-mono text-[11px] font-bold ${on ? "text-emerald-700" : "text-slate-400"}`}>{o.sc}</span>
+                    <span className={`font-mono text-[11px] font-bold ${on ? "text-emerald-700" : "text-slate-600"}`}>{o.sc}</span>
                   </button>
                 );
               })}
@@ -2424,7 +2449,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">Why {o.label} scores {o.sc}</summary>
                 {o.rs.map((r, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-slate-600"><CheckCircle2 className="mt-px h-3 w-3 shrink-0 text-emerald-500" />{r}</div>)}
                 {o.warn.map((w, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-amber-700"><AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}</div>)}
-                {o.miss.map((m, k) => <div key={k} className="mt-1.5 text-[11px] leading-snug text-slate-600"><span className="font-semibold">Still to ask: {m.q}</span> <span className="text-slate-400">{m.why}</span></div>)}
+                {o.miss.map((m, k) => <div key={k} className="mt-1.5 text-[11px] leading-snug text-slate-600"><span className="font-semibold">Still to ask: {m.q}</span> <span className="text-slate-600">{m.why}</span></div>)}
               </details>
             ))}
 
@@ -2441,12 +2466,12 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <details className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
                 <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">Negotiating terms — the real number, what to trade, pushback</summary>
 
-                <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Find the real number</div>
+                <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">Find the real number</div>
                 <Line>“After the loan is paid off and everything is settled, what do you need in your pocket to move on?”</Line>
                 <Line>“What are you doing with the money?” Their answer is the real minimum.</Line>
                 <Line>“If I covered the back payments and all the closing costs, how close does that get you?”</Line>
 
-                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">What you can trade</div>
+                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">What you can trade</div>
                 <div className="mt-1 space-y-1 text-[11px] leading-snug text-slate-600">
                   <div><b className="text-slate-800">Price for terms.</b> Closer to their number in exchange for a lower rate, longer term, or later balloon.</div>
                   <div><b className="text-slate-800">Time for cash.</b> If they will wait on part of it, the cash at closing drops.</div>
@@ -2454,7 +2479,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                   <div><b className="text-slate-800">Never trade the rate.</b> On a Sub-To the existing low rate is the asset.</div>
                 </div>
 
-                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Their pushback</div>
+                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Their pushback</div>
                 <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Why leave the loan in my name?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“What your lender cares about is that the payment gets made on time. We take that over and it gets paid. What changes for you is that you are no longer responsible for the house, the repairs, the tenants, or that payment leaving your account.”</div></details>
                 <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“What if you stop paying?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“That is exactly why we put protections in writing. This closes at a title company, the payments are documented, and you get proof of every one.” Do not improvise promises. Anything beyond the agreement goes to the head of acquisitions.</div></details>
                 <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Can the bank call the loan?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">Answer honestly: most mortgages have a due on sale clause, so yes, a lender has that right. As long as the payment is current it is uncommon, and if it happened we would refinance or sell to pay it off. Never tell a seller it cannot happen.</div></details>
@@ -2469,7 +2494,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
         })()}
 
         {stage === 8 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Close it out</div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Close it out</div>
           {isLowRate(cs.rate) && (
             <div className="mb-3 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3">
               <div className="flex items-start gap-2">
@@ -2500,7 +2525,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           {/* Buyer deck for the strategy the deal ended up as. Opens that tab's deck form, so the deck is
               built from the same numbers the tab shows. */}
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Which strategy did you go with?</div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-700">Which strategy did you go with?</div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {WENT_WITH.map((o) => (
                 <button key={o.id} type="button" onClick={() => upd("wentWith", cs.wentWith === o.id ? "" : o.id)}
@@ -2573,7 +2598,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
       <div className="flex items-center justify-between border-t border-slate-100 p-2.5">
         <button type="button" disabled={!canPrev} onClick={() => setStage((v) => Math.max(0, v - 1))}
           className="flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 disabled:opacity-40 hover:bg-slate-50"><ChevronLeft className="h-3.5 w-3.5" /> Back</button>
-        <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{CALL_STAGES[stage]}</div>
+        <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-600">{CALL_STAGES[stage]}</div>
         <button type="button" disabled={!canNext} onClick={() => setStage((v) => Math.min(CALL_STAGES.length - 1, v + 1))}
           className="flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40 hover:bg-slate-700">Next <ChevronRight className="h-3.5 w-3.5" /></button>
       </div>
@@ -3341,7 +3366,7 @@ export default function App() {
               {(propLine(subjectInfo) || lastSoldLine(subjectInfo) || address) && (
                 <div className="mt-1.5 space-y-0.5">
                   {(propLine(subjectInfo) || lastSoldLine(subjectInfo)) && (
-                    <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+                    <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-700">
                       {propLine(subjectInfo) && <span>{propLine(subjectInfo)}</span>}
                       {propLine(subjectInfo) && lastSoldLine(subjectInfo) && <span className="text-slate-300">•</span>}
                       {lastSoldLine(subjectInfo) && <span className="font-medium text-slate-600">{lastSoldLine(subjectInfo)}</span>}
@@ -3455,7 +3480,7 @@ export default function App() {
                 </button>
               </div>
               {pullAt && !compLoading && (
-                <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+                <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
                   Showing the RentCast pull from <b className="text-slate-700">{fmtSavedAt(pullAt)}</b>, reloaded free. Re-pull only if this deal has gone cold or something changed.
                 </div>
               )}
@@ -3465,20 +3490,20 @@ export default function App() {
           {/* Record corrections — beds/baths the county record missed */}
           <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Record corrections</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Record corrections</span>
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-slate-500">Beds</span>
+                <span className="text-[11px] text-slate-700">Beds</span>
                 <button type="button" onClick={() => setAdjBeds((v) => v - 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">−</button>
-                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBeds !== 0 ? "text-emerald-700" : "text-slate-400"}`}>{adjBeds > 0 ? `+${adjBeds}` : adjBeds}</span>
+                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBeds !== 0 ? "text-emerald-700" : "text-slate-600"}`}>{adjBeds > 0 ? `+${adjBeds}` : adjBeds}</span>
                 <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-slate-500">Baths</span>
+                <span className="text-[11px] text-slate-700">Baths</span>
                 <button type="button" onClick={() => setAdjBaths((v) => Math.round((v - 0.5) * 2) / 2)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">−</button>
-                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBaths !== 0 ? "text-emerald-700" : "text-slate-400"}`}>{adjBaths > 0 ? `+${adjBaths}` : adjBaths}</span>
+                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBaths !== 0 ? "text-emerald-700" : "text-slate-600"}`}>{adjBaths > 0 ? `+${adjBaths}` : adjBaths}</span>
                 <button type="button" onClick={() => setAdjBaths((v) => Math.round((v + 0.5) * 2) / 2)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
               </div>
@@ -3487,11 +3512,11 @@ export default function App() {
               </span>
               {(adjBeds !== 0 || adjBaths !== 0) && (
                 <button type="button" onClick={() => { setAdjBeds(0); setAdjBaths(0); }}
-                  className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">clear</button>
+                  className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-50">clear</button>
               )}
             </div>
             <RepullNote info={changeInfo} />
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
               For beds and baths the county got wrong, or the layout after the rehab (records say 3 bd but you walked a legit 4 bd, or you are adding a bath). There is no flat dollar amount anymore. Re-pull, and the ARV and rent come from sales and rentals with that room count. If the change also means more square footage, fix the sq ft too before you re-pull.
             </div>
           </div>
@@ -3507,7 +3532,7 @@ export default function App() {
           </button>
           {subjDetailOpen && (
             subjDetailLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-[11px] font-semibold text-slate-500">
+              <div className="mt-3 flex items-center gap-2 text-[11px] font-semibold text-slate-700">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling the property record…
               </div>
             ) : subjDetail && subjDetail.error ? (
@@ -3534,7 +3559,7 @@ export default function App() {
                 <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
                   {(subjDetail.sections[subjTab] || []).map(([label, value], k) => (
                     <div key={k} className={`rounded-lg border p-2.5 ${String(value).includes("ABSENTEE") ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/50"}`}>
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
                       <div className="mt-0.5 text-xs font-semibold text-slate-800">{String(value)}</div>
                     </div>
                   ))}
@@ -3550,25 +3575,25 @@ export default function App() {
           <button type="button" onClick={() => setCompsOpen(true)}
             className="mt-4 flex w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm hover:bg-slate-50 sm:px-5">
             <span>
-              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Verify with Deal Desk comps (RentCast)</span>
-              <span className="mt-0.5 block text-[11px] leading-snug text-slate-400">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-700">Verify with Deal Desk comps (RentCast)</span>
+              <span className="mt-0.5 block text-[11px] leading-snug text-slate-600">
                 {soldSummary && soldSummary.arv > 0
                   ? <>Recorded sales say <b className="text-slate-600">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b>{num(arvOverride) > 0 && Math.abs(num(arvOverride) - (soldSummary.arv + subjAdjust)) > (soldSummary.arv + subjAdjust) * 0.1 ? <span className="text-amber-600"> — more than 10% off your number, worth a look</span> : ""}. Open to review the comps.</>
                   : "Auto-comp pulls recorded sales from RentCast to build or check an ARV. Optional if you already comped it elsewhere."}
               </span>
             </span>
-            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+            <ChevronRight className="h-4 w-4 shrink-0 text-slate-600" />
           </button>
         ) : (
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <button type="button" onClick={() => setCompsOpen(false)} className="flex items-center gap-1.5 text-left hover:opacity-70" title="Collapse the comp engine">
               <SectionTitle>Actual sold comps — recorded closings (RentCast)</SectionTitle>
-              <ChevronLeft className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <ChevronLeft className="h-3.5 w-3.5 shrink-0 text-slate-600" />
             </button>
             <div className="flex shrink-0 items-center gap-2">
               {soldLoading && (
-                <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-700">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling…
                 </span>
               )}
@@ -3607,17 +3632,17 @@ export default function App() {
                 Add
               </button>
               <button type="button" onClick={() => setSoldAdd(null)}
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-50">
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">
                 Cancel
               </button>
             </div>
           )}
-          <div className="mt-1 text-[10px] text-slate-400">
+          <div className="mt-1 text-[10px] text-slate-600">
             Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. (Different from Auto-comp above, which uses RentCast's estimate model.)
           </div>
 
-          <div className="mt-2 text-[10px] italic text-slate-400">
-            The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
+          <div className="mt-2 text-[10px] italic text-slate-600">
+            The ARV median runs on the <b className="text-slate-700">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
           </div>
           {subjectInfo?.lat != null && soldSummary && soldSummary.flagged.some((c) => c.lat != null) && (
             <>
@@ -3625,8 +3650,8 @@ export default function App() {
                 <AutoCompMap subject={soldSubject} pins={soldPins} colorOf={soldPinColor} htmlOf={soldPinHtml}
                   onToggle={(i) => { const cur = soldSummary.flagged.find((x) => x.i === i); setSoldIncluded((p) => ({ ...p, [i]: !(cur && cur.included) })); }} />
               </div>
-              <div className="mt-1.5 px-1 text-[11px] text-slate-500">
-                <span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold text-emerald-600">●</span> in the ARV · <span className="font-bold text-amber-600">●</span> flagged out · <span className="font-bold text-slate-400">●</span> out. Hover a pin for details, click it to include or exclude.
+              <div className="mt-1.5 px-1 text-[11px] text-slate-700">
+                <span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold text-emerald-600">●</span> in the ARV · <span className="font-bold text-amber-600">●</span> flagged out · <span className="font-bold text-slate-600">●</span> out. Hover a pin for details, click it to include or exclude.
               </div>
             </>
           )}
@@ -3674,9 +3699,9 @@ export default function App() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(c.salePrice)}</span>
-                          {c.distance != null && <span className="shrink-0 font-mono text-[11px] text-slate-500">{Number(c.distance).toFixed(2)} mi</span>}
+                          {c.distance != null && <span className="shrink-0 font-mono text-[11px] text-slate-700">{Number(c.distance).toFixed(2)} mi</span>}
                         </div>
-                        {c.saleDate && <div className="text-[11px] text-slate-400">sold {mediumDate(c.saleDate)}</div>}
+                        {c.saleDate && <div className="text-[11px] text-slate-600">sold {mediumDate(c.saleDate)}</div>}
                         <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-slate-700">
                           <span className="truncate">{c.address || "(address withheld)"}</span>
                           {c.address && (
@@ -3685,7 +3710,7 @@ export default function App() {
                             </a>
                           )}
                         </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">
+                        <div className="mt-0.5 text-[11px] text-slate-700">
                           {[
                             (c.beds != null || c.baths != null) ? `${c.beds ?? "?"} bd · ${c.baths ?? "?"} ba` : null,
                             `${c.sqft.toLocaleString()} sqft`,
@@ -3704,7 +3729,7 @@ export default function App() {
                           </span>
                         ))}
                         {c.benched && (
-                          <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">beyond the top {SOLID_TARGET}</span>
+                          <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">beyond the top {SOLID_TARGET}</span>
                         )}
                       </div>
                     )}
@@ -3723,13 +3748,13 @@ export default function App() {
           <SectionTitle>ARV — after repair value</SectionTitle>
 
           <div className="mt-2 rounded-xl border-2 border-slate-900 bg-slate-50 p-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Driving this deal</div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-700">Driving this deal</div>
             <div className="mt-0.5 font-mono text-3xl font-bold tabular-nums text-slate-900">{arv > 0 ? usd(arv) : "—"}</div>
             {compBasis && !num(arvOverride) && (compBasis.beds != null || compBasis.sqft) && (
-              <div className="mt-0.5 text-[11px] text-slate-500">Comps pulled for {fmtBasis(compBasis)}</div>
+              <div className="mt-0.5 text-[11px] text-slate-700">Comps pulled for {fmtBasis(compBasis)}</div>
             )}
             {!num(arvOverride) && changeInfo.compStale && <RepullNote info={changeInfo} />}
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-500">
+            <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
               {arv <= 0
                 ? "No ARV yet. Run Auto-comp up top, or type a number you comped elsewhere."
                 : num(arvOverride) > 0
@@ -3752,7 +3777,7 @@ export default function App() {
           </div>
 
           <div className="mt-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Where did this number come from?</div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Where did this number come from?</div>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {ARV_SOURCES.map(([v, l]) => (
                 <button key={v} type="button" onClick={() => setArvSource(arvSource === v ? "" : v)}
@@ -3782,7 +3807,7 @@ export default function App() {
                 className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
                 <Phone className="h-4 w-4" /> You have an ARV. Open the Offer Call.
               </button>
-              <div className="mt-1 text-center text-[10.5px] leading-snug text-slate-400">
+              <div className="mt-1 text-center text-[10.5px] leading-snug text-slate-600">
                 The Offer Call walks the script, captures what the seller tells you, and tells you which strategy to pitch.
               </div>
             </>
@@ -3809,7 +3834,7 @@ export default function App() {
                     rehabLevel === r.id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"
                   }`}>
                   <div className="text-sm font-semibold text-slate-800">{r.t}</div>
-                  <div className="text-[11px] text-slate-500">{r.s}</div>
+                  <div className="text-[11px] text-slate-700">{r.s}</div>
                 </button>
               ))}
             </div>
@@ -3823,7 +3848,7 @@ export default function App() {
                 <MoneyInput value={repairOverride} onChange={setRepairOverride} placeholder="optional" />
               </Field>
               <div className="mt-3 flex items-baseline justify-between rounded-lg bg-slate-50 px-3 py-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Estimated rehab</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Estimated rehab</span>
                 <span className="font-mono text-xl font-bold tabular-nums text-slate-800">{repairs > 0 ? usd(repairs) : "—"}</span>
               </div>
               {!repairsKnown && (
@@ -3832,7 +3857,7 @@ export default function App() {
                   <span><b>No repair number yet.</b> Pick a rehab level or type a real number. Until then there is no max offer, because an offer that assumes zero repairs is one you cannot honor.</span>
                 </div>
               )}
-              <div className="mt-1 text-[10px] text-slate-400">
+              <div className="mt-1 text-[10px] text-slate-600">
                 {num(repairOverride) > 0
                   ? "manual total — overrides the $/sf tiles"
                   : num(sqft) > 0
@@ -3846,23 +3871,23 @@ export default function App() {
             <SectionTitle>MAO % of ARV — by price band</SectionTitle>
             <div className="grid grid-cols-2 gap-3">
               <div className={`rounded-lg border px-3 py-2 ${!isOver ? "border-emerald-500 bg-emerald-50" : "border-slate-200"}`}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Under $200k</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Under $200k</div>
                 <div className="mt-1 flex items-baseline gap-1">
                   <span className="font-mono text-2xl font-bold tabular-nums text-slate-900">{underPct}</span>
-                  <span className="text-xs text-slate-500">%</span>
+                  <span className="text-xs text-slate-700">%</span>
                 </div>
                 <input type="range" min={60} max={85} step={1} value={underPct} onChange={(e) => setUnderPct(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
               </div>
               <div className={`rounded-lg border px-3 py-2 ${isOver ? "border-emerald-500 bg-emerald-50" : "border-slate-200"}`}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Over $200k</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Over $200k</div>
                 <div className="mt-1 flex items-baseline gap-1">
                   <span className="font-mono text-2xl font-bold tabular-nums text-slate-900">{overPct}</span>
-                  <span className="text-xs text-slate-500">%</span>
+                  <span className="text-xs text-slate-700">%</span>
                 </div>
                 <input type="range" min={60} max={90} step={1} value={overPct} onChange={(e) => setOverPct(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
               </div>
             </div>
-            <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+            <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
               ARV {usd(arv)} → <b>{isOver ? "Over $200k" : "Under $200k"}</b> band applies ({activePct}%). Both columns show in the Cash/MAO tab; the green one is this deal.
             </div>
           </div>
@@ -3873,7 +3898,7 @@ export default function App() {
             control bar rather than five quiet chips: a labeled container, a green active tab, and
             an underline so the selected strategy connects visually to the panel below it. */}
         <div id="deal-tabs" className="mt-6 scroll-mt-3">
-          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Pick your exit strategy</div>
+          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Pick your exit strategy</div>
           <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-100/70 p-1.5">
             {tabs.map((t) => {
               const Icon = t.Icon;
@@ -3886,7 +3911,7 @@ export default function App() {
                         ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/25 ring-2 ring-emerald-600 ring-offset-1 ring-offset-slate-100"
                         : "bg-white text-slate-600 shadow-sm hover:bg-white hover:text-slate-900 hover:shadow"
                     }`}>
-                    <Icon className={`h-4 w-4 ${on ? "" : "text-slate-400"}`} />
+                    <Icon className={`h-4 w-4 ${on ? "" : "text-slate-600"}`} />
                     <span className="whitespace-nowrap">{t.label}</span>
                   </button>
                   {/* Hover explainer. Hidden on touch screens, where there is no hover — the same
@@ -3933,7 +3958,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-slate-400">
+        <div className="mt-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-slate-600">
           Formulas use standard YLHB methodology (ARV = avg $/sf × sq ft; MAO = ARV × band % − repairs).
           Bands default to 75% under $200k / 80% over, matching your sheet. Estimates only — verify comps and underwriting before offers. Not legal or financial advice.
         </div>
@@ -3967,9 +3992,9 @@ function InstructionsButton() {
           <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-1 flex items-center justify-between">
               <h2 className="text-lg font-bold text-slate-800">How to use the YLHB RE Calculator</h2>
-              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+              <button onClick={() => setOpen(false)} className="text-slate-600 hover:text-slate-600"><X className="h-5 w-5" /></button>
             </div>
-            <p className="mb-4 text-[13px] text-slate-500">Address in → deal out. Here's the flow, start to finish.</p>
+            <p className="mb-4 text-[13px] text-slate-700">Address in → deal out. Here's the flow, start to finish.</p>
             <ol className="space-y-3">
               {steps.map((s, i) => (
                 <li key={i} className="flex gap-3">
@@ -3981,7 +4006,7 @@ function InstructionsButton() {
                 </li>
               ))}
             </ol>
-            <div className="mt-5 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+            <div className="mt-5 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
               Tip: numbers are estimates to get you to a fast yes/no. Always verify ARV, rent, condition, and loan terms before you commit a dollar.
             </div>
             <button onClick={() => setOpen(false)} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700">Got it</button>
@@ -4523,9 +4548,9 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
 
   const req = (k, label, money) => (
     <div>
-      <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label} <span className="text-rose-500">*</span></label>
+      <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label} <span className="text-rose-500">*</span></label>
       <div className={`mt-1 flex items-center rounded-lg border bg-white px-3 py-2 ${!String(f[k]).trim() ? "border-rose-300" : "border-slate-200"}`}>
-        {money && <span className="mr-1 text-slate-400">$</span>}
+        {money && <span className="mr-1 text-slate-600">$</span>}
         <input value={f[k]} onChange={set(k)} className="w-full text-sm outline-none" placeholder={label} />
       </div>
     </div>
@@ -4543,33 +4568,33 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
           <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-1 flex items-center justify-between">
               <h3 className="text-base font-bold text-slate-800">{label || `Buyer deck — ${deal.type}`}</h3>
-              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+              <button onClick={() => setOpen(false)} className="text-slate-600 hover:text-slate-600"><X className="h-5 w-5" /></button>
             </div>
-            <p className="mb-4 text-[12px] text-slate-500">Confirm the details for the slides. Fields marked <span className="text-rose-500">*</span> are required.</p>
+            <p className="mb-4 text-[12px] text-slate-700">Confirm the details for the slides. Fields marked <span className="text-rose-500">*</span> are required.</p>
             <div className="space-y-3">
               {req("address", "Property address")}
               <div className="grid grid-cols-2 gap-3">
                 {req("contract", `${priceLabel}${num(common.fee) > 0 ? " (incl. fee)" : ""}`, true)}
                 {req("rent", "Monthly rent", true)}
               </div>
-              {num(common.fee) > 0 && <div className="-mt-1 text-[10px] text-slate-400">{priceLabel} includes your {usd(num(common.fee))} wholesale fee — what the buyer pays. Edit if needed.</div>}
+              {num(common.fee) > 0 && <div className="-mt-1 text-[10px] text-slate-600">{priceLabel} includes your {usd(num(common.fee))} wholesale fee — what the buyer pays. Edit if needed.</div>}
               <div className="border-t border-slate-100 pt-3">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Property photo for the cover (optional)</div>
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Property photo for the cover (optional)</div>
                 {photo ? (
                   <div className="flex items-center gap-3">
                     <img src={photo} alt="cover" className="h-16 w-24 rounded-md object-cover" />
                     <button onClick={() => setPhoto(null)} className="text-[12px] font-semibold text-rose-500 hover:underline">Remove</button>
                   </div>
                 ) : (
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-3 text-[12px] font-semibold text-slate-500 hover:bg-slate-50">
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-3 text-[12px] font-semibold text-slate-700 hover:bg-slate-50">
                     <FileDown className="h-4 w-4" /> Choose a photo (JPG/PNG)
                     <input type="file" accept="image/*" onChange={onPhoto} className="hidden" />
                   </label>
                 )}
-                <div className="mt-1 text-[10px] text-slate-400">No photo? The cover falls back to a clean branded YLHB title card with the address.</div>
+                <div className="mt-1 text-[10px] text-slate-600">No photo? The cover falls back to a clean branded YLHB title card with the address.</div>
               </div>
               <div className="border-t border-slate-100 pt-3">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Contact for the CTA slide (optional)</div>
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Contact for the CTA slide (optional)</div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <input value={f.name} onChange={set("name")} placeholder="Name" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
                   <input value={f.phone} onChange={set("phone")} placeholder="Phone" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
@@ -4650,10 +4675,10 @@ function TabEducation({ id }) {
       <p className="text-[13px] leading-relaxed text-slate-600">{e.what}</p>
       <p className="mt-2 text-[13px] leading-relaxed text-slate-600"><b className="font-semibold text-slate-700">How it works:</b> {e.how}</p>
       {e.analogy && (
-        <p className="mt-2 rounded-lg bg-white px-3 py-2 text-[12px] italic leading-relaxed text-slate-500">💡 {e.analogy}</p>
+        <p className="mt-2 rounded-lg bg-white px-3 py-2 text-[12px] italic leading-relaxed text-slate-700">💡 {e.analogy}</p>
       )}
       <div className="mt-3">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Learn more — free Pace Morby videos</div>
+        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Learn more — free Pace Morby videos</div>
         <div className="mt-1.5 flex flex-wrap gap-2">
           {e.videos.map((v, k) => (
             <a key={k} href={ytSearch(v.q)} target="_blank" rel="noopener noreferrer"
@@ -4662,11 +4687,11 @@ function TabEducation({ id }) {
             </a>
           ))}
           <a href={PACE_CHANNEL} target="_blank" rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-50">
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">
             Pace Morby's channel <ExternalLink className="h-2.5 w-2.5 text-slate-300" />
           </a>
         </div>
-        <div className="mt-1.5 text-[10px] text-slate-400">Links open a YouTube search of Pace Morby's content on the topic — always current, never a dead link.</div>
+        <div className="mt-1.5 text-[10px] text-slate-600">Links open a YouTube search of Pace Morby's content on the topic — always current, never a dead link.</div>
       </div>
     </div>
   );
@@ -4710,7 +4735,7 @@ function CashTab(props) {
           <SectionTitle>Max Allowable Offer — both bands</SectionTitle>
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-[11px] uppercase tracking-wide text-slate-400">
+              <tr className="text-[11px] uppercase tracking-wide text-slate-600">
                 <th className="py-1 text-left font-semibold"></th>
                 <th className={`py-1 text-right font-semibold ${!isOver ? "text-emerald-600" : ""}`}>Under $200k ({underPct}%)</th>
                 <th className={`py-1 text-right font-semibold ${isOver ? "text-emerald-600" : ""}`}>Over $200k ({overPct}%)</th>
@@ -4722,7 +4747,7 @@ function CashTab(props) {
               <CRow label="= Wholesale price" a={usd(ruleMaoUnder)} b={usd(ruleMaoOver)} muted />
               <CRow label="− Your fee" a={usd(num(wholesaleFee))} b={usd(num(wholesaleFee))} />
               <tr className="border-t-2 border-slate-200">
-                <td className="py-2 font-sans text-[11px] font-bold uppercase tracking-wide text-slate-500">MAO (Max Allowable Offer)</td>
+                <td className="py-2 font-sans text-[11px] font-bold uppercase tracking-wide text-slate-700">MAO (Max Allowable Offer)</td>
                 <td className={`py-2 text-right text-base font-bold ${!isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoUnder)}</td>
                 <td className={`py-2 text-right text-base font-bold ${isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoOver)}</td>
               </tr>
@@ -4757,9 +4782,9 @@ function CashTab(props) {
 }
 const CRow = ({ label, a, b, muted }) => (
   <tr className="border-t border-slate-100">
-    <td className="py-1.5 font-sans text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</td>
-    <td className={`py-1.5 text-right ${muted ? "text-slate-500" : "text-slate-900"}`}>{a}</td>
-    <td className={`py-1.5 text-right ${muted ? "text-slate-500" : "text-slate-900"}`}>{b}</td>
+    <td className="py-1.5 font-sans text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}</td>
+    <td className={`py-1.5 text-right ${muted ? "text-slate-700" : "text-slate-900"}`}>{a}</td>
+    <td className={`py-1.5 text-right ${muted ? "text-slate-700" : "text-slate-900"}`}>{b}</td>
   </tr>
 );
 
@@ -4822,9 +4847,9 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-1 flex items-center gap-2">
         <RefreshCw className="h-4 w-4 text-emerald-500" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">BRRRR / DSCR — if you (or your buyer) hold it as a rental</h3>
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">BRRRR / DSCR — if you (or your buyer) hold it as a rental</h3>
       </div>
-      <p className="mb-3 text-[11px] text-slate-400">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
+      <p className="mb-3 text-[11px] text-slate-600">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
@@ -4842,8 +4867,8 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
             </button>
           </div>
           {ask <= 0
-            ? <div className="mt-1 text-[10px] italic text-slate-400">Set a <b className="text-slate-500">Seller asking price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
-            : <div className="mt-1 text-[10px] text-slate-400">Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-500">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-500">Keeping it</b> → just the price.</div>}
+            ? <div className="mt-1 text-[10px] italic text-slate-600">Set a <b className="text-slate-700">Seller asking price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
+            : <div className="mt-1 text-[10px] text-slate-600">Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-700">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-700">Keeping it</b> → just the price.</div>}
         </Field>
         <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Pulled automatically with Auto-comp — type here to use your own number instead.">
@@ -4851,12 +4876,12 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
             placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : (rentLoading ? "Pulling…" : "Type the rent")} />
           {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
           {num(rentDefault) > 0 && !rentLoading && <RentBasisNote info={rentInfo} />}
-          {num(rentDefault) <= 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-400">Run Auto-comp up top to pull this automatically, or type it.</div>}
+          {num(rentDefault) <= 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-600">Run Auto-comp up top to pull this automatically, or type it.</div>}
         </Field>
         <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator. Auto-estimated from the ARV using U.S. average rates (~0.9% tax + ~0.6% insurance per year), excluding the outlier states CA, NY & FL. Type the actual to override.">
           <MoneyInput value={taxIns} onChange={setTaxIns} placeholder={estTaxIns > 0 ? String(Math.round(estTaxIns)) : "e.g. 300"} />
           {estTaxIns > 0 && (
-            <div className="mt-1 text-[10px] text-slate-400">
+            <div className="mt-1 text-[10px] text-slate-600">
               {num(taxIns) <= 0 ? <>Auto-estimate ~${Math.round(estTax).toLocaleString()} tax + ~${Math.round(estIns).toLocaleString()} insurance/mo. </> : null}
               <span className="italic">U.S. average rates, excludes CA/NY/FL — verify the actual for this property.</span>
             </div>
@@ -4894,30 +4919,30 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
           <Stat label="Total ROI (yr 1)" value={buy <= 0 ? "—" : totalRoi === null ? "∞ (all cash out)" : (cashLeftIn > 0 && totalReturn1 !== 0 ? totalRoi.toFixed(1) + "%" : "—")} tone={buy > 0 && (totalRoi === null || (totalRoi && totalRoi > 12)) ? "good" : "default"} sub="cash flow + paydown ÷ cash in" />
           <Stat label="Annual cash flow" value={pitia > 0 && rnt > 0 ? usd(annualCF) : "—"} tone={annualCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`${usd(trueCF)}/mo × 12`} />
         </div>
-        <div className="mt-2 text-[10px] text-slate-400">
+        <div className="mt-2 text-[10px] text-slate-600">
           Cap rate is the unlevered yield (NOI ÷ ARV). Total ROI (yr 1) adds your first-year loan paydown to cash flow{buy > 0 && equityCaptured > 0 ? <>, on top of the <b className="text-emerald-700">{usd(equityCaptured)}</b> of equity you captured up front</> : null} — your real return on the cash left in the deal.
         </div>
       </div>
 
-      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${dTone === "good" ? "bg-emerald-50 text-emerald-700" : dTone === "bad" ? "bg-rose-50 text-rose-700" : dTone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
+      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${dTone === "good" ? "bg-emerald-50 text-emerald-700" : dTone === "bad" ? "bg-rose-50 text-rose-700" : dTone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-700"}`}>
         <b>DSCR {dscr > 0 ? dscr.toFixed(2) : "—"}:</b> {dNote}
       </div>
-      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">{brrrrLine}</div>
-      <div className="mt-2 text-[10px] text-slate-400">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
+      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">{brrrrLine}</div>
+      <div className="mt-2 text-[10px] text-slate-600">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
 
       {deckCommon && flipDeck && flipDeck.assumptions && (
         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Buyer deck assumptions</div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Buyer deck assumptions</div>
           <div className="mt-2 grid gap-2 sm:grid-cols-3">
             <Field label="Selling costs" hint="% of ARV"><PlainInput value={flipDeck.assumptions.sellingPct} onChange={flipDeck.assumptions.setSellingPct} suffix="%" /></Field>
             <Field label="Carry per month" hint="interest, tax, ins, utils"><MoneyInput value={flipDeck.assumptions.carryPerMonth} onChange={flipDeck.assumptions.setCarryPerMonth} placeholder="1200" /></Field>
             <Field label="Rehab pace" hint="work per month"><MoneyInput value={flipDeck.assumptions.rehabPerMonth} onChange={flipDeck.assumptions.setRehabPerMonth} placeholder="20000" /></Field>
           </div>
           <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 rounded-md bg-white px-3 py-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Holding cost</span>
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Holding cost</span>
             <span className="font-mono text-lg font-bold tabular-nums text-slate-800">{flipDeck.holdingCost > 0 ? usd(flipDeck.holdingCost) : "—"}</span>
           </div>
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+          <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
             {num(flipDeck.assumptions.holdingOverride) > 0
               ? <>Your number, overriding the calculation. Clear it to go back.</>
               : flipDeck.holdMonths > 0
@@ -5002,7 +5027,7 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
               });
             }}
           />
-          <div className="mt-1 text-center text-[10px] text-slate-400">One deck, both exits — your buyer sees the flip play and the BRRRR play side by side.</div>
+          <div className="mt-1 text-center text-[10px] text-slate-600">One deck, both exits — your buyer sees the flip play and the BRRRR play side by side.</div>
         </div>
       )}
     </div>
@@ -5048,10 +5073,10 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-1 flex items-center gap-2">
-        <RefreshCw className="h-4 w-4 text-slate-400" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">If you wholesaled this creative contract</h3>
+        <RefreshCw className="h-4 w-4 text-slate-600" />
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">If you wholesaled this creative contract</h3>
       </div>
-      <p className="mb-3 text-[11px] text-slate-400">Assign this deal to another investor for a fee — they inherit the terms, you collect the spread. Value = equity + what the below-market loan is worth.</p>
+      <p className="mb-3 text-[11px] text-slate-600">Assign this deal to another investor for a fee — they inherit the terms, you collect the spread. Value = equity + what the below-market loan is worth.</p>
       <div className="mb-3">
         <Field
           label="Your assignment fee"
@@ -5067,7 +5092,7 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
         <Stat label="Total deal value" value={haveDeal ? usd(totalValue) : "—"} tone={totalValue > 0 ? "good" : "default"} big sub="equity + financing" />
       </div>
       {haveDeal && (
-        <div className="mt-2 text-[10px] text-slate-400">"Basis" is your cost to acquire ({costLabel.toLowerCase()}) — <b>not</b> your fee. Your fee comes out of the equity, leaving the buyer the rest.</div>
+        <div className="mt-2 text-[10px] text-slate-600">"Basis" is your cost to acquire ({costLabel.toLowerCase()}) — <b>not</b> your fee. Your fee comes out of the equity, leaving the buyer the rest.</div>
       )}
       {haveDeal && fee > 0 && (
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -5083,13 +5108,13 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
             <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub="annual cash flow ÷ cash in" />
             <Stat label="Buyer ROI — year 1" value={buyerRoi === null ? "—" : pct(buyerRoi)} tone={buyerRoi !== null && buyerRoi > 0 ? "good" : "warn"} sub="cash flow + equity stepped into" />
           </div>
-          <div className="mt-2 text-[10px] text-slate-400">Buyer's total cash in is everything they sink in — cash to close + rehab (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that full amount; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
+          <div className="mt-2 text-[10px] text-slate-600">Buyer's total cash in is everything they sink in — cash to close + rehab (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that full amount; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
         </div>
       )}
-      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500"}`}>
+      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-700"}`}>
         {note}
       </div>
-      <div className="mt-2 text-[10px] text-slate-400">Financing value is "soft" — realized over time as lower payments/higher cash flow, not cash in hand like equity. Adjust the rate sliders in Rate Savings below to see it move.</div>
+      <div className="mt-2 text-[10px] text-slate-600">Financing value is "soft" — realized over time as lower payments/higher cash flow, not cash in hand like equity. Adjust the rate sliders in Rate Savings below to see it move.</div>
     </div>
   );
 }
@@ -5121,7 +5146,7 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center gap-2">
         <TrendingDown className="h-4 w-4 text-emerald-500" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">Rate + seasoning savings — what taking over this loan is worth</h3>
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">Rate + seasoning savings — what taking over this loan is worth</h3>
       </div>
       {P > 0 ? (
         <div className="grid gap-5 md:grid-cols-2">
@@ -5131,33 +5156,33 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
             <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Loan's rate</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-700">Loan's rate</div>
                   <PlainInput value={rateStr} onChange={(v) => { setRateStr(v); const n = parseFloat(v); if (!isNaN(n)) setRate(n); }} suffix="%" />
                 </div>
                 <div>
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Matures (year)</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-700">Matures (year)</div>
                   <PlainInput value={yearStr} onChange={(v) => { setYearStr(v); const yr = parseInt(v, 10); if (yr > currentYear) setTerm(Math.min(40, yr - currentYear)); }} />
                 </div>
               </div>
-              <div className="mt-1.5 text-[10px] text-slate-400">Type the loan's rate and the year it pays off — or drag the sliders below. They stay in sync, and the savings update instantly.</div>
+              <div className="mt-1.5 text-[10px] text-slate-600">Type the loan's rate and the year it pays off — or drag the sliders below. They stay in sync, and the savings update instantly.</div>
             </div>
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Seller's rate — you inherit</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Seller's rate — you inherit</span>
                 <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{rate.toFixed(2)}%</span>
               </div>
               <input type="range" min={0} max={12} step={0.125} value={rate} onChange={(e) => { const v = parseFloat(e.target.value); setRate(v); setRateStr(v.toFixed(2)); }} className="mt-1 w-full accent-emerald-600" />
             </div>
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Original loan term</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Original loan term</span>
                 <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{effOrig} yrs</span>
               </div>
               <input type="range" min={5} max={40} step={1} value={origTerm} onChange={(e) => setOrigTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
             </div>
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Years left on the loan</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Years left on the loan</span>
                 <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{term} yrs</span>
               </div>
               <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => { const v = parseInt(e.target.value); setTerm(v); setYearStr(String(currentYear + v)); }} className="mt-1 w-full accent-emerald-600" />
@@ -5165,12 +5190,12 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
             </div>
             <div>
               <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">New-loan rate today — compare to</span>
-                <span className="font-mono text-sm font-bold tabular-nums text-slate-500">{mkt.toFixed(2)}%</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">New-loan rate today — compare to</span>
+                <span className="font-mono text-sm font-bold tabular-nums text-slate-700">{mkt.toFixed(2)}%</span>
               </div>
               <input type="range" min={0} max={14} step={0.125} value={mkt} onChange={(e) => setMkt(parseFloat(e.target.value))} className="mt-1 w-full accent-slate-400" />
             </div>
-            <div className="text-[11px] text-slate-400">Loan balance: <span className="font-mono text-slate-600">{usd(P)}</span> — pulled from this deal.</div>
+            <div className="text-[11px] text-slate-600">Loan balance: <span className="font-mono text-slate-600">{usd(P)}</span> — pulled from this deal.</div>
           </div>
           {/* savings */}
           <div className="space-y-3">
@@ -5178,25 +5203,25 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
               <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What this loan saves — held to maturity</div>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <div className="rounded-lg bg-white/70 px-2.5 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Rate savings</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-700">Rate savings</div>
                   <div className="font-mono text-lg font-bold tabular-nums text-emerald-700">{usd(rateSaved)}</div>
-                  <div className="text-[10px] leading-tight text-slate-400">{rate.toFixed(2)}% vs {mkt.toFixed(2)}%, same {term} yrs left</div>
+                  <div className="text-[10px] leading-tight text-slate-600">{rate.toFixed(2)}% vs {mkt.toFixed(2)}%, same {term} yrs left</div>
                 </div>
                 <div className="rounded-lg bg-white/70 px-2.5 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Seasoning savings</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-700">Seasoning savings</div>
                   <div className="font-mono text-lg font-bold tabular-nums text-emerald-700">{usd(seasoningSaved)}</div>
-                  <div className="text-[10px] leading-tight text-slate-400">{term} yrs left vs a fresh {effOrig}-yr loan</div>
+                  <div className="text-[10px] leading-tight text-slate-600">{term} yrs left vs a fresh {effOrig}-yr loan</div>
                 </div>
               </div>
               <div className="mt-2 flex items-center justify-between rounded-lg bg-emerald-600 px-3 py-2 text-white">
                 <span className="text-[11px] font-bold uppercase tracking-wide">Total interest saved</span>
                 <span className="font-mono text-2xl font-extrabold tabular-nums">{usd(totalSaved)}</span>
               </div>
-              <div className="mt-1 text-[10px] leading-tight text-slate-400">Rate savings <b>+</b> seasoning savings. Realized in full only if the loan is held to payoff — sell or refinance early and you capture the part up to that point.</div>
+              <div className="mt-1 text-[10px] leading-tight text-slate-600">Rate savings <b>+</b> seasoning savings. Realized in full only if the loan is held to payoff — sell or refinance early and you capture the part up to that point.</div>
             </div>
             {/* side-by-side: take this loan vs new loan */}
             <div className="overflow-hidden rounded-xl border border-slate-200 text-[12px]">
-              <div className="grid grid-cols-3 bg-slate-50 font-semibold text-slate-500">
+              <div className="grid grid-cols-3 bg-slate-50 font-semibold text-slate-700">
                 <div className="px-3 py-1.5"></div>
                 <div className="px-2 py-1.5 text-center text-emerald-700">Take this loan</div>
                 <div className="px-2 py-1.5 text-center">Get a new loan</div>
@@ -5208,14 +5233,14 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
                 ["Total interest", usd(intSubTo), usd(intNew)],
               ].map((r, i, arr) => (
                 <div key={r[0]} className={`grid grid-cols-3 ${i < arr.length - 1 ? "border-b border-slate-100" : ""}`}>
-                  <div className="px-3 py-1.5 text-slate-500">{r[0]}</div>
+                  <div className="px-3 py-1.5 text-slate-700">{r[0]}</div>
                   <div className="px-2 py-1.5 text-center font-semibold tabular-nums text-emerald-700">{r[1]}</div>
                   <div className="px-2 py-1.5 text-center tabular-nums text-slate-700">{r[2]}</div>
                 </div>
               ))}
             </div>
             {haveRealPmt && (
-              <div className="text-[10px] text-slate-400">Payment row uses the <b>real payment from this deal</b> — fixed, it won't move with the sliders. The new-loan figure is a fresh-rate loan carrying the same taxes &amp; insurance; set "Years left" to the loan's actual remaining term for the most accurate new-loan number.</div>
+              <div className="text-[10px] text-slate-600">Payment row uses the <b>real payment from this deal</b> — fixed, it won't move with the sliders. The new-loan figure is a fresh-rate loan carrying the same taxes &amp; insurance; set "Years left" to the loan's actual remaining term for the most accurate new-loan number.</div>
             )}
             <div className="grid grid-cols-2 gap-3">
               <Stat label="Monthly payment relief" value={usd(haveRealPmt ? Math.max(0, newPmtFull - dealPayment) : Math.max(0, payNew - payDeal))} tone="good" sub="lighter payment vs a new loan" />
@@ -5229,7 +5254,7 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
           </div>
         </div>
       ) : (
-        <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+        <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
           Enter the loan amount in this deal above, and the sliders will show what the low rate saves you over the life of the loan.
         </div>
       )}
@@ -5256,27 +5281,27 @@ const CashDiscipline = ({ cashIn, cashFlow, equity }) => {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <SectionTitle>Cash discipline</SectionTitle>
-      <div className="mt-1 text-[11px] leading-snug text-slate-500">
+      <div className="mt-1 text-[11px] leading-snug text-slate-700">
         Two checks on the money you bring to the table. Both are house rules, not bank rules.
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Payback</div>
+          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-600">Payback</div>
           <div className={`mt-0.5 font-mono text-lg font-bold ${col[paybackTone]}`}>
             {months == null ? "never" : `${months.toFixed(1)} mo`}
           </div>
-          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
             {months == null
               ? "No positive cash flow, so the cash you bring never comes back out of this property."
               : `${usd(Math.round(cashIn))} in, ${usd(Math.round(cashFlow))}/mo out. Target is under ${PAYBACK_GOOD} months.`}
           </div>
         </div>
         <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Cash in vs equity captured</div>
+          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-600">Cash in vs equity captured</div>
           <div className={`mt-0.5 font-mono text-lg font-bold ${col[shareTone]}`}>
             {share == null ? "no equity" : `${Math.round(share * 100)}%`}
           </div>
-          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
+          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
             {share == null
               ? "No equity captured, so every dollar in is at risk with nothing underneath it."
               : `Spending ${usd(Math.round(cashIn))} to capture ${usd(Math.round(equity))}. Stay under half.`}
@@ -5628,7 +5653,7 @@ function NovationTab(props) {
             ))}
             <div className={`flex items-center justify-between px-4 py-2.5 ${asIs > 0 && mao > 0 ? "bg-emerald-50" : asIs > 0 ? "bg-rose-50" : "bg-slate-50"}`}>
               <span className="text-sm font-bold text-slate-900">Novation Max Allowable Offer</span>
-              <span className={`font-mono text-lg font-bold ${asIs > 0 && mao > 0 ? "text-emerald-700" : asIs > 0 ? "text-rose-700" : "text-slate-400"}`}>{asIs > 0 ? usd(mao) : "—"}</span>
+              <span className={`font-mono text-lg font-bold ${asIs > 0 && mao > 0 ? "text-emerald-700" : asIs > 0 ? "text-rose-700" : "text-slate-600"}`}>{asIs > 0 ? usd(mao) : "—"}</span>
             </div>
           </div>
         </div>
