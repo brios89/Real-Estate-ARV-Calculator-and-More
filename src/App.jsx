@@ -1260,6 +1260,72 @@ const RentBasisNote = ({ info, compact = false }) => {
   );
 };
 
+// Market rent card, laid out like RentCast's own: the estimate, $/sq ft and $/bedroom, and the low to
+// high range. A typed rent shows as a marker on the range so the team can see where their number sits.
+const RentCard = ({ est, low, high, info, typed, hasAddress }) => {
+  if (!hasAddress) return null;
+  const b = (info && info.basis) || (info && info.want) || {};
+  const sq = num(b.sqft), beds = num(b.beds);
+  const perSq = (v) => (sq > 0 && v > 0 ? `$${(v / sq).toFixed(2)}` : null);
+  const perBed = beds > 0 && est > 0 ? `$${(est / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+  const hasRange = low > 0 && high > low;
+  const pos = (v) => Math.min(100, Math.max(0, ((v - low) / (high - low)) * 100));
+  return (
+    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex justify-center">
+        <span className="rounded-full bg-cyan-50 px-3 py-1 text-[12px] font-semibold text-cyan-700">Estimated Monthly Rent</span>
+      </div>
+      {est > 0 ? (<>
+        <div className="mt-2 text-center font-mono text-4xl font-bold text-slate-900">{usd(est)}</div>
+        {(perSq(est) || perBed) && (
+          <div className="mt-2 flex items-stretch justify-center gap-4 text-center">
+            {perSq(est) && <div><div className="text-sm font-bold text-slate-800">{perSq(est)}</div><div className="text-[11px] text-slate-500">per sq ft</div></div>}
+            {perSq(est) && perBed && <div className="w-px bg-slate-200" />}
+            {perBed && <div><div className="text-sm font-bold text-slate-800">{perBed}</div><div className="text-[11px] text-slate-500">per bedroom</div></div>}
+          </div>
+        )}
+        {hasRange ? (
+          <div className="mt-4">
+            <div className="flex justify-between text-[11px] text-slate-500"><span>Low estimate</span><span>High estimate</span></div>
+            <div className="relative mt-1 h-3 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500">
+              {est >= low && est <= high && <div className="absolute top-1/2 h-4 w-1 -translate-y-1/2 rounded bg-slate-900" style={{ left: `calc(${pos(est)}% - 2px)` }} title={`RentCast ${usd(est)}`} />}
+              {typed > 0 && (
+                <div className="absolute -top-6 -translate-x-1/2 whitespace-nowrap rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" style={{ left: `${pos(typed)}%` }}>
+                  Yours {usd(typed)}
+                </div>
+              )}
+            </div>
+            <div className="mt-1.5 flex justify-between">
+              <div><div className="text-sm font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[11px] text-slate-500">{perSq(low)} /sq ft</div>}</div>
+              <div className="text-right"><div className="text-sm font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[11px] text-slate-500">{perSq(high)} /sq ft</div>}</div>
+            </div>
+            {typed > 0 && (typed < low || typed > high) && (
+              <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Your typed rent of {usd(typed)} is {typed > high ? "above" : "below"} RentCast's whole range. Make sure you have a comp that supports it.</div>
+            )}
+          </div>
+        ) : (
+          <div className="mt-3 text-center text-[11px] text-slate-500">Re-pull the rent to see RentCast's low and high range.</div>
+        )}
+        <div className="mt-3 text-center text-[11px] leading-snug text-slate-600">
+          {info && info.basis ? <>For {fmtBasis(info.basis)}</> : <>For the county record's beds and baths</>}
+          {info && info.basis && info.basis.comps ? <> · {info.basis.comps} comps {info.basis.search || ""}</> : null}
+        </div>
+        <RentBasisNote info={info} compact />
+      </>) : (
+        <div className="mt-3 text-center">
+          <div className="text-[12px] text-slate-600">No rent pulled for this house yet.</div>
+          {info && (
+            <button type="button" onClick={info.onRepull} disabled={info.loading}
+              className="mt-2 rounded-full bg-emerald-600 px-4 py-2 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
+              {info.loading ? "Pulling…" : "Get market rent (1 RentCast credit)"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const NeedCheck = ({ nd }) => {
   if (!nd) return null;
   const box = (tone, children) => (
@@ -2421,6 +2487,7 @@ export default function App() {
         beds: data.basis && data.basis.beds != null ? Number(data.basis.beds) : (b.beds ?? null),
         baths: data.basis && data.basis.baths != null ? Number(data.basis.baths) : (b.baths ?? null),
         sqft: data.basis && data.basis.sqft ? Number(data.basis.sqft) : (b.sqft || null),
+        comps: data.comps ?? null, search: data.search || null,
       } : null);
       setRentLow(data.rentLow || null);
       setRentHigh(data.rentHigh || null);
@@ -2693,6 +2760,7 @@ export default function App() {
       soldIncluded, manualSold, mlsOnly, tabs,
       fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
       rentBasis,
+      rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst } : null,
     };
     const blank = !tabs && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
@@ -2724,7 +2792,7 @@ export default function App() {
     setSubjDetail(null); setSubjDetailOpen(false);
     setSubjectInfo(null); setOwnerNames(null);
     setSoldData(null); setSoldIncluded({}); setManualSold([]); setCompsOpen(false);
-    setRentEst(null); setRentSaved(null); setRentBasis(null);
+    setRentEst(null); setRentSaved(null); setRentBasis(null); setRentLow(null); setRentHigh(null);
     setSqft(""); setArvSource("");
     setCompMsg(null); setSoldMsg(null);
     setArvOverride(""); setRepairOverride("");
@@ -2764,6 +2832,10 @@ export default function App() {
       setWholesaleFee(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
       if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
       setRentBasis(rec.desk && rec.desk.rentBasis ? rec.desk.rentBasis : null);
+      const rr = rec.desk && rec.desk.rentRange;
+      setRentLow(rr && rr.low ? num(rr.low) : null); setRentHigh(rr && rr.high ? num(rr.high) : null);
+      // The RentCast estimate itself, separate from a typed rent, so the card shows what RentCast said.
+      if (rr && num(rr.est) > 0) setRentSaved(num(rr.est));
       const dk = rec.desk || {};
       setArvOverride(dk.arvOverride != null ? String(dk.arvOverride) : "");
       setArvSource(dk.arvSource || "");
@@ -2854,7 +2926,7 @@ export default function App() {
     }, 1200);
     syncTimer.current = { key: saveKey, id: timerId };
   }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis]);
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh]);
 
   // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
   // $40 heavy, the same split the scoring uses). Marked as set by the number, so the strategy engine
@@ -3388,6 +3460,9 @@ export default function App() {
             </>
           )}
         </div>
+
+        <RentCard est={rentEst || rentSaved || 0} low={rentLow} high={rentHigh} info={rentInfo}
+          typed={num(rentOverride)} hasAddress={!!address.trim()} />
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
