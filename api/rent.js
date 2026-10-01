@@ -87,6 +87,19 @@ export default async function handler(req, res) {
       rentHigh: data.rentRangeHigh ? Math.round(Number(data.rentRangeHigh)) : null,
       subjectAddress: data.subjectProperty?.formattedAddress || address,
       comps: Array.isArray(data.comparables) ? data.comparables.length : null,
+      // The rental comps themselves, for the map and list under the rent card. Same response, no extra credit.
+      compList: Array.isArray(data.comparables) ? data.comparables.slice(0, 25).map((c) => ({
+        address: c.formattedAddress || c.addressLine1 || "",
+        lat: c.latitude ?? null, lng: c.longitude ?? null,
+        rent: c.price != null ? Math.round(Number(c.price)) : null,
+        beds: c.bedrooms ?? null, baths: c.bathrooms ?? null, sqft: c.squareFootage ?? null,
+        type: c.propertyType || null, status: c.status || null,
+        distance: c.distance != null ? Math.round(Number(c.distance) * 100) / 100 : null,
+        daysOld: c.daysOld ?? null,
+        match: c.correlation != null ? Math.round(Number(c.correlation) * 100) : null,
+      })) : [],
+      subjectLat: data.subjectProperty?.latitude ?? null,
+      subjectLng: data.subjectProperty?.longitude ?? null,
       search: used,
       // What the estimate was actually priced for: RentCast's resolved subject, falling back to what we sent.
       basis: {

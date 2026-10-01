@@ -1,3 +1,6 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Fallback rent map (Leaflet + OpenStreetMap) styled to read like the gray Google map. */
+.rent-map-fallback .leaflet-tile-pane { filter: grayscale(1) contrast(0.92) brightness(1.06); }

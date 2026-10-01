@@ -362,7 +362,7 @@ const SectionTitle = ({ children }) => (
 // Interactive comp map (Leaflet, loaded from CDN in index.html). Subject = red ★; comps = numbered pins:
 // emerald = in the ARV, amber = flagged out, slate = out for other reasons. Clicking a pin toggles it
 // in/out of that section's ARV — same effect as the include/exclude buttons on the cards.
-const CompMap = ({ subject, pins, onToggle }) => {
+const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, teardrop = false, tall = false }) => {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
   const [ready, setReady] = useState(false);
@@ -392,22 +392,26 @@ const CompMap = ({ subject, pins, onToggle }) => {
       className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
       html: `<div style="background:${bg};color:#fff;border-radius:9999px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${fs}px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${txt}</div>`,
     });
+    const drop = (fill, txt) => L.divIcon({
+      className: "", iconSize: [30, 40], iconAnchor: [15, 39],
+      html: `<div style="position:relative;width:30px;height:40px"><img src="${pinSvg(fill)}" width="30" height="40" style="display:block"/><span style="position:absolute;top:8px;left:0;width:30px;text-align:center;color:#fff;font-weight:700;font-size:11px">${txt}</span></div>`,
+    });
     if (subject && subject.lat != null && subject.lng != null) {
-      L.marker([subject.lat, subject.lng], { icon: dot("#dc2626", "★", 28, 13), zIndexOffset: 1000 })
+      L.marker([subject.lat, subject.lng], { icon: teardrop ? drop(SUBJECT_PIN, "") : dot("#dc2626", "★", 28, 13), zIndexOffset: 1000 })
         .addTo(layer).bindTooltip(subject.label || "Subject");
       pts.push([subject.lat, subject.lng]);
     }
     pins.forEach((p) => {
       if (p.lat == null || p.lng == null) return;
-      const bg = p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
-      const mk = L.marker([p.lat, p.lng], { icon: dot(bg, String(p.n)) }).addTo(layer);
-      mk.bindTooltip(`#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
+      const bg = pinColor ? pinColor(p) : p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
+      const mk = L.marker([p.lat, p.lng], { icon: teardrop ? drop(bg, String(p.n)) : dot(bg, String(p.n)) }).addTo(layer);
+      mk.bindTooltip(pinTip ? pinTip(p) : `#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
       if (onToggle) mk.on("click", () => onToggle(p.i));
       pts.push([p.lat, p.lng]);
     });
     if (pts.length) { m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
-  }, [ready, subject, pins, onToggle]);
-  return <div ref={boxRef} className="relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200" />;
+  }, [ready, subject, pins, onToggle, pinColor, pinTip, teardrop]);
+  return <div ref={boxRef} className={tall ? "relative z-0 h-full min-h-[320px] w-full" : "relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200"} />;
 };
 
 // Street View links for a comp: interactive pano when we have coordinates, place search otherwise.
@@ -1262,7 +1266,107 @@ const RentBasisNote = ({ info, compact = false }) => {
 
 // Market rent card, laid out like RentCast's own: the estimate, $/sq ft and $/bedroom, and the low to
 // high range. A typed rent shows as a marker on the range so the team can see where their number sits.
-const RentCard = ({ est, low, high, info, typed, hasAddress }) => {
+// ---------- Rental comp map ----------
+// Primary: a real Google map (Maps JavaScript API, same GOOGLE_MAPS_KEY the photos use, served by
+// /api/config). Gray styling, Map/Satellite toggle, fullscreen, slate numbered pins, cyan subject pin,
+// laid out like RentCast's. Dynamic Maps is an Essentials SKU with 10,000 free loads a month.
+// Fallback: if the key is missing or the Maps JavaScript API is not enabled on it, the same pins on
+// the free OpenStreetMap map, grayed to match. Nothing breaks either way.
+const pinSvg = (fill) => `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="40" viewBox="0 0 30 40"><path d="M15 39C15 39 28 24.5 28 14.5A13 13 0 0 0 2 14.5C2 24.5 15 39 15 39Z" fill="${fill}" stroke="#ffffff" stroke-width="1.5"/></svg>`)}`;
+let gmapsPromise = null;
+const loadGoogleMaps = () => {
+  if (window.google && window.google.maps) return Promise.resolve(window.google.maps);
+  if (gmapsPromise) return gmapsPromise;
+  gmapsPromise = fetch("/api/config").then((r) => (r.ok ? r.json() : {})).catch(() => ({})).then((cfg) => new Promise((resolve, reject) => {
+    if (!cfg || !cfg.mapsKey) { reject(new Error("no-key")); return; }
+    // Google calls this when the key is rejected (API not enabled, referrer blocked, billing off).
+    window.gm_authFailure = () => { window.__gmapsAuthFailed = true; window.dispatchEvent(new Event("gmaps-auth-failed")); };
+    const cb = "__ylhbGmapsReady";
+    window[cb] = () => resolve(window.google.maps);
+    const sc = document.createElement("script");
+    sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(cfg.mapsKey)}&callback=${cb}&loading=async`;
+    sc.async = true;
+    sc.onerror = () => reject(new Error("script"));
+    document.head.appendChild(sc);
+  }));
+  gmapsPromise.catch(() => { gmapsPromise = null; });
+  return gmapsPromise;
+};
+const GRAY_STYLE = [
+  { elementType: "geometry", stylers: [{ color: "#f1f2f4" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#5f6670" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#f8f9fa" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
+  { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#e3e5e8" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#cfd3d8" }] },
+  { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#e2e5e8" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#d6dbe0" }] },
+  { featureType: "poi", elementType: "labels.icon", stylers: [{ saturation: -100 }, { lightness: 20 }] },
+  { featureType: "transit", stylers: [{ saturation: -100 }] },
+];
+const RENT_PIN = "#6b7f99", SUBJECT_PIN = "#06b6d4";
+
+const GoogleRentMap = ({ subject, pins, onFail }) => {
+  const boxRef = useRef(null);
+  const st = useRef({ map: null, markers: [] });
+  const [ok, setOk] = useState(false);
+  useEffect(() => {
+    let dead = false;
+    const fail = () => { if (!dead) onFail(); };
+    if (window.__gmapsAuthFailed) { fail(); return; }
+    window.addEventListener("gmaps-auth-failed", fail);
+    loadGoogleMaps().then((gm) => {
+      if (dead || !boxRef.current) return;
+      st.current.map = new gm.Map(boxRef.current, {
+        center: { lat: 38.2527, lng: -85.7585 }, zoom: 13, styles: GRAY_STYLE,
+        mapTypeControl: true, mapTypeControlOptions: { mapTypeIds: ["roadmap", "hybrid"], position: gm.ControlPosition.TOP_LEFT },
+        fullscreenControl: true, streetViewControl: false, gestureHandling: "cooperative",
+      });
+      setOk(true);
+    }).catch(fail);
+    return () => { dead = true; window.removeEventListener("gmaps-auth-failed", fail); };
+  }, []);
+  useEffect(() => {
+    const gm = window.google && window.google.maps;
+    const map = st.current.map;
+    if (!ok || !gm || !map) return;
+    st.current.markers.forEach((m) => m.setMap(null));
+    st.current.markers = [];
+    const bounds = new gm.LatLngBounds();
+    const add = (pos, fill, label, title, z) => {
+      const m = new gm.Marker({
+        position: pos, map, title, zIndex: z,
+        icon: { url: pinSvg(fill), scaledSize: new gm.Size(30, 40), anchor: new gm.Point(15, 39), labelOrigin: new gm.Point(15, 15) },
+        label: label ? { text: label, color: "#ffffff", fontSize: "11px", fontWeight: "700" } : undefined,
+      });
+      st.current.markers.push(m); bounds.extend(pos);
+    };
+    pins.forEach((p) => add({ lat: p.lat, lng: p.lng }, RENT_PIN, String(p.n), `#${p.n} · ${usd(p.price)}/mo · ${p.label}`, 1));
+    if (subject) add({ lat: subject.lat, lng: subject.lng }, SUBJECT_PIN, "", subject.label || "This house", 1000);
+    if (!bounds.isEmpty()) { map.fitBounds(bounds, 36); }
+  }, [ok, subject, pins]);
+  return <div ref={boxRef} className="h-full min-h-[320px] w-full" />;
+};
+
+// Same pins on the free OpenStreetMap map, for when Google is not available.
+const fallbackPinColor = () => RENT_PIN;
+const rentPinTip = (p) => `#${p.n} · ${usd(p.price)}/mo · ${p.label}`;
+const RentCompMap = ({ subject, pins }) => {
+  const [google, setGoogle] = useState(true);
+  if (google) return <GoogleRentMap subject={subject} pins={pins} onFail={() => setGoogle(false)} />;
+  return (
+    <div className="rent-map-fallback h-full">
+      <CompMap subject={subject} pins={pins} pinColor={fallbackPinColor} pinTip={rentPinTip} teardrop tall />
+    </div>
+  );
+};
+const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject }) => {
+  const [showList, setShowList] = useState(false);
+  const mapped = useMemo(() => (comps || []).map((c, i) => ({
+    i, n: i + 1, lat: c.lat, lng: c.lng, price: c.rent,
+    label: [c.beds != null && c.baths != null ? `${c.beds} bd / ${c.baths} ba` : null, c.sqft ? `${Math.round(c.sqft).toLocaleString()} sf` : null, c.distance != null ? `${c.distance} mi` : null].filter(Boolean).join(" · "),
+  })).filter((p) => p.lat != null && p.lng != null), [comps]);
   if (!hasAddress) return null;
   const b = (info && info.basis) || (info && info.want) || {};
   const sq = num(b.sqft), beds = num(b.beds);
@@ -1270,34 +1374,37 @@ const RentCard = ({ est, low, high, info, typed, hasAddress }) => {
   const perBed = beds > 0 && est > 0 ? `$${(est / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
   const hasRange = low > 0 && high > low;
   const pos = (v) => Math.min(100, Math.max(0, ((v - low) / (high - low)) * 100));
-  return (
-    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+  const hasMap = est > 0 && mapped.length > 0;
+
+  // Left: the estimate card, laid out like RentCast's.
+  const summary = (
+    <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex justify-center">
-        <span className="rounded-full bg-cyan-50 px-3 py-1 text-[12px] font-semibold text-cyan-700">Estimated Monthly Rent</span>
+        <span className="rounded-full bg-cyan-50 px-4 py-1.5 text-[13px] font-semibold text-cyan-600">Estimated Monthly Rent</span>
       </div>
       {est > 0 ? (<>
-        <div className="mt-2 text-center font-mono text-4xl font-bold text-slate-900">{usd(est)}</div>
+        <div className="mt-3 text-center text-5xl font-bold tracking-tight text-slate-900">{usd(est)}</div>
         {(perSq(est) || perBed) && (
-          <div className="mt-2 flex items-stretch justify-center gap-4 text-center">
-            {perSq(est) && <div><div className="text-sm font-bold text-slate-800">{perSq(est)}</div><div className="text-[11px] text-slate-500">per sq ft</div></div>}
+          <div className="mt-3 flex items-stretch justify-center gap-5 text-center">
+            {perSq(est) && <div><div className="text-[15px] font-bold text-slate-800">{perSq(est)}</div><div className="text-[12px] text-slate-500">per sq.ft.</div></div>}
             {perSq(est) && perBed && <div className="w-px bg-slate-200" />}
-            {perBed && <div><div className="text-sm font-bold text-slate-800">{perBed}</div><div className="text-[11px] text-slate-500">per bedroom</div></div>}
+            {perBed && <div><div className="text-[15px] font-bold text-slate-800">{perBed}</div><div className="text-[12px] text-slate-500">per bedroom</div></div>}
           </div>
         )}
         {hasRange ? (
-          <div className="mt-4">
-            <div className="flex justify-between text-[11px] text-slate-500"><span>Low estimate</span><span>High estimate</span></div>
-            <div className="relative mt-1 h-3 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500">
-              {est >= low && est <= high && <div className="absolute top-1/2 h-4 w-1 -translate-y-1/2 rounded bg-slate-900" style={{ left: `calc(${pos(est)}% - 2px)` }} title={`RentCast ${usd(est)}`} />}
+          <div className="mt-5">
+            <div className="flex justify-between text-[12.5px] text-slate-600"><span>Low Estimate</span><span>High Estimate</span></div>
+            <div className="relative mt-1.5 h-3.5 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500">
+              {est >= low && est <= high && <div className="absolute top-1/2 h-5 w-1 -translate-y-1/2 rounded bg-slate-900/80" style={{ left: `calc(${pos(est)}% - 2px)` }} title={`RentCast ${usd(est)}`} />}
               {typed > 0 && (
                 <div className="absolute -top-6 -translate-x-1/2 whitespace-nowrap rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" style={{ left: `${pos(typed)}%` }}>
                   Yours {usd(typed)}
                 </div>
               )}
             </div>
-            <div className="mt-1.5 flex justify-between">
-              <div><div className="text-sm font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[11px] text-slate-500">{perSq(low)} /sq ft</div>}</div>
-              <div className="text-right"><div className="text-sm font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[11px] text-slate-500">{perSq(high)} /sq ft</div>}</div>
+            <div className="mt-2 flex justify-between">
+              <div><div className="text-[15px] font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[12px] text-slate-500">{perSq(low)} /sq.ft.</div>}</div>
+              <div className="text-right"><div className="text-[15px] font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[12px] text-slate-500">{perSq(high)} /sq.ft.</div>}</div>
             </div>
             {typed > 0 && (typed < low || typed > high) && (
               <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Your typed rent of {usd(typed)} is {typed > high ? "above" : "below"} RentCast's whole range. Make sure you have a comp that supports it.</div>
@@ -1306,7 +1413,7 @@ const RentCard = ({ est, low, high, info, typed, hasAddress }) => {
         ) : (
           <div className="mt-3 text-center text-[11px] text-slate-500">Re-pull the rent to see RentCast's low and high range.</div>
         )}
-        <div className="mt-3 text-center text-[11px] leading-snug text-slate-600">
+        <div className="mt-auto pt-3 text-center text-[11px] leading-snug text-slate-500">
           {info && info.basis ? <>For {fmtBasis(info.basis)}</> : <>For the county record's beds and baths</>}
           {info && info.basis && info.basis.comps ? <> · {info.basis.comps} comps {info.basis.search || ""}</> : null}
         </div>
@@ -1321,6 +1428,46 @@ const RentCard = ({ est, low, high, info, typed, hasAddress }) => {
             </button>
           )}
         </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="mt-4">
+      {/* Card on the left, comp map on the right; stacked on a phone. */}
+      <div className={hasMap ? "grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" : ""}>
+        {summary}
+        {hasMap && (
+          <div className="relative min-h-[320px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <RentCompMap subject={subject} pins={mapped} />
+          </div>
+        )}
+      </div>
+      {hasMap && (
+        <>
+          <div className="mt-1.5 flex items-center justify-between px-1 text-[11px] text-slate-500">
+            <span><span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold" style={{ color: RENT_PIN }}>●</span> rental comps RentCast priced it from</span>
+            <button type="button" onClick={() => setShowList((v) => !v)} className="font-semibold text-emerald-700 hover:underline">{showList ? "Hide list" : `Show all ${comps.length}`}</button>
+          </div>
+          {showList && (
+            <div className="mt-2 max-h-72 overflow-auto rounded-xl border border-slate-200 bg-white">
+              {comps.map((c, i) => (
+                <div key={i} className="flex items-start justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] last:border-0">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold text-slate-800"><span className="mr-1 inline-block w-6 text-slate-500">#{i + 1}</span>{c.address}</div>
+                    <div className="pl-7 text-slate-500">
+                      {[c.beds != null && c.baths != null ? `${c.beds} bd / ${c.baths} ba` : null, c.sqft ? `${Math.round(c.sqft).toLocaleString()} sf` : null, c.distance != null ? `${c.distance} mi away` : null, c.daysOld != null ? `seen ${c.daysOld}d ago` : null, c.match != null ? `${c.match}% match` : null].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="font-mono font-bold text-slate-900">{c.rent ? usd(c.rent) : "—"}</div>
+                    {c.rent && c.sqft ? <div className="text-[10px] text-slate-500">${(c.rent / c.sqft).toFixed(2)}/sf</div> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -2324,6 +2471,7 @@ export default function App() {
   const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
   const [rentSaved, setRentSaved] = useState(null);  // rent remembered from the last time this address was worked
   const [rentBasis, setRentBasis] = useState(null);  // { beds, baths, sqft } the rent estimate was priced for
+  const [rentComps, setRentComps] = useState([]);    // the rental comps RentCast priced it from (map + list)
   const [pullAt, setPullAt] = useState(null);        // when this address was last actually pulled from RentCast
   const lastAddrRef = useRef("");                   // the address this screen was last showing
   const pullAddrRef = useRef("");                   // which address the data on screen belongs to
@@ -2488,8 +2636,10 @@ export default function App() {
         baths: data.basis && data.basis.baths != null ? Number(data.basis.baths) : (b.baths ?? null),
         sqft: data.basis && data.basis.sqft ? Number(data.basis.sqft) : (b.sqft || null),
         comps: data.comps ?? null, search: data.search || null,
+        lat: data.subjectLat ?? null, lng: data.subjectLng ?? null,
       } : null);
       setRentLow(data.rentLow || null);
+      setRentComps(Array.isArray(data.compList) ? data.compList : []);
       setRentHigh(data.rentHigh || null);
       setRentFetchedFor(a);
       setRentMsg(data.rent
@@ -2760,9 +2910,10 @@ export default function App() {
       soldIncluded, manualSold, mlsOnly, tabs,
       fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
       rentBasis,
-      rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst } : null,
+      rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst, comps: rentComps } : null,
     };
-    const blank = !tabs && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
+    // A rent pull on its own is worth keeping: the card, range and comp map should survive a reload.
+    const blank = !tabs && !rentBasis && !rentLow && !rentHigh && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
     return blank ? null : d;
   };
@@ -2792,7 +2943,7 @@ export default function App() {
     setSubjDetail(null); setSubjDetailOpen(false);
     setSubjectInfo(null); setOwnerNames(null);
     setSoldData(null); setSoldIncluded({}); setManualSold([]); setCompsOpen(false);
-    setRentEst(null); setRentSaved(null); setRentBasis(null); setRentLow(null); setRentHigh(null);
+    setRentEst(null); setRentSaved(null); setRentBasis(null); setRentLow(null); setRentHigh(null); setRentComps([]);
     setSqft(""); setArvSource("");
     setCompMsg(null); setSoldMsg(null);
     setArvOverride(""); setRepairOverride("");
@@ -2836,6 +2987,7 @@ export default function App() {
       setRentLow(rr && rr.low ? num(rr.low) : null); setRentHigh(rr && rr.high ? num(rr.high) : null);
       // The RentCast estimate itself, separate from a typed rent, so the card shows what RentCast said.
       if (rr && num(rr.est) > 0) setRentSaved(num(rr.est));
+      setRentComps(rr && Array.isArray(rr.comps) ? rr.comps : []);
       const dk = rec.desk || {};
       setArvOverride(dk.arvOverride != null ? String(dk.arvOverride) : "");
       setArvSource(dk.arvSource || "");
@@ -2926,7 +3078,7 @@ export default function App() {
     }, 1200);
     syncTimer.current = { key: saveKey, id: timerId };
   }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh]);
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh, rentComps]);
 
   // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
   // $40 heavy, the same split the scoring uses). Marked as set by the number, so the strategy engine
@@ -3462,7 +3614,9 @@ export default function App() {
         </div>
 
         <RentCard est={rentEst || rentSaved || 0} low={rentLow} high={rentHigh} info={rentInfo}
-          typed={num(rentOverride)} hasAddress={!!address.trim()} />
+          typed={num(rentOverride)} hasAddress={!!address.trim()}
+          comps={rentComps} subject={subjectInfo?.lat != null ? { lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }
+            : rentBasis && rentBasis.lat != null ? { lat: rentBasis.lat, lng: rentBasis.lng, label: address || "Subject" } : null} />
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
