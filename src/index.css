@@ -8,3 +8,8 @@
 /* Comp hover card on the Leaflet maps, matching the Google info window. */
 .leaflet-tooltip.comp-tip { padding: 0; border: 0; border-radius: 10px; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.18); }
 .leaflet-tooltip.comp-tip::before { display: none; }
+
+/* Google info window on the comp maps: size to the card instead of a cramped scroll box. */
+.ylhb-gmap .gm-style-iw-c { padding: 0 !important; max-height: none !important; border-radius: 10px !important; }
+.ylhb-gmap .gm-style-iw-d { overflow: visible !important; max-height: none !important; }
+.ylhb-gmap .ylhb-card { cursor: default; }

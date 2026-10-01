@@ -619,14 +619,15 @@ const REBUTTALS = [
 // At or under 65% of rent there is real cash flow. Past 75% you are buying a break-even deal
 // with due-on-sale risk attached. Seller-quoted payments often exclude escrow, so taxes and
 // insurance get added when the rep says the payment does not include them.
-// A loan well under today's market rate is an asset in its own right. Below this, the deal does
+// A loan well under today's market rate is an asset in its own right. At or below this, the deal does
 // not get to quietly die on the vine: it goes to the head of acquisitions if it is not locked up.
-const LOW_RATE = 4.0;
+// Per B (Sep 30 2026): 5% or lower (was under 4%).
+const LOW_RATE = 5.0;
 const rateNum = (v) => {
   const n = parseFloat(String(v || "").replace(/[^0-9.]/g, ""));
   return isNaN(n) || n <= 0 ? null : n;
 };
-const isLowRate = (v) => { const n = rateNum(v); return n != null && n < LOW_RATE; };
+const isLowRate = (v) => { const n = rateNum(v); return n != null && n <= LOW_RATE; };
 
 const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
 
@@ -1386,7 +1387,9 @@ const GoogleCompMap = ({ subject, pins, onFail, colorOf, htmlOf, onToggle }) => 
         // Google's own landmark pop-ups (parks, restaurants) just get in the way of the comp pins.
         clickableIcons: false,
       });
-      st.current.info = new gm.InfoWindow({ disableAutoPan: true });
+      // No close-button header (it pushed the card into a scroll box), and a tap on open map closes it.
+      st.current.info = new gm.InfoWindow({ disableAutoPan: true, headerDisabled: true, maxWidth: 320 });
+      st.current.map.addListener("click", () => { st.current.info.close(); st.current.pinned = null; });
       setOk(true);
     }).catch(fail);
     return () => { dead = true; window.removeEventListener("gmaps-auth-failed", fail); };
@@ -1397,6 +1400,11 @@ const GoogleCompMap = ({ subject, pins, onFail, colorOf, htmlOf, onToggle }) => 
     if (!ok || !gm || !map) return;
     const info = st.current.info;
     if (info) info.close();
+    st.current.pinned = null;
+    // The card stays up while the mouse travels from the pin onto the card, and while it is on the card,
+    // so a rep can read it (and copy the address). It closes a moment after the mouse leaves both.
+    const later = () => { clearTimeout(st.current.closeT); st.current.closeT = setTimeout(() => { if (!st.current.pinned) info.close(); }, 350); };
+    const keep = () => clearTimeout(st.current.closeT);
     st.current.markers.forEach((m) => m.setMap(null));
     st.current.markers = [];
     const bounds = new gm.LatLngBounds();
@@ -1407,10 +1415,21 @@ const GoogleCompMap = ({ subject, pins, onFail, colorOf, htmlOf, onToggle }) => 
         label: label ? { text: label, color: "#ffffff", fontSize: "11px", fontWeight: "700" } : undefined,
       });
       if (html && info) {
-        const open = () => { info.setContent(html); info.open({ anchor: m, map, shouldFocus: false }); };
-        m.addListener("mouseover", open);
-        m.addListener("mouseout", () => info.close());
-        m.addListener("click", () => { if (p && toggleRef.current) toggleRef.current(p.i); else open(); });
+        const el = document.createElement("div");
+        el.className = "ylhb-card";
+        el.innerHTML = html;
+        el.addEventListener("mouseenter", keep);
+        el.addEventListener("mouseleave", later);
+        const open = () => { keep(); info.setContent(el); info.open({ anchor: m, map, shouldFocus: false }); };
+        m.addListener("mouseover", () => { if (!st.current.pinned || st.current.pinned === m) open(); });
+        m.addListener("mouseout", later);
+        // Rent map: a click pins the card open (phones have no hover) until the map is tapped. ARV map:
+        // a click still includes or excludes the sale.
+        m.addListener("click", () => {
+          if (p && toggleRef.current) { toggleRef.current(p.i); return; }
+          st.current.pinned = st.current.pinned === m ? null : m;
+          open();
+        });
       }
       st.current.markers.push(m); bounds.extend(pos);
     };
@@ -1419,7 +1438,7 @@ const GoogleCompMap = ({ subject, pins, onFail, colorOf, htmlOf, onToggle }) => 
     const key = [subject ? `${subject.lat},${subject.lng}` : "", ...pins.map((p) => `${p.lat},${p.lng}`)].join("|");
     if (!bounds.isEmpty() && key !== st.current.fitKey) { st.current.fitKey = key; map.fitBounds(bounds, 36); }
   }, [ok, subject, pins, colorOf, htmlOf]);
-  return <div ref={boxRef} className="h-full min-h-[320px] w-full" />;
+  return <div ref={boxRef} className="ylhb-gmap h-full min-h-[320px] w-full" />;
 };
 
 // Same pins on the free OpenStreetMap map, for when Google is not available.
