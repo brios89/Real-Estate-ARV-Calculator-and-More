@@ -3805,6 +3805,14 @@ export default function App() {
             );
             return (<>
               <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                {/* Every re-pull costs RentCast credits, so it is a tool for live deals, not for browsing. */}
+                <div className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11.5px] leading-snug text-amber-900">
+                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span>
+                    <b>Only re-pull when both are true:</b> the seller is serious about selling, and Privy, PropStream and the MLS do not have enough comps for this house.
+                    {" "}Each re-pull uses <b>about 2 RentCast credits</b>: 1 for the recorded sales and 1 for the MLS cross-check (1 if no sales come back). Changing the settings is free. Only the re-pull button costs credits.
+                  </span>
+                </div>
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
                   {ctl("mi", "Radius", (v) => `${v} mi`)}
                   {ctl("sf", "Size", (v) => `±${v} sf`)}
