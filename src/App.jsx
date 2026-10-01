@@ -358,13 +358,57 @@ const SectionTitle = ({ children }) => (
   <h3 className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400">{children}</h3>
 );
 
+// ---------- comp hover card ----------
+// One card for every comp pin, on both maps, laid out like RentCast's: address on two lines, then
+// distance | beds | baths | sq ft, then the price and a date. Plain HTML because both the Google info
+// window and the Leaflet tooltip take an HTML string.
+const escHtml = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+const longDate = (d) => {
+  const t = Date.parse(d);
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }) : null;
+};
+const compCardHtml = ({ n, address, distance, beds, baths, sqft, price, priceSuffix = "", priceColor = "#06b6d4", dateLine, note, noteColor = "#64748b" }) => {
+  const parts = String(address || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const line1 = parts.length > 2 ? parts.slice(0, -2).join(", ") : parts[0] || "";
+  const line2 = parts.length > 2 ? parts.slice(-2).join(", ") : parts.slice(1).join(", ");
+  const facts = [
+    distance != null ? `${Number(distance).toFixed(2)} mi` : null,
+    beds != null ? `${beds} BD` : null,
+    baths != null ? `${baths} BA` : null,
+    num(sqft) > 0 ? `${Math.round(num(sqft)).toLocaleString()} ft<sup>2</sup>` : null,
+  ].filter(Boolean);
+  const sep = '<span style="color:#cbd5e1;margin:0 7px">|</span>';
+  return `<div style="font-family:inherit;min-width:220px;max-width:290px;padding:10px 12px;line-height:1.35;color:#0f172a">
+    <div style="font-size:13.5px">${n ? `<span style="color:#94a3b8;font-weight:700;margin-right:4px">#${n}</span>` : ""}${escHtml(line1)}</div>
+    ${line2 ? `<div style="font-size:13.5px">${escHtml(line2)}</div>` : ""}
+    ${facts.length ? `<div style="margin-top:6px;font-size:12.5px;color:#475569">${facts.join(sep)}</div>` : ""}
+    <div style="margin-top:6px;font-size:12.5px;color:#475569">${price ? `<span style="color:${priceColor};font-size:16px;font-weight:600">${usd(price)}</span>${priceSuffix ? ` ${priceSuffix}` : ""}` : ""}${price && dateLine ? sep : ""}${dateLine ? escHtml(dateLine) : ""}</div>
+    ${note ? `<div style="margin-top:5px;font-size:11.5px;color:${noteColor}">${escHtml(note)}</div>` : ""}
+  </div>`;
+};
+// Rent comp and sold comp flavors of the card.
+const rentCompHtml = (c, n) => compCardHtml({
+  n, address: c.address, distance: c.distance, beds: c.beds, baths: c.baths, sqft: c.sqft,
+  price: c.rent, priceSuffix: "/mo",
+  dateLine: c.listedDate ? `Listed ${longDate(c.listedDate)}` : (c.daysOld != null ? `Seen ${c.daysOld} days ago` : null),
+  note: [c.removedDate ? `Off market ${longDate(c.removedDate)}` : (c.status === "Active" ? "Still listed" : null), c.match != null ? `${c.match}% match` : null].filter(Boolean).join(" · ") || null,
+});
+const soldCompHtml = (c, n) => compCardHtml({
+  n, address: c.address, distance: c.distance, beds: c.beds, baths: c.baths, sqft: c.sqft,
+  price: c.salePrice, priceColor: "#059669",
+  dateLine: c.saleDate ? `Sold ${longDate(c.saleDate)}` : null,
+  note: `${c.ppsf ? `$${c.ppsf}/sf · ` : ""}${c.included ? "In the ARV · click to remove" : `Out of the ARV${c.flags && c.flags.length ? ` (${c.flags.join(", ")})` : ""} · click to include`}`,
+  noteColor: c.included ? "#047857" : "#b45309",
+});
+
 // ---------- main ----------
 // Interactive comp map (Leaflet, loaded from CDN in index.html). Subject = red ★; comps = numbered pins:
 // emerald = in the ARV, amber = flagged out, slate = out for other reasons. Clicking a pin toggles it
 // in/out of that section's ARV — same effect as the include/exclude buttons on the cards.
-const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, teardrop = false, tall = false }) => {
+const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, pinHtml, teardrop = false, tall = false }) => {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
+  const fitKeyRef = useRef("");
   const [ready, setReady] = useState(false);
   useEffect(() => {
     if (!boxRef.current || mapRef.current) return;
@@ -374,7 +418,12 @@ const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, teardrop = false, 
       if (cancelled) return;
       const L = window.L;
       if (!L) { if (tries++ < 40) setTimeout(boot, 150); return; }   // wait for the CDN script
-      const m = L.map(boxRef.current, { scrollWheelZoom: false });
+      const m = L.map(boxRef.current, { scrollWheelZoom: false, zoomControl: false });
+      // + / − buttons, and scroll-wheel zoom once someone clicks into the map (so scrolling the page
+      // past the map never hijacks it). Double-click and pinch zoom work as usual.
+      L.control.zoom({ position: "bottomright" }).addTo(m);
+      m.on("click", () => m.scrollWheelZoom.enable());
+      m.on("mouseout", () => m.scrollWheelZoom.disable());
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
       mapRef.current = { m, layer: L.layerGroup().addTo(m) };
       setReady(true);
@@ -405,12 +454,15 @@ const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, teardrop = false, 
       if (p.lat == null || p.lng == null) return;
       const bg = pinColor ? pinColor(p) : p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
       const mk = L.marker([p.lat, p.lng], { icon: teardrop ? drop(bg, String(p.n)) : dot(bg, String(p.n)) }).addTo(layer);
-      mk.bindTooltip(pinTip ? pinTip(p) : `#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
+      if (pinHtml) mk.bindTooltip(pinHtml(p), { direction: "top", offset: [0, teardrop ? -36 : -12], className: "comp-tip", opacity: 1 });
+      else mk.bindTooltip(pinTip ? pinTip(p) : `#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
       if (onToggle) mk.on("click", () => onToggle(p.i));
       pts.push([p.lat, p.lng]);
     });
-    if (pts.length) { m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
-  }, [ready, subject, pins, onToggle, pinColor, pinTip, teardrop]);
+    // Re-fit only when the pins themselves move, so a rep's zoom survives everything else updating.
+    const key = pts.map((q) => q.join(",")).join("|");
+    if (pts.length && key !== fitKeyRef.current) { fitKeyRef.current = key; m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
+  }, [ready, subject, pins, onToggle, pinColor, pinTip, pinHtml, teardrop]);
   return <div ref={boxRef} className={tall ? "relative z-0 h-full min-h-[320px] w-full" : "relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200"} />;
 };
 
@@ -1307,9 +1359,15 @@ const GRAY_STYLE = [
 ];
 const RENT_PIN = "#6b7f99", SUBJECT_PIN = "#06b6d4";
 
-const GoogleRentMap = ({ subject, pins, onFail }) => {
+// Google comp map shared by the rent card and the ARV section. colorOf/htmlOf style each pin and its
+// hover card. With onToggle (ARV), clicking a pin includes/excludes that sale; without it (rent), a
+// click just opens the card for phones. The map only re-zooms to fit when the set of pins changes,
+// so a rep who zoomed in is not thrown back out every time something else on the page updates.
+const GoogleCompMap = ({ subject, pins, onFail, colorOf, htmlOf, onToggle }) => {
   const boxRef = useRef(null);
-  const st = useRef({ map: null, markers: [] });
+  const st = useRef({ map: null, markers: [], info: null, fitKey: "" });
+  const toggleRef = useRef(onToggle);
+  toggleRef.current = onToggle;
   const [ok, setOk] = useState(false);
   useEffect(() => {
     let dead = false;
@@ -1320,9 +1378,15 @@ const GoogleRentMap = ({ subject, pins, onFail }) => {
       if (dead || !boxRef.current) return;
       st.current.map = new gm.Map(boxRef.current, {
         center: { lat: 38.2527, lng: -85.7585 }, zoom: 13, styles: GRAY_STYLE,
-        mapTypeControl: true, mapTypeControlOptions: { mapTypeIds: ["roadmap", "hybrid"], position: gm.ControlPosition.TOP_LEFT },
+        // Map | Satellite like RentCast's. Satellite carries Google's own "Labels" toggle.
+        mapTypeControl: true, mapTypeControlOptions: { mapTypeIds: ["roadmap", "satellite"], position: gm.ControlPosition.TOP_LEFT },
         fullscreenControl: true, streetViewControl: false, gestureHandling: "cooperative",
+        // Visible + / − buttons. Newer Google builds hide zoom inside a "camera" pop-out by default.
+        zoomControl: true, zoomControlOptions: { position: gm.ControlPosition.RIGHT_BOTTOM }, cameraControl: false,
+        // Google's own landmark pop-ups (parks, restaurants) just get in the way of the comp pins.
+        clickableIcons: false,
       });
+      st.current.info = new gm.InfoWindow({ disableAutoPan: true });
       setOk(true);
     }).catch(fail);
     return () => { dead = true; window.removeEventListener("gmaps-auth-failed", fail); };
@@ -1331,40 +1395,56 @@ const GoogleRentMap = ({ subject, pins, onFail }) => {
     const gm = window.google && window.google.maps;
     const map = st.current.map;
     if (!ok || !gm || !map) return;
+    const info = st.current.info;
+    if (info) info.close();
     st.current.markers.forEach((m) => m.setMap(null));
     st.current.markers = [];
     const bounds = new gm.LatLngBounds();
-    const add = (pos, fill, label, title, z) => {
+    const add = (pos, fill, label, z, html, p) => {
       const m = new gm.Marker({
-        position: pos, map, title, zIndex: z,
+        position: pos, map, zIndex: z,
         icon: { url: pinSvg(fill), scaledSize: new gm.Size(30, 40), anchor: new gm.Point(15, 39), labelOrigin: new gm.Point(15, 15) },
         label: label ? { text: label, color: "#ffffff", fontSize: "11px", fontWeight: "700" } : undefined,
       });
+      if (html && info) {
+        const open = () => { info.setContent(html); info.open({ anchor: m, map, shouldFocus: false }); };
+        m.addListener("mouseover", open);
+        m.addListener("mouseout", () => info.close());
+        m.addListener("click", () => { if (p && toggleRef.current) toggleRef.current(p.i); else open(); });
+      }
       st.current.markers.push(m); bounds.extend(pos);
     };
-    pins.forEach((p) => add({ lat: p.lat, lng: p.lng }, RENT_PIN, String(p.n), `#${p.n} · ${usd(p.price)}/mo · ${p.label}`, 1));
-    if (subject) add({ lat: subject.lat, lng: subject.lng }, SUBJECT_PIN, "", subject.label || "This house", 1000);
-    if (!bounds.isEmpty()) { map.fitBounds(bounds, 36); }
-  }, [ok, subject, pins]);
+    pins.forEach((p) => add({ lat: p.lat, lng: p.lng }, colorOf ? colorOf(p) : RENT_PIN, String(p.n), 1, htmlOf ? htmlOf(p) : null, p));
+    if (subject) add({ lat: subject.lat, lng: subject.lng }, SUBJECT_PIN, "", 1000, null, null);
+    const key = [subject ? `${subject.lat},${subject.lng}` : "", ...pins.map((p) => `${p.lat},${p.lng}`)].join("|");
+    if (!bounds.isEmpty() && key !== st.current.fitKey) { st.current.fitKey = key; map.fitBounds(bounds, 36); }
+  }, [ok, subject, pins, colorOf, htmlOf]);
   return <div ref={boxRef} className="h-full min-h-[320px] w-full" />;
 };
 
 // Same pins on the free OpenStreetMap map, for when Google is not available.
 const fallbackPinColor = () => RENT_PIN;
 const rentPinTip = (p) => `#${p.n} · ${usd(p.price)}/mo · ${p.label}`;
-const RentCompMap = ({ subject, pins }) => {
+const rentPinHtml = (p) => rentCompHtml(p.comp || {}, p.n);
+const soldPinHtml = (p) => soldCompHtml(p.comp || {}, p.n);
+const AutoCompMap = ({ subject, pins, colorOf, htmlOf, onToggle, tip }) => {
   const [google, setGoogle] = useState(true);
-  if (google) return <GoogleRentMap subject={subject} pins={pins} onFail={() => setGoogle(false)} />;
+  if (google) return <GoogleCompMap subject={subject} pins={pins} colorOf={colorOf} htmlOf={htmlOf} onToggle={onToggle} onFail={() => setGoogle(false)} />;
   return (
     <div className="rent-map-fallback h-full">
-      <CompMap subject={subject} pins={pins} pinColor={fallbackPinColor} pinTip={rentPinTip} teardrop tall />
+      <CompMap subject={subject} pins={pins} pinColor={colorOf} pinTip={tip} pinHtml={htmlOf} onToggle={onToggle} teardrop tall />
     </div>
   );
 };
+const RentCompMap = ({ subject, pins }) => (
+  <AutoCompMap subject={subject} pins={pins} colorOf={fallbackPinColor} htmlOf={rentPinHtml} tip={rentPinTip} />
+);
+// ARV pins: green = in the ARV, amber = flagged out, gray = out for other reasons.
+const soldPinColor = (p) => (p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8");
 const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject }) => {
   const [showList, setShowList] = useState(false);
   const mapped = useMemo(() => (comps || []).map((c, i) => ({
-    i, n: i + 1, lat: c.lat, lng: c.lng, price: c.rent,
+    i, n: i + 1, lat: c.lat, lng: c.lng, price: c.rent, comp: c,
     label: [c.beds != null && c.baths != null ? `${c.beds} bd / ${c.baths} ba` : null, c.sqft ? `${Math.round(c.sqft).toLocaleString()} sf` : null, c.distance != null ? `${c.distance} mi` : null].filter(Boolean).join(" · "),
   })).filter((p) => p.lat != null && p.lng != null), [comps]);
   if (!hasAddress) return null;
@@ -2835,6 +2915,15 @@ export default function App() {
     return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < MIN_SOLID, marginalUsed, mlsChecked, mlsCount: src.filter((c) => c.mls).length, srcTotal: src.length };
   }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold, mlsOnly]);
 
+  // Stable pin list for the ARV map, so the map only redraws when the comps or their in/out state change.
+  const soldPins = useMemo(() => (soldSummary ? soldSummary.flagged : [])
+    .map((c) => ({ i: c.i, n: c.i + 1, lat: c.lat ?? null, lng: c.lng ?? null, price: c.salePrice, included: !!c.included, flagged: c.flags.length > 0, comp: c }))
+    .filter((p) => p.lat != null && p.lng != null), [soldSummary]);
+  const soldSubject = useMemo(() => (subjectInfo?.lat != null ? { lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" } : null), [subjectInfo, address]);
+
+  const rentSubject = useMemo(() => (subjectInfo?.lat != null ? { lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }
+    : rentBasis && rentBasis.lat != null ? { lat: rentBasis.lat, lng: rentBasis.lng, label: address || "Subject" } : null), [subjectInfo, rentBasis, address]);
+
   // Label the ARV stat with where the number actually came from — recorded sales or a manual override.
   // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
   // The deal-driving ARV: manual override wins; otherwise the sold-comp median. Record corrections ride on top.
@@ -3452,11 +3541,15 @@ export default function App() {
             The ARV median runs on the <b className="text-slate-500">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
           </div>
           {subjectInfo?.lat != null && soldSummary && soldSummary.flagged.some((c) => c.lat != null) && (
-            <CompMap
-              subject={{ lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }}
-              pins={soldSummary.flagged.map((c) => ({ i: c.i, n: c.i + 1, lat: c.lat ?? null, lng: c.lng ?? null, price: c.salePrice, included: !!c.included, flagged: c.flags.length > 0 })).filter((p) => p.lat != null && p.lng != null)}
-              onToggle={(i) => { const cur = soldSummary.flagged.find((x) => x.i === i); setSoldIncluded((p) => ({ ...p, [i]: !(cur && cur.included) })); }}
-            />
+            <>
+              <div className="relative mt-2 h-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <AutoCompMap subject={soldSubject} pins={soldPins} colorOf={soldPinColor} htmlOf={soldPinHtml}
+                  onToggle={(i) => { const cur = soldSummary.flagged.find((x) => x.i === i); setSoldIncluded((p) => ({ ...p, [i]: !(cur && cur.included) })); }} />
+              </div>
+              <div className="mt-1.5 px-1 text-[11px] text-slate-500">
+                <span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold text-emerald-600">●</span> in the ARV · <span className="font-bold text-amber-600">●</span> flagged out · <span className="font-bold text-slate-400">●</span> out. Hover a pin for details, click it to include or exclude.
+              </div>
+            </>
           )}
 
           {soldMsg && (
@@ -3615,8 +3708,7 @@ export default function App() {
 
         <RentCard est={rentEst || rentSaved || 0} low={rentLow} high={rentHigh} info={rentInfo}
           typed={num(rentOverride)} hasAddress={!!address.trim()}
-          comps={rentComps} subject={subjectInfo?.lat != null ? { lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }
-            : rentBasis && rentBasis.lat != null ? { lat: rentBasis.lat, lng: rentBasis.lng, label: address || "Subject" } : null} />
+          comps={rentComps} subject={rentSubject} />
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">

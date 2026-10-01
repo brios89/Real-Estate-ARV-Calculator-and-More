@@ -4,3 +4,7 @@
 
 /* Fallback rent map (Leaflet + OpenStreetMap) styled to read like the gray Google map. */
 .rent-map-fallback .leaflet-tile-pane { filter: grayscale(1) contrast(0.92) brightness(1.06); }
+
+/* Comp hover card on the Leaflet maps, matching the Google info window. */
+.leaflet-tooltip.comp-tip { padding: 0; border: 0; border-radius: 10px; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.18); }
+.leaflet-tooltip.comp-tip::before { display: none; }

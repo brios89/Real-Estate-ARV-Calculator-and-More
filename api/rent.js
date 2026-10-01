@@ -96,6 +96,7 @@ export default async function handler(req, res) {
         type: c.propertyType || null, status: c.status || null,
         distance: c.distance != null ? Math.round(Number(c.distance) * 100) / 100 : null,
         daysOld: c.daysOld ?? null,
+        listedDate: c.listedDate || null, removedDate: c.removedDate || null, lastSeenDate: c.lastSeenDate || null,
         match: c.correlation != null ? Math.round(Number(c.correlation) * 100) : null,
       })) : [],
       subjectLat: data.subjectProperty?.latitude ?? null,
