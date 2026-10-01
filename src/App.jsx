@@ -3222,6 +3222,11 @@ export default function App() {
     contractDefault: num(askingPrice),
     fee: num(wholesaleFee),
     compCount: num(arvOverride) > 0 ? 0 : (soldSummary ? soldSummary.usedCount : 0),
+    // The rent card's data, for the Rent Analysis slides.
+    rentAnalysis: (rentEst || rentSaved) ? {
+      est: rentEst || rentSaved, low: rentLow, high: rentHigh,
+      basis: rentBasis || wantBasis, comps: rentComps, subject: rentSubject,
+    } : null,
     avgPpsf: num(arvOverride) > 0 ? 0 : (soldSummary && soldSummary.medianPpsf ? soldSummary.medianPpsf : 0),
   };
 
@@ -3948,6 +3953,85 @@ async function getLogoData() {
   } catch { return null; }
 }
 
+// ---------- deck: rent analysis slides ----------
+// The same rent picture the app shows (estimate, $/sq ft, $/bedroom, low to high range, what it was
+// priced for, the comp map and the comps), for every deck where rent drives the numbers: Sub-To,
+// Hybrid, Seller Finance, and the BRRRR half of the cash deck. The map is a Google static image from
+// /api/staticmap. If that is unavailable the slide simply runs without it.
+async function getRentMapImage(ra) {
+  try {
+    const top = (ra.comps || []).filter((c) => c.lat != null && c.lng != null).slice(0, 9);
+    if (!top.length) return null;
+    const q = new URLSearchParams();
+    if (ra.subject && ra.subject.lat != null) q.set("subject", `${ra.subject.lat},${ra.subject.lng}`);
+    q.set("pins", top.map((c) => `${c.lat},${c.lng}`).join("|"));
+    const r = await fetch(`/api/staticmap?${q.toString()}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d && d.image ? d.image : null;
+  } catch { return null; }
+}
+function addRentSlides(pptx, header, ra, mapImg) {
+  if (!ra || !(ra.est > 0)) return;
+  const b = ra.basis || {};
+  const sq = num(b.sqft), beds = num(b.beds);
+  const psf = (v) => (sq > 0 && v > 0 ? `$${(v / sq).toFixed(2)}` : null);
+  const pbd = beds > 0 ? `$${(ra.est / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+  const C1 = [6, 182, 212], C2 = [59, 130, 246];   // cyan to blue, same as the app's range bar
+  const hex = (t) => C1.map((v, i) => Math.round(v + (C2[i] - v) * t).toString(16).padStart(2, "0")).join("").toUpperCase();
+
+  // Slide A: the estimate and the map
+  const s = pptx.addSlide(); header(s, "Rent Analysis");
+  const L = 0.6, W = mapImg ? 5.5 : 12.1;
+  s.addShape(pptx.ShapeType.roundRect, { x: L, y: 1.4, w: W, h: 5.25, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.1 });
+  s.addText("ESTIMATED MONTHLY RENT", { x: L, y: 1.6, w: W, h: 0.4, fontSize: 13, bold: true, color: "0891B2", align: "center", charSpacing: 2 });
+  s.addText(usd(ra.est), { x: L, y: 2.0, w: W, h: 1.0, fontSize: 48, bold: true, color: DECK.INK, align: "center" });
+  const sub = [psf(ra.est) ? `${psf(ra.est)} per sq ft` : null, pbd ? `${pbd} per bedroom` : null].filter(Boolean).join("     |     ");
+  if (sub) s.addText(sub, { x: L, y: 3.0, w: W, h: 0.4, fontSize: 14, color: "475569", align: "center" });
+  if (ra.low > 0 && ra.high > ra.low) {
+    const bx = L + 0.45, bw = W - 0.9, by = 3.95;
+    s.addText("Low estimate", { x: bx, y: by - 0.42, w: bw / 2, h: 0.3, fontSize: 11, color: "475569" });
+    s.addText("High estimate", { x: bx + bw / 2, y: by - 0.42, w: bw / 2, h: 0.3, fontSize: 11, color: "475569", align: "right" });
+    const N = 24;
+    for (let i = 0; i < N; i++) s.addShape(pptx.ShapeType.rect, { x: bx + (bw / N) * i, y: by, w: bw / N + 0.01, h: 0.22, fill: { color: hex(i / (N - 1)) }, line: { color: hex(i / (N - 1)), width: 0 } });
+    const t = Math.min(1, Math.max(0, (ra.est - ra.low) / (ra.high - ra.low)));
+    s.addShape(pptx.ShapeType.rect, { x: bx + bw * t - 0.03, y: by - 0.08, w: 0.06, h: 0.38, fill: { color: DECK.INK }, line: { color: DECK.INK, width: 0 } });
+    s.addText([{ text: usd(ra.low) + "\n", options: { fontSize: 15, bold: true, color: DECK.INK } }, { text: psf(ra.low) ? `${psf(ra.low)} /sq ft` : "", options: { fontSize: 11, color: "64748B" } }], { x: bx, y: by + 0.3, w: bw / 2, h: 0.7, valign: "top" });
+    s.addText([{ text: usd(ra.high) + "\n", options: { fontSize: 15, bold: true, color: DECK.INK } }, { text: psf(ra.high) ? `${psf(ra.high)} /sq ft` : "", options: { fontSize: 11, color: "64748B" } }], { x: bx + bw / 2, y: by + 0.3, w: bw / 2, h: 0.7, align: "right", valign: "top" });
+  }
+  const basisTxt = [fmtBasis(b) ? `Priced for ${fmtBasis(b)}` : null, b.comps ? `${b.comps} rental comps ${b.search || ""}`.trim() : null].filter(Boolean).join(" · ");
+  if (basisTxt) s.addText(basisTxt, { x: L + 0.2, y: 5.25, w: W - 0.4, h: 0.5, fontSize: 11, color: "64748B", align: "center" });
+  if (ra.used > 0 && Math.abs(ra.used - ra.est) >= 1) {
+    s.addText(`Rent used in this deck's numbers: ${usd(ra.used)}/mo`, { x: L + 0.2, y: 5.75, w: W - 0.4, h: 0.45, fontSize: 12, bold: true, color: DECK.FOREST, align: "center" });
+  }
+  if (mapImg) {
+    s.addShape(pptx.ShapeType.roundRect, { x: 6.35, y: 1.4, w: 6.35, h: 4.2, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.1 });
+    s.addImage({ data: mapImg, x: 6.45, y: 1.5, w: 6.15, h: 3.84 });
+    s.addText("Teal pin = this house · numbered pins = rental comps 1 to 9, detailed on the next slide", { x: 6.35, y: 5.7, w: 6.35, h: 0.4, fontSize: 11, color: "64748B", align: "center" });
+  }
+  s.addText("Estimate from RentCast, based on nearby rental listings. Listings show asking rents, not signed leases. Buyer to verify independently.", { x: 0.6, y: 6.85, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
+
+  // Slide B: the comps
+  const comps = (ra.comps || []).slice(0, 9);
+  if (!comps.length) return;
+  const t2 = pptx.addSlide(); header(t2, "Rental Comps");
+  const H = (x) => ({ text: x, options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, fontSize: 12 } });
+  const rows = [[H("#"), H("Address"), H("Bd / Ba"), H("Sq ft"), H("Distance"), H("Rent"), H("$/sq ft"), H("Last seen")]];
+  comps.forEach((c, i) => rows.push([
+    String(i + 1),
+    String(c.address || ""),
+    c.beds != null && c.baths != null ? `${c.beds} / ${c.baths}` : "—",
+    num(c.sqft) > 0 ? Math.round(num(c.sqft)).toLocaleString() : "—",
+    c.distance != null ? `${Number(c.distance).toFixed(2)} mi` : "—",
+    c.rent ? usd(c.rent) : "—",
+    c.rent && num(c.sqft) > 0 ? `$${(c.rent / num(c.sqft)).toFixed(2)}` : "—",
+    c.daysOld != null ? (c.daysOld === 0 ? "today" : `${c.daysOld} day${c.daysOld === 1 ? "" : "s"} ago`) : "—",
+  ]));
+  t2.addTable(rows, { x: 0.6, y: 1.4, w: 12.1, colW: [0.45, 4.6, 1.05, 0.95, 1.1, 1.15, 1.1, 1.7], fontSize: 11.5, color: DECK.INK, rowH: 0.48, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } });
+  const more = num(b.comps) > comps.length ? ` RentCast used ${b.comps} comps in total. The ${comps.length} shown are the closest matches.` : "";
+  t2.addText(`Numbers match the pins on the map.${more} Asking rents from listings, not signed leases. Buyer to verify independently.`, { x: 0.6, y: 6.75, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
+}
+
 async function generateBuyerDeck(data) {
   const PptxGenJS = await loadPptx();
   const logo = await getLogoData();
@@ -3997,6 +4081,9 @@ async function generateBuyerDeck(data) {
   propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts });
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
+
+  // Rent analysis: these are hold strategies, so the rent is what the buyer is underwriting.
+  if (data.rentAnalysis) addRentSlides(pptx, header, { ...data.rentAnalysis, used: num(data.rent) }, await getRentMapImage(data.rentAnalysis));
 
   // Slide 3 — the deal
   s = pptx.addSlide(); header(s, `The Deal — ${data.dealType}`);
@@ -4219,6 +4306,9 @@ async function generateDualDeck(data) {
   s.addText([{ text: "CASH-ON-CASH\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: data.brrrr.cocStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
   if (data.brrrr.note) s.addText(data.brrrr.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
 
+  // Rent analysis belongs with the hold option: it is what the BRRRR refinance and cash flow run on.
+  if (data.rentAnalysis) addRentSlides(pptx, header, { ...data.rentAnalysis, used: num(data.rent) }, await getRentMapImage(data.rentAnalysis));
+
   // Slide 6 — 5-year wealth (BRRRR)
   const P5 = data.brrrr.projection;
   if (P5 && P5.total5 > 0) {
@@ -4339,6 +4429,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
         highlights: deal.highlights,
         returns: deal.returns,
         projection: deal.projection,
+        rentAnalysis: common.rentAnalysis || null,
         loanSavings: deal.loanSavings,
         basis: { compCount: common.compCount, avgPpsf: common.avgPpsf, rent: num(f.rent) },
         exits: deal.exits,
@@ -4775,6 +4866,7 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
                 rent: form.rent,
                 photo: form.photo,
                 basis: { compCount: deckCommon.compCount, avgPpsf: deckCommon.avgPpsf, rent: form.rent },
+                rentAnalysis: deckCommon.rentAnalysis || null,
                 contact: form.contact,
                 flip: (() => {
                   const fSell = flipDeck.sellingCost || 0;
