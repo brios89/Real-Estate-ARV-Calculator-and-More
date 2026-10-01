@@ -35,7 +35,9 @@ const archClass = (arch, ptype) => {
   return "detached";
 };
 
-const compFlags = (c, subj, subjSqft) => {
+const compFlags = (c, subj, subjSqft, win = {}) => {
+  const band = num(win.sqftBand) > 0 ? num(win.sqftBand) : 250;
+  const reach = num(win.radius) > 0 ? num(win.radius) : 1;
   const flags = [];
   if (!c) return flags;
   const nOr = (v) => (v == null || v === "" ? null : Number(v));
@@ -46,9 +48,11 @@ const compFlags = (c, subj, subjSqft) => {
   const cy = nOr(c.yearBuilt), sy = nOr(subj?.yearBuilt);
   if (cy && sy && Math.abs(cy - sy) > 15) flags.push(`built ${Math.abs(cy - sy)} yrs apart`);
   const cs = nOr(c.sqft), ss = subjSqft;
-  if (cs && ss && Math.abs(cs - ss) > 250) flags.push(`${Math.abs(cs - ss).toLocaleString()} sf off`);
+  // Size and distance are judged against the search the rep chose, so widening on purpose does not
+  // turn around and flag every comp that the wider search found.
+  if (cs && ss && Math.abs(cs - ss) > band) flags.push(`${Math.abs(cs - ss).toLocaleString()} sf off`);
   const cd = nOr(c.distance);
-  if (cd != null && cd > 1.0) flags.push(`${cd.toFixed(1)} mi away`); // 1 mi = normal appraiser reach in suburban markets (per B, Aug 5)
+  if (cd != null && cd > reach) flags.push(`${cd.toFixed(1)} mi away`); // 1 mi default = normal appraiser reach in suburban markets (per B, Aug 5)
   // different build type = different market — a townhouse can't price a detached house
   if ((c.architecture || c.propertyType) && (subj?.architecture || subj?.propertyType)) {
     const ca = archClass(c.architecture, c.propertyType), sa = archClass(subj.architecture, subj.propertyType);
@@ -616,7 +620,8 @@ const ownerFullName = (names) => {
 const INITIAL_CALL = {
   sellerName: "", bookedBy: "",
   motivation: "", motivNotes: "",
-  occupancy: "", tenantRent: "", leaseEnds: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
+  occupancy: "", tenantRent: "", leaseEnds: "", stmt: "",
+  signed: "", accessHow: "", accessCode: "", accessTimes: "", accessNotes: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
   escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
   hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
   timeline: "", others: "",
@@ -781,6 +786,17 @@ const motivationChecks = (c, deal) => {
   });
   return out;
 };
+// Sold-comp search window. Defaults are the appraiser-style box the ARV has always used: 1 mile, ±250
+// sq ft, sold in the last 12 months. The rep can step each one up or down and re-pull.
+const COMP_SEARCH_DEFAULT = { mi: 1, sf: 250, mo: 12 };
+const COMP_STEPS = { mi: [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5], sf: [100, 150, 200, 250, 300, 400, 500, 750], mo: [3, 6, 9, 12, 18, 24] };
+const stepTo = (list, cur, dir) => {
+  const i = list.findIndex((v) => v >= cur);
+  const at = i < 0 ? list.length - 1 : i;
+  const exact = list[at] === cur;
+  const next = dir > 0 ? (exact ? at + 1 : at) : at - 1;
+  return list[Math.max(0, Math.min(list.length - 1, next))];
+};
 const FIT_FLOOR = 40;   // Ace's working line: a top score under 40 means nothing actually fits at their number
 // The engine. Inputs: what the rep captured + live deal numbers from the calculator.
 // Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
@@ -889,6 +905,7 @@ function scoreStrategies(c, deal) {
       if (bal <= 0) miss.push(M("“Do you still owe anything on it?” — get the rough balance.", "Balance vs. ask decides Sub-To vs. Hybrid."));
       if (num(c.payment) <= 0) miss.push(M("“What's your current payment?”", "The payment IS the deal — it sets your monthly basis."));
       if (!(num(c.rate) > 0)) miss.push(M("“Do you happen to know the interest rate on it?”", "A low fixed rate is the asset you are taking over. It sets the financing value on the buyer deck."));
+      if (c.stmt !== "received") miss.push(M("Ask for their most recent mortgage statement.", "It confirms the lender, balance, payment, escrow and whether they are current."));
       // No payment or no rent means the hold test never ran. Before, a Sub-To with low equity and a
       // flexible seller reached 68 and "Best fit" without anyone knowing what the payment was.
       if (!pc) {
@@ -1054,6 +1071,11 @@ const buildCallNarrative = (cs, deal, strat) => {
   for (const k of motivationChecks(cs, deal)) s1.push(`Worth a second look: ${k.msg}`);
   p.push(s1.join(" "));
   const s2 = [];
+  if (cs.loan === "yes" && cs.stmt) s2.push(`Mortgage statement: ${STMT_LABEL[cs.stmt].toLowerCase()}.`);
+  if (cs.signed === "yes") {
+    const acc = [cs.accessHow ? ACCESS_LABEL[cs.accessHow] : null, cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean);
+    s2.push(`Agreement signed. Access: ${acc.length ? acc.join(". ") : "not captured yet"}.`);
+  } else if (cs.signed === "no") s2.push("Agreement not signed yet.");
   if (cs.occupancy === "tenant" && num(cs.tenantRent) > 0) s2.push(`Tenant in place paying ${usd(num(cs.tenantRent))}/mo${String(cs.leaseEnds || "").trim() ? `, lease ends ${String(cs.leaseEnds).trim()}` : ""}.`);
   if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.conditionAuto === "yes" ? " (going by the repair number)" : ""}${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
   else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
@@ -1196,7 +1218,7 @@ const buildCallReport = (cs, deal, strat) => {
         const keys = COND_ITEMS.filter(([k]) => items[k] !== undefined);
         if (!keys.length) return row("Walkthrough checklist", "&mdash;");
         return keys.map(([k, label]) => row(label, items[k] ? esc(items[k]) : "noted, no detail")).join("");
-      })()}${row("Occupancy", v(cs.occupancy))}${cs.occupancy === "tenant" && num(cs.tenantRent) > 0 ? row("Tenant pays now", `${esc(usd(num(cs.tenantRent)))}/mo${String(cs.leaseEnds || "").trim() ? ` &middot; lease ends ${esc(String(cs.leaseEnds).trim())}` : ""}`) : ""}
+      })()}${cs.signed ? row("Agreement", cs.signed === "yes" ? "Signed" : "<span style=\"color:#b45309\">Not signed yet</span>") : ""}${cs.signed === "yes" ? row("Access", cs.accessHow ? esc([ACCESS_LABEL[cs.accessHow], cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean).join(" · ")) : "<span style=\"color:#b45309\">No access instructions yet</span>") : ""}${cs.loan === "yes" ? row("Mortgage statement", cs.stmt ? (cs.stmt === "received" ? esc(STMT_LABEL[cs.stmt]) : `<span style="color:#b45309">${esc(STMT_LABEL[cs.stmt])}</span>`) : "<span style=\"color:#b45309\">Not asked yet</span>") : ""}${row("Occupancy", v(cs.occupancy))}${cs.occupancy === "tenant" && num(cs.tenantRent) > 0 ? row("Tenant pays now", `${esc(usd(num(cs.tenantRent)))}/mo${String(cs.leaseEnds || "").trim() ? ` &middot; lease ends ${esc(String(cs.leaseEnds).trim())}` : ""}`) : ""}
       ${isLowRate(cs.rate) ? row("Escalation", `<b style="color:#047857">${esc(String(rateNum(cs.rate)))}% loan &mdash; send to the head of acquisitions if not locked up or if creative was declined</b>`) : ""}
       ${row("HOA", cs.hoa === "yes" ? `Yes${num(cs.hoaAmt) > 0 ? ` &mdash; ${esc(usd(num(cs.hoaAmt)))}/mo` : ""}` : v(cs.hoa))}
       ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
@@ -1644,6 +1666,64 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
     </div>
   );
 };
+
+// Sub-To and Hybrid both take over the seller's loan, so the real numbers have to come off the lender's
+// paper, not the seller's memory. Shown as a step in the pitch and again at Close until it is received.
+const STMT_OPTS = [["requested", "Requested"], ["received", "Received"], ["declined", "Seller declined"]];
+const STMT_LABEL = { requested: "Requested, not received yet", received: "Received", declined: "Seller declined to share it" };
+const MortgageStatementStep = ({ cs, upd, compact = false }) => (
+  <div className={`mt-2.5 rounded-lg border-2 ${cs.stmt === "received" ? "border-emerald-400 bg-white" : "border-amber-400 bg-amber-50"} px-3 py-2`}>
+    <div className="flex items-center gap-1.5 text-[12px] font-bold text-slate-900">
+      <FileDown className="h-3.5 w-3.5 text-amber-600" /> Ask for the mortgage statement
+    </div>
+    {!compact && <Line>“So we get your numbers exactly right, could you snap a photo of your most recent mortgage statement and text or email it to me?”</Line>}
+    {!compact && (
+      <div className="mt-1 text-[11px] leading-snug text-slate-700">
+        It confirms the lender, the loan number, the exact balance and payment, whether taxes and insurance are escrowed, and whether they are current. A Sub-To or Hybrid offer never goes final on what the seller remembers.
+      </div>
+    )}
+    <div className="mt-1.5 flex flex-wrap gap-1.5">
+      {STMT_OPTS.map(([v, l]) => (
+        <button key={v} type="button" onClick={() => upd("stmt", cs.stmt === v ? "" : v)}
+          className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${cs.stmt === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{l}</button>
+      ))}
+    </div>
+    {cs.stmt === "declined" && (
+      <div className="mt-1.5 text-[11px] leading-snug text-amber-800">
+        Say: “No problem. We can't finalize the numbers without it, so whenever you're comfortable, I'll be right here.” Note it, and flag it to the head of acquisitions before any contract goes out.
+      </div>
+    )}
+  </div>
+);
+
+// After the agreement is signed: how the team gets in for photos, walkthroughs and contractors.
+const ACCESS_OPTS = [["seller", "Seller lets us in"], ["lockbox", "Lockbox"], ["key", "Key left out"], ["tenant", "Through the tenant"], ["other", "Other"]];
+const ACCESS_LABEL = Object.fromEntries(ACCESS_OPTS);
+const AccessStep = ({ cs, upd }) => (
+  <div className="mt-2 rounded-lg border-2 border-emerald-500 bg-emerald-50/50 px-3 py-2">
+    <div className="text-[12px] font-bold text-slate-900">Get access instructions</div>
+    <Line>“So we can get photos and contractors in over the next few days, what's the best way for us to get into the house?”</Line>
+    <WField label="How we get in">
+      <WChips value={cs.accessHow} onChange={(v) => upd("accessHow", v)} opts={ACCESS_OPTS} />
+    </WField>
+    {(cs.accessHow === "lockbox" || cs.accessHow === "key" || cs.accessHow === "other") && (
+      <WField label={cs.accessHow === "lockbox" ? "Lockbox location and code" : cs.accessHow === "key" ? "Where the key is" : "How it works"}>
+        <WText value={cs.accessCode} onChange={(v) => upd("accessCode", v)} placeholder={cs.accessHow === "lockbox" ? "on the back door, code 4821" : cs.accessHow === "key" ? "under the planter by the side door" : "describe it"} />
+      </WField>
+    )}
+    <WField label="Best days and times, and who to call first">
+      <WText value={cs.accessTimes} onChange={(v) => upd("accessTimes", v)} placeholder="weekdays after 3, text Linda first at 502-555-0100" />
+    </WField>
+    <Hint>Then ask: “Is there an alarm, a gate code, or any pets we should know about?” and “Is anyone living there we should coordinate with?”</Hint>
+    <WField label="Alarm, gate, pets, anything else">
+      <WText value={cs.accessNotes} onChange={(v) => upd("accessNotes", v)} placeholder="dog in the back yard, alarm code 1234, gate sticks" />
+    </WField>
+    {cs.occupancy === "tenant" && (
+      <div className="mt-1.5 text-[11px] leading-snug text-amber-800">A tenant lives there. Set visits up through the seller and give the tenant advance notice. Never show up unannounced.</div>
+    )}
+    {!cs.accessHow && <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Do not end the call without this. Dispositions and contractors cannot start until we know how to get in.</div>}
+  </div>
+);
 
 const NeedCheck = ({ nd }) => {
   if (!nd) return null;
@@ -2467,6 +2547,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     {multi && <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">{k === 0 ? "First" : "Then"} — {o.label}</div>}
                     {overAsk && secondFor(o.id) && <Line>{secondFor(o.id)}</Line>}
                     {o.pitch.map((p, j) => <Line key={j}>{p}</Line>)}
+                    {(o.id === "subto" || o.id === "hybrid") && <MortgageStatementStep cs={cs} upd={upd} />}
                     <button type="button" onClick={() => onTab(o.tab)}
                       className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700">
                       Run the {o.label} numbers
@@ -2541,12 +2622,31 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
             </div>
           )}
+          {(() => {
+            // Sub-To / Hybrid in play (picked, pitched, or best fit) and the statement is not in hand yet.
+            const ids = [cs.wentWith, ...(cs.chosen || "").split(",")].filter(Boolean);
+            if (!ids.length && strat.fits && strat.ranked[0]) ids.push(strat.ranked[0].id);   // nothing picked: the best fit
+            const inPlay = ids.includes("subto") || ids.includes("hybrid");
+            return inPlay && cs.stmt !== "received" ? (
+              <div className="mb-3">
+                <MortgageStatementStep cs={cs} upd={upd} compact />
+                <div className="mt-1 text-[11px] leading-snug text-slate-700">Before this goes to the TC, the mortgage statement has to be in hand.</div>
+              </div>
+            ) : null;
+          })()}
           <Line>Commitment close: “If we can make the numbers work, are you ready to move forward today?”</Line>
           <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
             <b>Never send agreements without walking through them live on the phone.</b> Verify seller info → send the agreement → review it line-by-line together → confirm signatures while you're still on the call.
           </div>
           <Line>Stress test (after signing): “When someone asks you why you decided to sell the house to us, what are you going to tell them?” — you want THEIR reason, not your pitch back. Coach if needed: “Would you say it helps you get closer to ___? It saves you time, energy, and money?”</Line>
-          <Line>Next steps: “Within the next few days we'll likely need access for photos, walkthroughs, or contractors.”</Line>
+          <WField label="Is the agreement signed?">
+            <WChips value={cs.signed} onChange={(v) => upd("signed", v)} opts={[["yes", "Signed"], ["no", "Not yet"]]} />
+          </WField>
+          {cs.signed === "yes" && (<>
+            <Line>Next steps: “Within the next few days we'll likely need access for photos, walkthroughs, or contractors.”</Line>
+            <AccessStep cs={cs} upd={upd} />
+          </>)}
+          {cs.signed === "no" && <Hint>Not signed yet. Access comes after the signature, so set the follow-up and log what is holding it up.</Hint>}
           <Line>End in rapport: “It was great getting to know you.” · “Congratulations on getting this process started.” · “So what's the next chapter for you after this?”</Line>
           <Hint>Compliance (SOP): no guarantees, no legal advice, approved contracts only. Then: submit to the TC same day, title open within 1 business day, notify Dispositions.</Hint>
           <button type="button" onClick={downloadReport}
@@ -2704,6 +2804,7 @@ export default function App() {
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
+  const [compSearch, setCompSearch] = useState(COMP_SEARCH_DEFAULT);   // radius / sq ft band / months for the sold pull
   const [soldData, setSoldData] = useState(null);      // actual recorded sold comps (RentCast /properties)
   const [soldLoading, setSoldLoading] = useState(false);
   const [soldMsg, setSoldMsg] = useState(null);
@@ -2772,6 +2873,9 @@ export default function App() {
       if (sf > 0) params.set("subjectSqft", String(sf));
       const ptype = fresh?.propertyType || subjectInfo?.propertyType;
       if (ptype) params.set("propertyType", ptype);
+      params.set("radius", String(compSearch.mi));
+      params.set("sqftBand", String(compSearch.sf));
+      params.set("saleDateRange", String(Math.round(compSearch.mo * 30.44)));
       // The house as the team has it: county beds/baths plus corrections, so sales are matched on rooms.
       const rb = fresh && fresh.beds !== undefined ? fresh.beds : subjectInfo?.beds;
       const rba = fresh && fresh.baths !== undefined ? fresh.baths : subjectInfo?.baths;
@@ -2991,7 +3095,7 @@ export default function App() {
       beds: subjectInfo.beds != null ? subjectInfo.beds + adjBeds : subjectInfo.beds,
       baths: subjectInfo.baths != null ? subjectInfo.baths + adjBaths : subjectInfo.baths,
     } : subjectInfo;
-    const base = pool0.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjNow, sf)] }));
+    const base = pool0.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjNow, sf, soldData && soldData.window)] }));
     // Size adjustment (appraiser-style): each sale's price, moved to the subject's size at the marginal rate.
     const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(base.filter((c) => c.flags.length === 0).map((c) => c.ppsf || 0)) / 2);
     base.forEach((c) => {
@@ -3139,11 +3243,12 @@ export default function App() {
       soldIncluded, manualSold, mlsOnly, tabs,
       fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
       rentBasis,
+      compSearch: (compSearch.mi !== 1 || compSearch.sf !== 250 || compSearch.mo !== 12) ? compSearch : null,
       // est = RentCast's number (never the rep's), so a reopened deal can still show "RentCast says".
       rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst || rentSaved, comps: rentComps } : null,
     };
     // A rent pull on its own is worth keeping: the card, range and comp map should survive a reload.
-    const blank = !tabs && !rentBasis && !rentLow && !rentHigh && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
+    const blank = !tabs && compSearch.mi === 1 && compSearch.sf === 250 && compSearch.mo === 12 && !rentBasis && !rentLow && !rentHigh && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
     return blank ? null : d;
   };
@@ -3179,6 +3284,7 @@ export default function App() {
     setArvOverride(""); setRepairOverride("");
     setAdjBeds(0); setAdjBaths(0);
     setRehabLevel(""); setCustomPsf(""); setMlsOnly(true);   // one house's condition never prices another
+    setCompSearch(COMP_SEARCH_DEFAULT);
     setWholesaleFee(FEE_DEFAULT);   // a fee negotiated on one deal does not carry to the next
     // Strategy tabs too. They only fill empty fields from the call, so a leftover balance or price from
     // the last house would sit there, never get replaced, and quietly run that house's numbers.
@@ -3216,6 +3322,7 @@ export default function App() {
       const typedSaved = rec.desk && rec.desk.tabs && num(rec.desk.tabs.rentOverride) > 0 ? num(rec.desk.tabs.rentOverride) : 0;
       if (num(rec.rent) > 0 && num(rec.rent) !== typedSaved) setRentSaved(num(rec.rent));
       setRentBasis(rec.desk && rec.desk.rentBasis ? rec.desk.rentBasis : null);
+      setCompSearch(rec.desk && rec.desk.compSearch ? { ...COMP_SEARCH_DEFAULT, ...rec.desk.compSearch } : COMP_SEARCH_DEFAULT);
       const rr = rec.desk && rec.desk.rentRange;
       setRentLow(rr && rr.low ? num(rr.low) : null); setRentHigh(rr && rr.high ? num(rr.high) : null);
       // The RentCast estimate itself, separate from a typed rent, so the card shows what RentCast said.
@@ -3311,7 +3418,7 @@ export default function App() {
     }, 1200);
     syncTimer.current = { key: saveKey, id: timerId };
   }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh, rentComps]);
+      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh, rentComps, compSearch]);
 
   // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
   // $40 heavy, the same split the scoring uses). Marked as set by the number, so the strategy engine
@@ -3678,9 +3785,50 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className="mt-1 text-[10px] text-slate-600">
-            Real recorded sale prices off the deed — last 12 months, within 1 mile, ±250 sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. (Different from Auto-comp above, which uses RentCast's estimate model.)
-          </div>
+          {(() => {
+            // What the comps on screen were actually pulled with, vs what the controls are set to now.
+            const w = (soldData && soldData.window) || {};
+            const pulled = { mi: num(w.radius) || 1, sf: num(w.sqftBand) || 250, mo: Math.round((num(w.saleDateRange) || 365) / 30.44) };
+            const changed = !!soldData && (pulled.mi !== compSearch.mi || pulled.sf !== compSearch.sf || pulled.mo !== compSearch.mo);
+            const isDefault = compSearch.mi === 1 && compSearch.sf === 250 && compSearch.mo === 12;
+            const ctl = (key, label, fmt) => (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-semibold text-slate-700">{label}</span>
+                <button type="button" aria-label={`Less ${label}`} disabled={compSearch[key] === COMP_STEPS[key][0]}
+                  onClick={() => setCompSearch((c) => ({ ...c, [key]: stepTo(COMP_STEPS[key], c[key], -1) }))}
+                  className="h-7 w-7 rounded-md border border-slate-300 bg-white text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">−</button>
+                <span className="min-w-[64px] text-center font-mono text-[12px] font-bold text-slate-900">{fmt(compSearch[key])}</span>
+                <button type="button" aria-label={`More ${label}`} disabled={compSearch[key] === COMP_STEPS[key][COMP_STEPS[key].length - 1]}
+                  onClick={() => setCompSearch((c) => ({ ...c, [key]: stepTo(COMP_STEPS[key], c[key], 1) }))}
+                  className="h-7 w-7 rounded-md border border-slate-300 bg-white text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">+</button>
+              </div>
+            );
+            return (<>
+              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                  {ctl("mi", "Radius", (v) => `${v} mi`)}
+                  {ctl("sf", "Size", (v) => `±${v} sf`)}
+                  {ctl("mo", "Sold within", (v) => `${v} mo`)}
+                  {!isDefault && (
+                    <button type="button" onClick={() => setCompSearch(COMP_SEARCH_DEFAULT)} className="text-[11px] font-semibold text-emerald-700 hover:underline">Back to 1 mi · ±250 sf · 12 mo</button>
+                  )}
+                </div>
+                {changed && (
+                  <button type="button" disabled={soldLoading} onClick={() => pullSold({}, { keepManual: true })}
+                    className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
+                    <RefreshCw className="h-3.5 w-3.5" /> {soldLoading ? "Pulling…" : `Re-pull comps within ${compSearch.mi} mi, ±${compSearch.sf} sf, sold in the last ${compSearch.mo} months`}
+                  </button>
+                )}
+                {changed && <div className="mt-0.5 text-center text-[10.5px] text-slate-600">Uses about 2 RentCast credits. Your hand-entered comps stay.</div>}
+                {(compSearch.mi > 1.5 || compSearch.mo > 12) && (
+                  <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Wider searches find more sales but looser matches. Older or farther sales can pull the ARV off today's value for this street, so check the map before you trust the number.</div>
+                )}
+              </div>
+              <div className="mt-1 text-[10px] text-slate-600">
+                Real recorded sale prices off the deed: last {pulled.mo} months, within {pulled.mi} mile{pulled.mi === 1 ? "" : "s"}, ±{pulled.sf} sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. (Different from Auto-comp above, which uses RentCast's estimate model.)
+              </div>
+            </>);
+          })()}
 
           <div className="mt-2 text-[10px] italic text-slate-600">
             The ARV median runs on the <b className="text-slate-700">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
