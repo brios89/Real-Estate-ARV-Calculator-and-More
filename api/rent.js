@@ -32,24 +32,39 @@ export default async function handler(req, res) {
   if (baths != null && baths > 0) params.set("bathrooms", String(baths));
   if (sqft != null && sqft > 0) params.set("squareFootage", String(Math.round(sqft)));
   if (ptype) params.set("propertyType", ptype);
-  // Comp settings. Radius and look-back match the RentCast website without Pro (5 miles, 270 days, per
-  // RentCast's docs: Property Valuation > "AVM Values: API vs. RentCast Website"). Comp count is 25, the
-  // API's maximum (the website uses 20), per B, Sep 30 2026: a bigger pool of comps inside the same
-  // 5-mile, 270-day box. Expect it to land close to, not exactly on, the website's number.
-  const SITE = { compCount: "25", maxRadius: "5", daysOld: "270" };
-  for (const [k, v] of Object.entries(SITE)) params.set(k, v);
+  // Comp settings, per B (Sep 30 2026): 25 comps (the API maximum), start hyper-local at half a mile
+  // and only rentals seen in the last 90 days, so the estimate reflects today's rents. This file only
+  // prices rent. Sold comps for the ARV live in sold.js and are not affected. RentCast's docs warn a
+  // tight radius or look-back can come back with "not enough comps", so the search widens in steps
+  // (below). RentCast only bills successful requests (non-200 responses are free, per its Billing and
+  // Pricing docs), so the widening steps cost nothing. A pull is still 1 credit.
+  params.set("compCount", "25");
+  const DAYS = "90";
+  params.set("daysOld", DAYS);
+  // Search order, per B (Sep 30 2026): distance gives first, then time. Hold the 90-day window and widen
+  // 0.5 -> 1 -> 2 -> 5 miles. If 5 miles still has too few recent rentals, hold 5 miles and stretch the
+  // look-back 180 -> 270 -> 365 days. Only after all of that, RentCast's own default search.
+  const STEPS = [
+    ["0.5", DAYS], ["1", DAYS], ["2", DAYS], ["5", DAYS],
+    ["5", "180"], ["5", "270"], ["5", "365"],
+  ];
   const call = (p) => fetch(`https://api.rentcast.io/v1/avm/rent/long-term?${p.toString()}`, { headers: { "X-Api-Key": key, Accept: "application/json" } });
 
   try {
-    let r = await call(params);
-    let widened = false;
-    // RentCast warns that a tight radius or look-back can come back with "not enough comps". When that
-    // happens, ask once more with its own defaults instead of handing the rep an error.
-    if (!r.ok && ![401, 429].includes(r.status)) {
+    let r = null, used = null;
+    for (const [mi, days] of STEPS) {
+      const p = new URLSearchParams(params);
+      p.set("maxRadius", mi);
+      p.set("daysOld", days);
+      r = await call(p);
+      if (r.ok) { used = `within ${mi} mi, last ${days} days`; break; }
+      if ([401, 403, 429].includes(r.status)) break;   // key, billing or quota problem: widening will not help
+    }
+    if (!r.ok && ![401, 403, 429].includes(r.status)) {
       const loose = new URLSearchParams(params);
       loose.delete("maxRadius"); loose.delete("daysOld");
       const r2 = await call(loose);
-      if (r2.ok) { r = r2; widened = true; }
+      if (r2.ok) { r = r2; used = "from RentCast's default search, since there were not enough rentals within 5 mi even looking back a full year"; }
     }
 
     if (!r.ok) {
@@ -58,6 +73,7 @@ export default async function handler(req, res) {
         error:
           r.status === 404 ? "RentCast couldn't estimate rent for that address. Enter rent manually."
           : r.status === 401 ? "RentCast rejected the API key. Re-check RENTCAST_API_KEY in Vercel."
+          : r.status === 403 ? "RentCast says the API subscription is inactive or has a billing problem. Check the API dashboard."
           : r.status === 429 ? "RentCast call limit reached for this period (free tier = 50/mo)."
           : `RentCast error ${r.status}.`,
         detail: body.slice(0, 300),
@@ -71,7 +87,7 @@ export default async function handler(req, res) {
       rentHigh: data.rentRangeHigh ? Math.round(Number(data.rentRangeHigh)) : null,
       subjectAddress: data.subjectProperty?.formattedAddress || address,
       comps: Array.isArray(data.comparables) ? data.comparables.length : null,
-      search: widened ? "RentCast default search" : "within 5 mi, last 270 days",
+      search: used,
       // What the estimate was actually priced for: RentCast's resolved subject, falling back to what we sent.
       basis: {
         beds: data.subjectProperty?.bedrooms ?? beds ?? null,
