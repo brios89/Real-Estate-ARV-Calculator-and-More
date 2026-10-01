@@ -171,7 +171,7 @@ function computeLoanSavings({ P, rate, term, mkt, origTerm = 30, dealPayment = 0
   return { P, rate, mkt, term, effOrig, seasoned, payDeal, payNew, newPmtFull, intSubTo, intNew, rateSaved, seasoningSaved, totalSaved, moRelief, takePayment, haveRealPmt };
 }
 
-function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClose, coc }) {
+function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClose, coc, cashIn = 0, reservePct = 0 }) {
   const paydown5 = loanAmt > 0 ? loanAmt - balanceAt(loanAmt, rate, term, 5) : 0;
   const appreciation5 = arv > 0 ? arv * (Math.pow(1.03, 5) - 1) : 0;
   const cumCF5 = cashFlow * 60;
@@ -187,6 +187,7 @@ function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClo
   const milestones = [1, 5, 10, 15, 20, 25, 30].map((y) => curveSeries[y - 1]).filter(Boolean);
   return {
     returns: { cashToClose, monthlyCF: cashFlow, annualCF: cashFlow * 12, coc },
+    upsideBase: { cashIn, monthlyCF: cashFlow, reservePct },
     projection: { startEquity, paydown5, appreciation5, cumCF5, total5: startEquity + paydown5 + appreciation5 + cumCF5, apprRate: 3 },
     curve: { series: curveSeries, milestones, cashToClose },
     exits: [
@@ -615,7 +616,7 @@ const ownerFullName = (names) => {
 const INITIAL_CALL = {
   sellerName: "", bookedBy: "",
   motivation: "", motivNotes: "",
-  occupancy: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
+  occupancy: "", tenantRent: "", leaseEnds: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
   escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
   hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
   timeline: "", others: "",
@@ -1053,6 +1054,7 @@ const buildCallNarrative = (cs, deal, strat) => {
   for (const k of motivationChecks(cs, deal)) s1.push(`Worth a second look: ${k.msg}`);
   p.push(s1.join(" "));
   const s2 = [];
+  if (cs.occupancy === "tenant" && num(cs.tenantRent) > 0) s2.push(`Tenant in place paying ${usd(num(cs.tenantRent))}/mo${String(cs.leaseEnds || "").trim() ? `, lease ends ${String(cs.leaseEnds).trim()}` : ""}.`);
   if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.conditionAuto === "yes" ? " (going by the repair number)" : ""}${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
   else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
   if (isLowRate(cs.rate)) s2.push(`Loan is at ${rateNum(cs.rate)}%, well under market. If this is not locked up or creative was declined, it goes to the head of acquisitions rather than being marked dead.`);
@@ -1194,7 +1196,7 @@ const buildCallReport = (cs, deal, strat) => {
         const keys = COND_ITEMS.filter(([k]) => items[k] !== undefined);
         if (!keys.length) return row("Walkthrough checklist", "&mdash;");
         return keys.map(([k, label]) => row(label, items[k] ? esc(items[k]) : "noted, no detail")).join("");
-      })()}${row("Occupancy", v(cs.occupancy))}
+      })()}${row("Occupancy", v(cs.occupancy))}${cs.occupancy === "tenant" && num(cs.tenantRent) > 0 ? row("Tenant pays now", `${esc(usd(num(cs.tenantRent)))}/mo${String(cs.leaseEnds || "").trim() ? ` &middot; lease ends ${esc(String(cs.leaseEnds).trim())}` : ""}`) : ""}
       ${isLowRate(cs.rate) ? row("Escalation", `<b style="color:#047857">${esc(String(rateNum(cs.rate)))}% loan &mdash; send to the head of acquisitions if not locked up or if creative was declined</b>`) : ""}
       ${row("HOA", cs.hoa === "yes" ? `Yes${num(cs.hoaAmt) > 0 ? ` &mdash; ${esc(usd(num(cs.hoaAmt)))}/mo` : ""}` : v(cs.hoa))}
       ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
@@ -1512,7 +1514,7 @@ const RentCompMap = ({ subject, pins }) => (
 );
 // ARV pins: green = in the ARV, amber = flagged out, gray = out for other reasons.
 const soldPinColor = (p) => (p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8");
-const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject, change }) => {
+const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject, change, onRent, tenantRent = 0 }) => {
   const [showList, setShowList] = useState(false);
   const mapped = useMemo(() => (comps || []).map((c, i) => ({
     i, n: i + 1, lat: c.lat, lng: c.lng, price: c.rent, comp: c,
@@ -1522,7 +1524,9 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
   const b = (info && info.basis) || (info && info.want) || {};
   const sq = num(b.sqft), beds = num(b.beds);
   const perSq = (v) => (sq > 0 && v > 0 ? `$${(v / sq).toFixed(2)}` : null);
-  const perBed = beds > 0 && est > 0 ? `$${(est / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+  // The rent the deal runs on: what the rep set (slider or typed), else RentCast's estimate.
+  const shown = typed > 0 ? typed : tenantRent > 0 ? tenantRent : est;
+  const perBed = beds > 0 && shown > 0 ? `$${(shown / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
   const hasRange = low > 0 && high > low;
   const pos = (v) => Math.min(100, Math.max(0, ((v - low) / (high - low)) * 100));
   const hasMap = est > 0 && mapped.length > 0;
@@ -1534,11 +1538,23 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
         <span className="rounded-full bg-cyan-50 px-4 py-1.5 text-[13px] font-semibold text-cyan-600">Estimated Monthly Rent</span>
       </div>
       {est > 0 ? (<>
-        <div className="mt-3 text-center text-5xl font-bold tracking-tight text-slate-900">{usd(est)}</div>
-        {(perSq(est) || perBed) && (
+        <div className={`mt-3 text-center text-5xl font-bold tracking-tight ${typed > 0 ? "text-amber-600" : tenantRent > 0 ? "text-emerald-700" : "text-slate-900"}`}>{usd(shown)}</div>
+        {!(typed > 0) && tenantRent > 0 && (
+          <div className="mt-1 text-center text-[12px] text-slate-700">
+            What the tenant pays now · RentCast market rent {usd(est)}
+            {est > tenantRent ? <b className="text-emerald-700"> · +{usd(est - tenantRent)}/mo upside</b> : null}
+          </div>
+        )}
+        {typed > 0 && (
+          <div className="mt-1 text-center text-[12px] text-slate-700">
+            Set by you · RentCast says {usd(est)}
+            {onRent && <> · <button type="button" onClick={() => onRent("")} className="font-semibold text-emerald-700 hover:underline">reset</button></>}
+          </div>
+        )}
+        {(perSq(shown) || perBed) && (
           <div className="mt-3 flex items-stretch justify-center gap-5 text-center">
-            {perSq(est) && <div><div className="text-[15px] font-bold text-slate-800">{perSq(est)}</div><div className="text-[12px] text-slate-700">per sq.ft.</div></div>}
-            {perSq(est) && perBed && <div className="w-px bg-slate-200" />}
+            {perSq(shown) && <div><div className="text-[15px] font-bold text-slate-800">{perSq(shown)}</div><div className="text-[12px] text-slate-700">per sq.ft.</div></div>}
+            {perSq(shown) && perBed && <div className="w-px bg-slate-200" />}
             {perBed && <div><div className="text-[15px] font-bold text-slate-800">{perBed}</div><div className="text-[12px] text-slate-700">per bedroom</div></div>}
           </div>
         )}
@@ -1546,13 +1562,17 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
           <div className="mt-5">
             <div className="flex justify-between text-[12.5px] text-slate-600"><span>Low Estimate</span><span>High Estimate</span></div>
             <div className="relative mt-1.5 h-3.5 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500">
-              {est >= low && est <= high && <div className="absolute top-1/2 h-5 w-1 -translate-y-1/2 rounded bg-slate-900/80" style={{ left: `calc(${pos(est)}% - 2px)` }} title={`RentCast ${usd(est)}`} />}
-              {typed > 0 && (
-                <div className="absolute -top-6 -translate-x-1/2 whitespace-nowrap rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white" style={{ left: `${pos(typed)}%` }}>
-                  Yours {usd(typed)}
-                </div>
+              {/* RentCast's own estimate stays marked, so a rep can always see where they moved from. */}
+              {est >= low && est <= high && <div className="absolute top-1/2 h-5 w-1 -translate-y-1/2 rounded bg-slate-900/60" style={{ left: `calc(${pos(est)}% - 2px)` }} title={`RentCast ${usd(est)}`} />}
+              {/* Drag the handle to set the rent. It only moves inside RentCast's low-to-high range; a
+                  number outside it has to be typed, and gets the "outside the range" warning. */}
+              {onRent && (
+                <input type="range" className="rent-range absolute -top-1.5 left-0 h-6 w-full cursor-pointer" aria-label="Set the monthly rent"
+                  min={low} max={high} step={5} value={Math.min(high, Math.max(low, shown))}
+                  onChange={(e) => { const v = Number(e.target.value); onRent(Math.abs(v - est) < 5 ? "" : String(v)); }} />
               )}
             </div>
+            {onRent && <div className="mt-1 text-center text-[11px] text-slate-600">Drag the handle to set the rent the deal runs on.</div>}
             <div className="mt-2 flex justify-between">
               <div><div className="text-[15px] font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[12px] text-slate-700">{perSq(low)} /sq.ft.</div>}</div>
               <div className="text-right"><div className="text-[15px] font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[12px] text-slate-700">{perSq(high)} /sq.ft.</div>}</div>
@@ -2164,6 +2184,19 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <WField label="Occupancy">
             <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
           </WField>
+          {cs.occupancy === "tenant" && (
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <WField label="What the tenant pays now (monthly)">
+                <WText money value={cs.tenantRent} onChange={(v) => upd("tenantRent", v)} placeholder="1250" />
+              </WField>
+              <WField label="When does the lease end?">
+                <WText value={cs.leaseEnds} onChange={(v) => upd("leaseEnds", v)} placeholder="May 2027, or month to month" />
+              </WField>
+              <div className="col-span-2 text-[11px] leading-snug text-slate-700">
+                The tenant's rent becomes the rent the deal runs on, since that is what a buyer collects on day one. RentCast's market rent stays on the buyer deck as the upside once the lease turns over.
+              </div>
+            </div>
+          )}
           <Line>“Do you still owe anything on it?”</Line>
           <Line>“At closing, will we need to pay off any loan?”</Line>
           <Hint>Ask either one, exactly that casually. If yes, follow with “What's your current payment?” — the payment and balance quietly decide Sub-To vs Hybrid vs Seller Finance.</Hint>
@@ -3046,7 +3079,10 @@ export default function App() {
   // ---- rental ----
   // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
   // The remembered value keeps a re-opened deal complete without spending another RentCast credit.
-  const effRent = num(rentOverride) > 0 ? num(rentOverride) : (rentEst || rentSaved || 0);
+  // Rent the deal runs on: a rent the rep typed or slid, else what a tenant in place pays today, else
+  // RentCast's market estimate.
+  const tenantRentNow = callState.occupancy === "tenant" ? num(callState.tenantRent) : 0;
+  const effRent = num(rentOverride) > 0 ? num(rentOverride) : (tenantRentNow > 0 ? tenantRentNow : (rentEst || rentSaved || 0));
   // The house as the team has it right now: record beds/baths plus corrections, and the sq ft.
   const wantBasis = {
     beds: subjectInfo?.beds != null ? subjectInfo.beds + adjBeds : null,
@@ -3103,7 +3139,8 @@ export default function App() {
       soldIncluded, manualSold, mlsOnly, tabs,
       fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
       rentBasis,
-      rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst, comps: rentComps } : null,
+      // est = RentCast's number (never the rep's), so a reopened deal can still show "RentCast says".
+      rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst || rentSaved, comps: rentComps } : null,
     };
     // A rent pull on its own is worth keeping: the card, range and comp map should survive a reload.
     const blank = !tabs && !rentBasis && !rentLow && !rentHigh && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
@@ -3174,7 +3211,10 @@ export default function App() {
       if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
       // desk.fee is only ever written for a fee someone chose, so it wins outright, even at $20,000.
       setWholesaleFee(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
-      if (num(rec.rent) > 0) setRentSaved(num(rec.rent));
+      // rec.rent is the rent the deal ran on, which may be the rep's own number. Only use it as the
+      // RentCast estimate when it is not just the rep's typed/slid rent echoed back.
+      const typedSaved = rec.desk && rec.desk.tabs && num(rec.desk.tabs.rentOverride) > 0 ? num(rec.desk.tabs.rentOverride) : 0;
+      if (num(rec.rent) > 0 && num(rec.rent) !== typedSaved) setRentSaved(num(rec.rent));
       setRentBasis(rec.desk && rec.desk.rentBasis ? rec.desk.rentBasis : null);
       const rr = rec.desk && rec.desk.rentRange;
       setRentLow(rr && rr.low ? num(rr.low) : null); setRentHigh(rr && rr.high ? num(rr.high) : null);
@@ -3330,6 +3370,7 @@ export default function App() {
     rentAnalysis: (rentEst || rentSaved) ? {
       est: rentEst || rentSaved, low: rentLow, high: rentHigh,
       basis: rentBasis || wantBasis, comps: rentComps, subject: rentSubject,
+      tenantRent: tenantRentNow, leaseEnds: callState.occupancy === "tenant" ? String(callState.leaseEnds || "").trim() : "",
     } : null,
     avgPpsf: num(arvOverride) > 0 ? 0 : (soldSummary && soldSummary.medianPpsf ? soldSummary.medianPpsf : 0),
   };
@@ -3816,7 +3857,7 @@ export default function App() {
 
         <RentCard est={rentEst || rentSaved || 0} low={rentLow} high={rentHigh} info={rentInfo}
           typed={num(rentOverride)} hasAddress={!!address.trim()}
-          comps={rentComps} subject={rentSubject} change={changeInfo} />
+          comps={rentComps} subject={rentSubject} change={changeInfo} onRent={setRentOverride} tenantRent={tenantRentNow} />
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -4104,7 +4145,9 @@ function addRentSlides(pptx, header, ra, mapImg) {
   }
   const basisTxt = [fmtBasis(b) ? `Priced for ${fmtBasis(b)}` : null, b.comps ? `${b.comps} rental comps ${b.search || ""}`.trim() : null].filter(Boolean).join(" · ");
   if (basisTxt) s.addText(basisTxt, { x: L + 0.2, y: 5.25, w: W - 0.4, h: 0.5, fontSize: 11, color: "64748B", align: "center" });
-  if (ra.used > 0 && Math.abs(ra.used - ra.est) >= 1) {
+  if (ra.tenantRent > 0) {
+    s.addText(`Tenant in place pays ${usd(ra.tenantRent)}/mo today${ra.leaseEnds ? ` (lease ends ${ra.leaseEnds})` : ""}${ra.est > ra.tenantRent ? `, ${usd(ra.est - ra.tenantRent)} under this market estimate` : ""}`, { x: L + 0.2, y: 5.7, w: W - 0.4, h: 0.55, fontSize: 12, bold: true, color: DECK.FOREST, align: "center" });
+  } else if (ra.used > 0 && Math.abs(ra.used - ra.est) >= 1) {
     s.addText(`Rent used in this deck's numbers: ${usd(ra.used)}/mo`, { x: L + 0.2, y: 5.75, w: W - 0.4, h: 0.45, fontSize: 12, bold: true, color: DECK.FOREST, align: "center" });
   }
   if (mapImg) {
@@ -4133,6 +4176,64 @@ function addRentSlides(pptx, header, ra, mapImg) {
   t2.addTable(rows, { x: 0.6, y: 1.4, w: 12.1, colW: [0.45, 4.6, 1.05, 0.95, 1.1, 1.15, 1.1, 1.7], fontSize: 11.5, color: DECK.INK, rowH: 0.48, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } });
   const more = num(b.comps) > comps.length ? ` RentCast used ${b.comps} comps in total. The ${comps.length} shown are the closest matches.` : "";
   t2.addText(`Numbers match the pins on the map.${more} Asking rents from listings, not signed leases. Buyer to verify independently.`, { x: 0.6, y: 6.75, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
+}
+
+// Tenant in place below market: show what the rent can become and what that does to the buyer's
+// return. The deal's numbers run on the tenant's rent (what the buyer collects on day one). This
+// slide shows the move to RentCast's market rent at the lease end, net of the same reserve % the
+// deal uses, with no other rent growth assumed. A projection, never a promise.
+function addRentUpsideSlide(pptx, header, ra, base) {
+  if (!ra || !(ra.tenantRent > 0) || !(ra.est > ra.tenantRent)) return;
+  const inc = ra.est - ra.tenantRent;
+  const resv = Math.max(0, Math.min(50, num(base && base.reservePct))) / 100;
+  const netInc = inc * (1 - resv);
+  const cashIn = num(base && base.cashIn);
+  const cf0 = num(base && base.monthlyCF);
+  const haveReturns = base && (cf0 !== 0 || cashIn > 0);
+  // Months until the rent can move: the lease end if we can read it, else assume the next renewal (12).
+  let m = 12;
+  const t = Date.parse(ra.leaseEnds || "");
+  if (Number.isFinite(t)) m = Math.max(0, Math.min(12, Math.round((t - Date.now()) / (30.44 * 86400000))));
+  else if (/month.?to.?month|mtm/i.test(ra.leaseEnds || "")) m = 2;   // month to month: about 60 days' notice
+
+  const s = pptx.addSlide(); header(s, "Rent Upside");
+  const tbl = (rows) => rows.map((r) => [{ text: r[0], options: { bold: true, color: DECK.FOREST } }, { text: r[1], options: { align: "right", color: DECK.INK } }]);
+  const opts = { fontSize: 14, color: DECK.INK, rowH: 0.5, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } };
+  const rows = [
+    ["Tenant pays today", `${usd(ra.tenantRent)}/mo`],
+    ["Market rent (RentCast)", `${usd(ra.est)}/mo`],
+    ["Increase at market", `+${usd(inc)}/mo · +${usd(inc * 12)}/yr`],
+    [resv > 0 ? `Increase after ${Math.round(resv * 100)}% reserves` : "Increase to cash flow", `+${usd(netInc)}/mo`],
+    ["Lease ends", ra.leaseEnds || "Not known, assumed 12 months"],
+  ];
+  s.addTable(tbl(rows), { x: 0.6, y: 1.4, w: 6.4, colW: [3.2, 3.2], ...opts });
+
+  if (haveReturns) {
+    const card = (x, label, value, sub, fill, ink) => {
+      s.addShape(pptx.ShapeType.roundRect, { x, y: 1.4, w: 2.75, h: 1.7, fill: { color: fill }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
+      s.addText([{ text: label.toUpperCase() + "\n", options: { fontSize: 10.5, bold: true, color: ink === DECK.WHITE ? DECK.SAGE : "6B7A6F" } }, { text: value + "\n", options: { fontSize: 24, bold: true, color: ink } }, { text: sub, options: { fontSize: 10, color: ink === DECK.WHITE ? DECK.SAGE : "6B7A6F" } }],
+        { x, y: 1.4, w: 2.75, h: 1.7, align: "center", valign: "middle" });
+    };
+    // With no cash left in (BRRRR after the refinance), cash-on-cash is infinite only when cash flow is
+    // positive. Negative cash flow on zero cash in is not "infinite", it is just negative.
+    const pct = (v) => (cashIn > 0 ? `${((v / cashIn) * 100).toFixed(2)}%` : v > 0 ? "∞" : "n/a");
+    card(7.35, "Cash-on-cash today", pct(cf0 * 12), `${usd(cf0)}/mo on ${cashIn > 0 ? usd(cashIn) : "no cash left in"}`, DECK.WHITE, DECK.FOREST);
+    card(10.0, "At market rent", pct((cf0 + netInc) * 12), `${usd(cf0 + netInc)}/mo`, DECK.FOREST, DECK.WHITE);
+
+    // 5-year cash-flow ROI
+    const H = (x) => ({ text: x, options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, fontSize: 12 } });
+    const proj = [[H("Year"), H("Monthly cash flow"), H("Year cash flow"), H("Cumulative"), H(cashIn > 0 ? "Cash-flow ROI" : "ROI")]];
+    let cum = 0;
+    for (let y = 1; y <= 5; y++) {
+      const yr = y === 1 ? cf0 * m + (cf0 + netInc) * (12 - m) : (cf0 + netInc) * 12;
+      cum += yr;
+      proj.push([String(y), usd(y === 1 ? yr / 12 : cf0 + netInc), usd(yr), usd(cum), cashIn > 0 ? `${((cum / cashIn) * 100).toFixed(2)}%` : cum > 0 ? "∞" : "n/a"]);
+    }
+    s.addText("5-year projection", { x: 7.35, y: 3.25, w: 5.4, h: 0.35, fontSize: 13, bold: true, color: DECK.FOREST });
+    s.addTable(proj, { x: 7.35, y: 3.6, w: 5.4, colW: [0.6, 1.25, 1.15, 1.15, 1.25], fontSize: 11, color: DECK.INK, rowH: 0.42, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 }, align: "center" });
+    s.addText(`Buyer cash in: ${cashIn > 0 ? usd(cashIn) : "none left in the deal"}. Year 1 blends ${m} month${m === 1 ? "" : "s"} at today's rent with the rest at market.`, { x: 0.6, y: 4.6, w: 6.4, h: 0.6, fontSize: 11, color: "475569" });
+  }
+  s.addText("Projection only, not a guarantee. Assumes the rent moves to RentCast's market estimate when the lease ends, no other rent growth, and expenses as shown in this deck. Buyer to verify the lease, the tenant, and the market independently.", { x: 0.6, y: 6.75, w: 12.1, h: 0.5, fontSize: 9, color: "8A968C", italic: true });
 }
 
 async function generateBuyerDeck(data) {
@@ -4181,12 +4282,16 @@ async function generateBuyerDeck(data) {
   propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
   propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
   propRows.push([data.priceLabel || "Purchase price", data.asking ? usd(data.asking) : "—"]);
-  propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
+  if (data.rentAnalysis && data.rentAnalysis.tenantRent > 0) {
+    propRows.push(["Current rent (tenant in place)", usd(data.rentAnalysis.tenantRent) + "/mo"]);
+    if (data.rentAnalysis.est > 0) propRows.push(["Market rent (RentCast)", usd(data.rentAnalysis.est) + "/mo"]);
+  } else propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts });
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
 
   // Rent analysis: these are hold strategies, so the rent is what the buyer is underwriting.
   if (data.rentAnalysis) addRentSlides(pptx, header, { ...data.rentAnalysis, used: num(data.rent) }, await getRentMapImage(data.rentAnalysis));
+  if (data.rentAnalysis) addRentUpsideSlide(pptx, header, data.rentAnalysis, data.upsideBase || (data.brrrr && data.brrrr.upsideBase));
 
   // Slide 3 — the deal
   s = pptx.addSlide(); header(s, `The Deal — ${data.dealType}`);
@@ -4376,7 +4481,10 @@ async function generateDualDeck(data) {
   propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
   propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
   propRows.push([data.priceLabel || "Purchase price", data.asking ? usd(data.asking) : "—"]);
-  propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
+  if (data.rentAnalysis && data.rentAnalysis.tenantRent > 0) {
+    propRows.push(["Current rent (tenant in place)", usd(data.rentAnalysis.tenantRent) + "/mo"]);
+    if (data.rentAnalysis.est > 0) propRows.push(["Market rent (RentCast)", usd(data.rentAnalysis.est) + "/mo"]);
+  } else propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
   s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts, rowH: 0.6, fontSize: 15 });
   s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
 
@@ -4411,6 +4519,7 @@ async function generateDualDeck(data) {
 
   // Rent analysis belongs with the hold option: it is what the BRRRR refinance and cash flow run on.
   if (data.rentAnalysis) addRentSlides(pptx, header, { ...data.rentAnalysis, used: num(data.rent) }, await getRentMapImage(data.rentAnalysis));
+  if (data.rentAnalysis) addRentUpsideSlide(pptx, header, data.rentAnalysis, data.upsideBase || (data.brrrr && data.brrrr.upsideBase));
 
   // Slide 6 — 5-year wealth (BRRRR)
   const P5 = data.brrrr.projection;
@@ -4533,6 +4642,7 @@ function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "
         returns: deal.returns,
         projection: deal.projection,
         rentAnalysis: common.rentAnalysis || null,
+        upsideBase: deal.upsideBase || null,
         loanSavings: deal.loanSavings,
         basis: { compCount: common.compCount, avgPpsf: common.avgPpsf, rent: num(f.rent) },
         exits: deal.exits,
@@ -4996,6 +5106,7 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
                 brrrr: {
                   headlineStr: `${usd(trueCF)}/mo · DSCR ${dscr > 0 ? dscr.toFixed(2) : "—"}`,
                   cocStr: coc === null ? "∞" : (cashLeftIn > 0 && coc ? coc.toFixed(1) + "%" : "—"),
+                  upsideBase: { cashIn: cashLeftIn, monthlyCF: trueCF, reservePct: num(reservePct) },
                   returnStr: (() => {
                     if (buy <= 0) return "";
                     if (cashLeftIn <= 0) return "∞ cash-on-cash & ROI — all cash out";
@@ -5401,7 +5512,7 @@ function SubToTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0 }),
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0, cashIn: graded ? closeCash + repairs : 0, reservePct: num(stReservePct) }),
         }}
       />
       <TabEducation id="subto" />
@@ -5493,7 +5604,7 @@ function HybridTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0 }),
+          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0, cashIn: graded ? closeCash + repairs : 0, reservePct: num(hyReservePct) }),
         }}
       />
       <TabEducation id="hybrid" />
@@ -5584,7 +5695,7 @@ function SellerFinanceTab(props) {
           totalLabel: "Total deal value",
           totalValue: usd(Math.max(0, equity) + finValue),
           verdict: detail,
-          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc }),
+          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc, cashIn: closeCash + repairs, reservePct: num(sfReservePct) }),
         }}
       />
       <TabEducation id="sf" />
