@@ -1294,8 +1294,35 @@ const fmtBasis = (b) => {
   if (num(b.sqft) > 0) parts.push(`${Math.round(num(b.sqft)).toLocaleString()} sq ft`);
   return parts.join(", ");
 };
+// One prompt for the rent and the comps when beds, baths or sq ft changed since they were pulled.
+// A button, not automatic: comps are about 2 RentCast credits and rent 1, and a rep fixing a mis-tap
+// (+1, -1) should not pay for every tap.
+const RepullNote = ({ info }) => {
+  if (!info || info.loading || !(info.compStale || info.rentStale)) return null;
+  const now = fmtBasis(info.want);
+  const what = info.compStale && info.rentStale ? "rent and comps" : info.compStale ? "comps" : "rent";
+  const credits = (info.compStale ? 2 : 0) + (info.rentStale ? 1 : 0);
+  const wasLine = (label, b) => {
+    const t = b ? fmtBasis(b) : "";
+    return t ? <div>The {label} are for <b>{t}</b>.</div> : <div>The {label} were pulled before the bed and bath changes.</div>;
+  };
+  return (
+    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+      {info.compStale && wasLine("sold comps", info.compBasis && info.compBasis.beds != null ? info.compBasis : null)}
+      {info.rentStale && wasLine("rent comps", info.rentBasis)}
+      <div>The house is now <b>{now || "different"}</b>. Re-pull so the {info.compStale ? "ARV" : "rent"}{info.compStale && info.rentStale ? " and rent" : ""} come{info.compStale && info.rentStale ? "" : "s"} from matching {info.compStale && info.rentStale ? "sales and rentals" : info.compStale ? "sales" : "rentals"}.</div>
+      <button type="button" onClick={info.onRepull}
+        className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2 py-1.5 text-[11.5px] font-bold text-white hover:bg-emerald-700">
+        <RefreshCw className="h-3 w-3" /> Re-pull {what} for {now || "the updated house"}
+      </button>
+      <div className="mt-0.5 text-center text-[10px] text-amber-800">Uses about {credits} RentCast credit{credits === 1 ? "" : "s"}.</div>
+    </div>
+  );
+};
+
 const RentBasisNote = ({ info, compact = false }) => {
   if (!info || info.loading || !info.has) return null;
+  if (info.stale && info.change) return <RepullNote info={info.change} />;
   const was = info.basis ? fmtBasis(info.basis) : "";
   const now = fmtBasis(info.want);
   if (info.stale) return (
@@ -1460,7 +1487,7 @@ const RentCompMap = ({ subject, pins }) => (
 );
 // ARV pins: green = in the ARV, amber = flagged out, gray = out for other reasons.
 const soldPinColor = (p) => (p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8");
-const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject }) => {
+const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject, change }) => {
   const [showList, setShowList] = useState(false);
   const mapped = useMemo(() => (comps || []).map((c, i) => ({
     i, n: i + 1, lat: c.lat, lng: c.lng, price: c.rent, comp: c,
@@ -1516,7 +1543,8 @@ const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject
           {info && info.basis ? <>For {fmtBasis(info.basis)}</> : <>For the county record's beds and baths</>}
           {info && info.basis && info.basis.comps ? <> · {info.basis.comps} comps {info.basis.search || ""}</> : null}
         </div>
-        <RentBasisNote info={info} compact />
+        {/* Same combined prompt as the bed/bath controls, so there is only ever one kind of re-pull button. */}
+        {change && change.rentStale ? <RepullNote info={change} /> : <RentBasisNote info={info} compact />}
       </>) : (
         <div className="mt-3 text-center">
           <div className="text-[12px] text-slate-600">No rent pulled for this house yet.</div>
@@ -1955,7 +1983,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
             <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Beds and baths the record missed</div>
             <div className="mt-0.5 text-[10.5px] leading-snug text-slate-500">
-              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here and the ARV moves.
+              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here, then re-pull so the ARV and rent come from houses with that room count.
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div>
@@ -1975,14 +2003,9 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 </div>
               </div>
             </div>
-            {deal.subjAdjust !== 0 && (
-              <div className="mt-1.5 text-[10.5px] leading-snug text-emerald-700">
-                Adds {deal.subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(deal.subjAdjust))} to the ARV.
-              </div>
-            )}
-            {deal.rentInfo && deal.rentInfo.stale && <RentBasisNote info={deal.rentInfo} compact />}
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-400">
-              Only for rooms the county missed at the same square footage. If the extra room also means extra sq ft, fix the sq ft up top instead.
+            <RepullNote info={deal.changeInfo} />
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+              If the extra room also means extra square footage, fix the sq ft up top before re-pulling.
             </div>
           </div>
 
@@ -2621,8 +2644,6 @@ export default function App() {
   // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
   const [adjBeds, setAdjBeds] = useState(0);
   const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
-  const [bedAdjAmt, setBedAdjAmt] = useState("15000");   // $ per bedroom — count-adjustment (same sqft), not an addition. Set back to 15k per B, Sep 2026
-  const [bathAdjAmt, setBathAdjAmt] = useState("10000"); // $ per FULL bath; a half bath = 0.5 × this
   const [compLoading, setCompLoading] = useState(false);
   const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
   const [soldData, setSoldData] = useState(null);      // actual recorded sold comps (RentCast /properties)
@@ -2661,7 +2682,7 @@ export default function App() {
         }
       } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
       // 2) Recorded sold comps + MLS cross-check (the server makes both RentCast calls in one go)
-      await pullSold(hints);
+      await pullSold({ ...hints, beds: rec.beds, baths: rec.baths });
       setCompsOpen(true);
       if (!arvSource && num(arvOverride) <= 0) setArvSource("deal-desk");
       // 3) Market rent, so the payment-vs-rent test and the BRRRR panel are live without a second
@@ -2683,7 +2704,7 @@ export default function App() {
     }
   }
 
-  async function pullSold(fresh) {
+  async function pullSold(fresh, opts = {}) {
     const a = address.trim();
     if (!a) { setSoldMsg({ type: "err", text: "Type the subject address first." }); return; }
     setSoldLoading(true); setSoldMsg(null);
@@ -2693,6 +2714,11 @@ export default function App() {
       if (sf > 0) params.set("subjectSqft", String(sf));
       const ptype = fresh?.propertyType || subjectInfo?.propertyType;
       if (ptype) params.set("propertyType", ptype);
+      // The house as the team has it: county beds/baths plus corrections, so sales are matched on rooms.
+      const rb = fresh && fresh.beds !== undefined ? fresh.beds : subjectInfo?.beds;
+      const rba = fresh && fresh.baths !== undefined ? fresh.baths : subjectInfo?.baths;
+      if (rb != null) params.set("subjectBeds", String(rb + adjBeds));
+      if (rba != null) params.set("subjectBaths", String(rba + adjBaths));
       const sLat = Number(fresh?.lat ?? subjectInfo?.lat), sLng = Number(fresh?.lng ?? subjectInfo?.lng);
       if (Number.isFinite(sLat) && Number.isFinite(sLng)) { params.set("subjectLat", String(sLat)); params.set("subjectLng", String(sLng)); }
       const r = await fetch(`${SOLD_API}?${params.toString()}`);
@@ -2700,7 +2726,8 @@ export default function App() {
       if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); setSoldIncluded({}); return; }
       setSoldData(data);
       setSoldIncluded({});
-      setManualSold([]);   // fresh property, fresh slate (a failed pull keeps your hand-entered comps)
+      // Fresh property, fresh slate. A re-pull for the same house keeps the rep's hand-entered comps.
+      if (!opts.keepManual) setManualSold([]);
       const n = data.count || 0;
       setSoldMsg(n > 0
         ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found.` }
@@ -2877,7 +2904,10 @@ export default function App() {
   // ---- ARV ----
   // Record-correction dollars: rides on TOP of whichever ARV is driving (sold-comp median or manual override),
   // because a bedroom the county missed is missing from every one of those sources equally.
-  const subjAdjust = Math.round(adjBeds * num(bedAdjAmt) + adjBaths * num(bathAdjAmt));
+  // Retired Sep 30 2026 per B: no flat $15K-per-bed / $10K-per-bath. Bed/bath corrections now describe
+  // the house, and the comps (and rent) are re-pulled for it, so the room count is in the sales
+  // themselves. Kept as a constant 0 so older display code reads cleanly.
+  const subjAdjust = 0;
 
   // Structural flags + the shared price-outlier rule for the sold panel: flagged comps sit out of the
   // rule; flagged comps are auto-EXCLUDED from the average (averages bruise easier than medians), clean
@@ -2897,7 +2927,13 @@ export default function App() {
     const mlsChecked = !!(soldData && soldData.mlsChecked);
     const pool0 = mlsChecked && mlsOnly ? src.filter((c) => c.manualEntry || c.mls) : src;
     const sf = num(sqft);
-    const base = pool0.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjectInfo, sf)] }));
+    // Judge "bd off" / "ba off" against the house as corrected, not the county's count.
+    const subjNow = subjectInfo ? {
+      ...subjectInfo,
+      beds: subjectInfo.beds != null ? subjectInfo.beds + adjBeds : subjectInfo.beds,
+      baths: subjectInfo.baths != null ? subjectInfo.baths + adjBaths : subjectInfo.baths,
+    } : subjectInfo;
+    const base = pool0.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjNow, sf)] }));
     // Size adjustment (appraiser-style): each sale's price, moved to the subject's size at the marginal rate.
     const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(base.filter((c) => c.flags.length === 0).map((c) => c.ppsf || 0)) / 2);
     base.forEach((c) => {
@@ -2932,7 +2968,7 @@ export default function App() {
       }
     }
     return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < MIN_SOLID, marginalUsed, mlsChecked, mlsCount: src.filter((c) => c.mls).length, srcTotal: src.length };
-  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold, mlsOnly]);
+  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold, mlsOnly, adjBeds, adjBaths]);
 
   // Stable pin list for the ARV map, so the map only redraws when the comps or their in/out state change.
   const soldPins = useMemo(() => (soldSummary ? soldSummary.flagged : [])
@@ -3002,7 +3038,31 @@ export default function App() {
       : (adjBeds !== 0 || adjBaths !== 0)
   );
   const repullRent = () => fetchRent(address, wantBasis);
+  // What the sold comps were pulled for. Pulls from before Sep 30 2026 did not record beds/baths, so
+  // for those the county count stands in, and any correction since counts as a change.
+  const compBasis = soldData ? {
+    beds: soldData.subject && soldData.subject.beds != null ? soldData.subject.beds : null,
+    baths: soldData.subject && soldData.subject.baths != null ? soldData.subject.baths : null,
+    sqft: soldData.subject && soldData.subject.sqft ? soldData.subject.sqft : null,
+  } : null;
+  const compStale = !!compBasis && (
+    (wantBasis.sqft && compBasis.sqft && Math.abs(wantBasis.sqft - compBasis.sqft) >= 1)
+    || (compBasis.beds != null ? (wantBasis.beds != null && wantBasis.beds !== compBasis.beds) : adjBeds !== 0)
+    || (compBasis.baths != null ? (wantBasis.baths != null && wantBasis.baths !== compBasis.baths) : adjBaths !== 0)
+  );
+  // One button for both, so a rep settles the beds/baths/sq ft first and pays once.
+  const repullAll = async () => {
+    const jobs = [];
+    if (compStale) jobs.push(pullSold({}, { keepManual: true }));
+    if (rentStale) jobs.push(fetchRent(address, wantBasis));
+    await Promise.all(jobs);
+  };
+  const changeInfo = {
+    compStale, rentStale, want: wantBasis, compBasis, rentBasis,
+    loading: soldLoading || rentLoading, onRepull: repullAll,
+  };
   const rentInfo = { basis: rentBasis, want: wantBasis, stale: rentStale, onRepull: repullRent, loading: rentLoading, overridden: num(rentOverride) > 0, has: !!(rentEst || rentSaved) };
+  rentInfo.change = changeInfo;   // every rent re-pull prompt in the app becomes the combined one
   const onePctMax = effRent > 0 ? effRent * 100 : 0; // 1% rule: rent >= 1% of price → max price = rent × 100
 
   // The RentCast data worth keeping: subject record, sold comps, sq ft, owner. Saved with the call
@@ -3380,7 +3440,7 @@ export default function App() {
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
                 deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
-                  adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust,
+                  adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
                   repairsKnown, ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
                 onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
@@ -3413,8 +3473,6 @@ export default function App() {
                 <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBeds !== 0 ? "text-emerald-700" : "text-slate-400"}`}>{adjBeds > 0 ? `+${adjBeds}` : adjBeds}</span>
                 <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
-                <span className="text-[10px] text-slate-400">×</span>
-                <div className="w-24"><MoneyInput value={bedAdjAmt} onChange={setBedAdjAmt} placeholder="15000" /></div>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="text-[11px] text-slate-500">Baths</span>
@@ -3423,21 +3481,18 @@ export default function App() {
                 <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBaths !== 0 ? "text-emerald-700" : "text-slate-400"}`}>{adjBaths > 0 ? `+${adjBaths}` : adjBaths}</span>
                 <button type="button" onClick={() => setAdjBaths((v) => Math.round((v + 0.5) * 2) / 2)}
                   className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
-                <span className="text-[10px] text-slate-400">×</span>
-                <div className="w-24"><MoneyInput value={bathAdjAmt} onChange={setBathAdjAmt} placeholder="10000" /></div>
-                <span className="text-[10px] text-slate-400">/full</span>
               </div>
-              <span className={`ml-auto font-mono text-sm font-bold tabular-nums ${subjAdjust > 0 ? "text-emerald-700" : subjAdjust < 0 ? "text-rose-600" : "text-slate-400"}`}>
-                {subjAdjust !== 0 ? `${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} to ARV` : "no adjustment"}
+              <span className="ml-auto text-[11px] font-semibold text-slate-600">
+                {wantBasis.beds != null ? `House is now ${fmtBasis(wantBasis)}` : null}
               </span>
               {(adjBeds !== 0 || adjBaths !== 0) && (
                 <button type="button" onClick={() => { setAdjBeds(0); setAdjBaths(0); }}
                   className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50">clear</button>
               )}
             </div>
-            <div className="mt-1 text-[10px] text-slate-400">
-              {rentInfo.stale && <RentBasisNote info={rentInfo} compact />}
-              For beds/baths the county record missed or overstated — e.g. records say 3bd but you walked a legit 4bd. Adds a flat per-unit amount on top of the Deal Desk comp number. It does not apply when you type your own ARV, since a number you comped yourself already reflects the real room count. Baths step by ½ (a half bath = half the full-bath amount). Defaults are count-adjustments ($15K/bed · $10K/full bath) — not the $30–50K "add a bedroom" headlines, which include square footage. If the missed room also means missed sq ft, fix the sq ft field instead.
+            <RepullNote info={changeInfo} />
+            <div className="mt-1 text-[10.5px] leading-snug text-slate-500">
+              For beds and baths the county got wrong, or the layout after the rehab (records say 3 bd but you walked a legit 4 bd, or you are adding a bath). There is no flat dollar amount anymore. Re-pull, and the ARV and rent come from sales and rentals with that room count. If the change also means more square footage, fix the sq ft too before you re-pull.
             </div>
           </div>
         </div>
@@ -3670,6 +3725,10 @@ export default function App() {
           <div className="mt-2 rounded-xl border-2 border-slate-900 bg-slate-50 p-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Driving this deal</div>
             <div className="mt-0.5 font-mono text-3xl font-bold tabular-nums text-slate-900">{arv > 0 ? usd(arv) : "—"}</div>
+            {compBasis && !num(arvOverride) && (compBasis.beds != null || compBasis.sqft) && (
+              <div className="mt-0.5 text-[11px] text-slate-500">Comps pulled for {fmtBasis(compBasis)}</div>
+            )}
+            {!num(arvOverride) && changeInfo.compStale && <RepullNote info={changeInfo} />}
             <div className="mt-0.5 text-[11px] leading-snug text-slate-500">
               {arv <= 0
                 ? "No ARV yet. Run Auto-comp up top, or type a number you comped elsewhere."
@@ -3732,7 +3791,7 @@ export default function App() {
 
         <RentCard est={rentEst || rentSaved || 0} low={rentLow} high={rentHigh} info={rentInfo}
           typed={num(rentOverride)} hasAddress={!!address.trim()}
-          comps={rentComps} subject={rentSubject} />
+          comps={rentComps} subject={rentSubject} change={changeInfo} />
 
         {/* CONTROLS: rehab + MAO bands */}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">

@@ -48,6 +48,11 @@ export default async function handler(req, res) {
   const subjectSqft = Number(req.query.subjectSqft || 0);
   const sqftBand = Number(req.query.sqftBand || 250);
   const keepCount = Number(req.query.keepCount || 12);
+  // The house as the team has it now (county record plus corrections). When sent, sales are ranked by
+  // how well they match it: bedrooms, bathrooms and size, then distance and recency. Per B, Sep 30 2026,
+  // this replaced the flat $15K-per-bed / $10K-per-bath adjustment: the comps carry the room count.
+  const qn = (v) => { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) && n >= 0 ? n : null; };
+  const subjectBeds = qn(req.query.subjectBeds), subjectBaths = qn(req.query.subjectBaths);
 
   // One request, up to 500 records = 1 RentCast credit regardless of how many come back.
   const params = new URLSearchParams({ address, radius, saleDateRange, limit: "500" });
@@ -197,7 +202,19 @@ export default async function handler(req, res) {
       return String(b.saleDate || "").localeCompare(String(a.saleDate || "")); // then most recent sale
     });
 
-    const inBand = sortClose((subjectSqft > 0 ? comps.filter(near) : comps).slice());
+    // Bed/bath fit: a sale within one bedroom and one bath of the subject is a real match. Among those,
+    // the closest in beds+baths first, then nearest, then most recent. Mismatches still come through
+    // after them (flagged "bd off" / "ba off" in the app), so a thin area is visible, not hidden.
+    const roomGap = (c) => (subjectBeds != null && c.beds != null ? Math.abs(Number(c.beds) - subjectBeds) : 0)
+      + (subjectBaths != null && c.baths != null ? Math.abs(Number(c.baths) - subjectBaths) : 0);
+    const roomOk = (c) => (subjectBeds == null || c.beds == null || Math.abs(Number(c.beds) - subjectBeds) <= 1)
+      && (subjectBaths == null || c.baths == null || Math.abs(Number(c.baths) - subjectBaths) <= 1);
+    const byRooms = (arr) => {
+      if (subjectBeds == null && subjectBaths == null) return sortClose(arr);
+      const ok = sortClose(arr.filter(roomOk)).sort((a, b) => roomGap(a) - roomGap(b));
+      return ok.concat(sortClose(arr.filter((c) => !roomOk(c))));
+    };
+    const inBand = byRooms((subjectSqft > 0 ? comps.filter(near) : comps).slice());
     let chosen = inBand.slice(0, keepCount);
     // Guarantee at least keepCount comps when the pool allows: backfill with the closest-by-sqft
     // out-of-band sales (they'll trip the "sqft off" junk flag in the UI, so they're clearly marked).
@@ -226,7 +243,7 @@ export default async function handler(req, res) {
       count: comps.length,
       mlsChecked,             // true = the /listings/sale cross-check ran; comps that matched carry a .mls object
       window: { radius: Number(radius), saleDateRange: windowDays, sqftBand, keepCount },
-      subject: { sqft: subjectSqft || null, propertyType: propertyType || null },
+      subject: { sqft: subjectSqft || null, beds: subjectBeds, baths: subjectBaths, propertyType: propertyType || null },
       comps,
     });
   } catch (err) {
