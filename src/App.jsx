@@ -740,6 +740,40 @@ const TAB_DEFAULTS = {
   hyPrice: "", hyDown: "", hyBal: "", hyPiti: "", hyRate: "0", hyTerm: "30", hyClosing: "3500", hyRent: "", hyReservePct: "12",
   sfPrice: "", sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0", sfTaxIns: "", sfRent: "", sfReservePct: "12",
   novAsIs: "", novCommission: "6", novClosing: "5000", novProfit: "30000", novRepairs: "",
+  aiZillow: "", aiRealtor: "", aiRedfin: "", aiOther: "", aiExit: "", aiFee: "", aiOffer: "",
+};
+
+// The As-Is formula from Jerry Norton's Instant Offer Calculator (per B, Oct 16 2026). No comps and no
+// repair estimate: average the online as-is values, take the share a cash buyer pays for that price
+// range, subtract the wholesale fee for that range, and open at a set % of that max buy.
+// The sheet calls $100,000 exactly "Under $100K" for the offer % but not for the exit %. Here one
+// rule is used for all three: under $100,000 is the first range, $100,000 to $200,000 the second.
+const ASIS_SCALE = [
+  { label: "Under $100K", exit: 35, fee: 10000, offer: 55 },
+  { label: "$100K to $200K", exit: 50, fee: 20000, offer: 65 },
+  { label: "$200K to $300K", exit: 60, fee: 25000, offer: 75 },
+  { label: "$300K to $400K", exit: 65, fee: 30000, offer: 80 },
+  { label: "$400K to $500K", exit: 70, fee: 40000, offer: 85 },
+];
+const pct2 = (n) => (isFinite(n) ? `${Math.round(n * 100) / 100}%` : "—");
+const asIsCalc = (v) => {
+  const vals = [v.aiZillow, v.aiRealtor, v.aiRedfin, v.aiOther].map(num).filter((x) => x > 0);
+  const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  const tierIdx = avg <= 0 ? -1 : avg < 100000 ? 0 : avg <= 200000 ? 1 : avg <= 300000 ? 2 : avg <= 400000 ? 3 : avg <= 500000 ? 4 : 5;
+  const tier = tierIdx >= 0 && tierIdx < ASIS_SCALE.length ? ASIS_SCALE[tierIdx] : null;
+  const typed = (x) => String(x ?? "").trim() !== "";
+  const custom = tierIdx === 5;                          // over $500K: the sheet says "custom", so the rep types all three
+  const exitPct = typed(v.aiExit) ? num(v.aiExit) : tier ? tier.exit : 0;
+  const fee = typed(v.aiFee) ? num(v.aiFee) : tier ? tier.fee : 0;
+  const offerPct = typed(v.aiOffer) ? num(v.aiOffer) : tier ? tier.offer : 0;
+  const needsCustom = custom && !(typed(v.aiExit) && typed(v.aiFee) && typed(v.aiOffer));
+  const exitPrice = Math.round(avg * exitPct / 100);
+  const maxBuy = Math.round(exitPrice - fee);
+  const offer = Math.round(maxBuy * offerPct / 100);
+  const ready = avg > 0 && exitPct > 0 && offerPct > 0 && !needsCustom;
+  const spread = vals.length > 1 ? (Math.max(...vals) / Math.min(...vals) - 1) * 100 : 0;
+  return { vals, count: vals.length, avg: Math.round(avg), tierIdx, tier, custom, needsCustom, exitPct, fee, offerPct, exitPrice, maxBuy, offer, ready, spread,
+    typedExit: typed(v.aiExit), typedFee: typed(v.aiFee), typedOffer: typed(v.aiOffer) };
 };
 // YLHB standard assignment fee. Back to $15K per B (Sep 29 2026). It was $20K from Sep 24, and during
 // that stretch every save wrote "20000" whether or not anyone chose it, so that exact value is read as
@@ -1120,6 +1154,7 @@ const buildCallNarrative = (cs, deal, strat) => {
     if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}${deal.arvSource ? ` (${deal.arvSource})` : ""}`);
     if (deal.repairs > 0) bits.push(`estimated repairs ${usd(deal.repairs)}`);
     if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`);
+    if (deal.asIs) bits.push(`As-Is formula max buy ${usd(deal.asIs.maxBuy)} with an opening offer of ${usd(deal.asIs.offer)}`);
     s4.push(`Deal Desk numbers at the time of the report: ${bits.join(", ")}.`);
   }
   if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
@@ -1235,6 +1270,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("ARV source", deal.arvSource ? esc(deal.arvSource) : "<span style=\"color:#b45309\">not tagged</span>")}
       ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) : "&mdash;")}
       ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
+      ${deal.asIs ? row("As-Is formula", esc(`Average online value ${usd(deal.asIs.avg)} (${deal.asIs.count} source${deal.asIs.count === 1 ? "" : "s"}), max buy ${usd(deal.asIs.maxBuy)}, opening offer ${usd(deal.asIs.offer)}`)) : ""}
       ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
     </table>
     <h2>Strategy ranking</h2>
@@ -2823,6 +2859,7 @@ export default function App() {
       //    coordinates, and pre-loads the Subject property details panel off the same response.
       let hints = { sqft: num(sqft), propertyType: subjectInfo?.propertyType, lat: subjectInfo?.lat, lng: subjectInfo?.lng };
       let rec = { beds: subjectInfo?.beds ?? null, baths: subjectInfo?.baths ?? null, propertyType: subjectInfo?.propertyType ?? null };
+      let subjNote = "";   // what went wrong with the property record, if anything
       try {
         const sr = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
         const sd = await sr.json().catch(() => null);
@@ -2838,8 +2875,11 @@ export default function App() {
           setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, ownerType: raw.ownerType ?? null, heldFor: raw.heldFor ?? null, hoa: raw.hoa ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
           hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
           rec = { beds: raw.beds ?? null, baths: raw.baths ?? null, propertyType: raw.propertyType ?? null };
+          if (!raw.sqft && !num(sqft)) subjNote = "RentCast's record for this house has no square footage. Look it up (Zillow, the PVA or the listing), type it in the Subject sq ft box, and the ARV fills in.";
+        } else {
+          subjNote = `The property record didn't load${sd && sd.error ? ` (${sd.error})` : ""}. Sq ft, beds and baths are blank, so type them in before trusting the ARV.`;
         }
-      } catch { /* subject lookup is best-effort — the sold comps still run without it */ }
+      } catch { subjNote = "The property record didn't load. Sq ft, beds and baths are blank, so type them in before trusting the ARV."; }
       // 2) Recorded sold comps + MLS cross-check (the server makes both RentCast calls in one go)
       await pullSold({ ...hints, beds: rec.beds, baths: rec.baths });
       setCompsOpen(true);
@@ -2855,7 +2895,9 @@ export default function App() {
       } catch { /* keep going — rent can be pulled or typed later */ }
       setPullAt(new Date().toISOString());
       pullAddrRef.current = a.trim().toLowerCase();
-      setCompMsg({ type: "ok", text: "Pulled the subject record, recorded sold comps, and market rent. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
+      setCompMsg(subjNote
+        ? { type: "err", text: `Pulled the sold comps and market rent. ${subjNote}`, needsSqft: true }
+        : { type: "ok", text: "Pulled the subject record, recorded sold comps, and market rent. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
     } catch {
       setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
     } finally {
@@ -3001,6 +3043,15 @@ export default function App() {
   const [novClosing, setNovClosing] = useState("5000");        // flat $
   const [novRepairs, setNovRepairs] = useState("");            // blank = use the deal's repair number
 
+  // As-Is formula (Cash tab): the online values, plus optional overrides of the scale (blank = scale)
+  const [aiZillow, setAiZillow] = useState("");
+  const [aiRealtor, setAiRealtor] = useState("");
+  const [aiRedfin, setAiRedfin] = useState("");
+  const [aiOther, setAiOther] = useState("");
+  const [aiExit, setAiExit] = useState("");
+  const [aiFee, setAiFee] = useState("");
+  const [aiOffer, setAiOffer] = useState("");
+
   // One handle on every strategy-tab field, so they can be cleared, saved and restored per address.
   const tabVals = {
     rentOverride, holdingOverride,
@@ -3008,6 +3059,7 @@ export default function App() {
     hyPrice, hyDown, hyBal, hyPiti, hyRate, hyTerm, hyClosing, hyRent, hyReservePct,
     sfPrice, sfDown, sfRate, sfAmort, sfBalloon, sfTaxIns, sfRent, sfReservePct,
     novAsIs, novCommission, novClosing, novProfit, novRepairs,
+    aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer,
   };
   const tabSet = {
     rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
@@ -3015,7 +3067,9 @@ export default function App() {
     hyPrice: setHyPrice, hyDown: setHyDown, hyBal: setHyBal, hyPiti: setHyPiti, hyRate: setHyRate, hyTerm: setHyTerm, hyClosing: setHyClosing, hyRent: setHyRent, hyReservePct: setHyReservePct,
     sfPrice: setSfPrice, sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon, sfTaxIns: setSfTaxIns, sfRent: setSfRent, sfReservePct: setSfReservePct,
     novAsIs: setNovAsIs, novCommission: setNovCommission, novClosing: setNovClosing, novProfit: setNovProfit, novRepairs: setNovRepairs,
+    aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin, aiOther: setAiOther, aiExit: setAiExit, aiFee: setAiFee, aiOffer: setAiOffer,
   };
+  const asIs = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer });
   const tabsChanged = () => {
     const d = {};
     for (const k of Object.keys(TAB_DEFAULTS)) if (String(tabVals[k] ?? "") !== TAB_DEFAULTS[k]) d[k] = String(tabVals[k]);
@@ -3212,6 +3266,8 @@ export default function App() {
   } : null;
   const compStale = !!compBasis && (
     (wantBasis.sqft && compBasis.sqft && Math.abs(wantBasis.sqft - compBasis.sqft) >= 1)
+    // Pulled with no sq ft, so the server could not keep the sales near this house's size. Offer a re-pull once one is typed.
+    || (wantBasis.sqft && !compBasis.sqft)
     || (compBasis.beds != null ? (wantBasis.beds != null && wantBasis.beds !== compBasis.beds) : adjBeds !== 0)
     || (compBasis.baths != null ? (wantBasis.baths != null && wantBasis.baths !== compBasis.baths) : adjBaths !== 0)
   );
@@ -3611,7 +3667,7 @@ export default function App() {
                 save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
@@ -3627,6 +3683,12 @@ export default function App() {
                   {compLoading ? "Pulling…" : pullAt ? "Re-pull fresh data" : "Auto-comp address"}
                 </button>
               </div>
+              {compMsg && compMsg.type === "err" && !compLoading && !(compMsg.needsSqft && num(sqft) > 0) && (
+                <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-900">
+                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
+                  <span>{compMsg.text}</span>
+                </div>
+              )}
               {pullAt && !compLoading && (
                 <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
                   Showing the RentCast pull from <b className="text-slate-700">{fmtSavedAt(pullAt)}</b>, reloaded free. Re-pull only if this deal has gone cold or something changed.
@@ -3868,8 +3930,8 @@ export default function App() {
                 </div>
               )}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Stat label="Sold-comp ARV (After Repair Value)" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `size-adjusted median × ${num(sqft)} sf` : "enter subject sq ft above"}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
-                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps · size-adjusted`} />
+                <Stat label="Sold-comp ARV (After Repair Value)" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `size-adjusted median × ${num(sqft)} sf` : "Needs the house's sq ft. Type it in the Subject sq ft box at the top and the ARV fills in."}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
+                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps · ${num(sqft) > 0 ? "size-adjusted" : "not size-adjusted yet (no sq ft)"}`} />
               </div>
 
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -4139,7 +4201,8 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ deckOpenKey: deckKey("cash"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim() }} />
+            <CashTab {...{ deckOpenKey: deckKey("cash"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
+              address, asIs, asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: tabSet }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ deckOpenKey: deckKey("subto"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -5028,6 +5091,7 @@ function CashTab(props) {
         </div>
       </div>
 
+      <AsIsPanel address={props.address} ai={props.asIs} vals={props.asIsVals} set={props.asIsSet} ask={ask} arvMao={activeInvestorMao} arv={arv} />
 
       <BrrrrPanel
         deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened} rentInfo={props.rentInfo}
@@ -5046,6 +5110,119 @@ function CashTab(props) {
     </div>
   );
 }
+// As-Is formula panel (Jerry Norton's Instant Offer Calculator). A fast screen off the online values,
+// shown next to the ARV MAO so the rep can see when the two methods disagree.
+function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv }) {
+  const a = String(address || "").trim();
+  const look = (site) => a ? gsearch(`${a} ${site}`) : null;
+  const src = [
+    ["aiZillow", "Zillow", "zillow"], ["aiRealtor", "Realtor.com", "realtor.com"],
+    ["aiRedfin", "Redfin", "redfin"], ["aiOther", "Other", null],
+  ];
+  const over = ask > 0 && ai.ready ? ask - ai.maxBuy : null;
+  const gap = ai.ready && arvMao > 0 ? ai.maxBuy - arvMao : null;
+  const rows = ai.ready ? [
+    [`Average as-is value (${ai.count} source${ai.count === 1 ? "" : "s"})`, usd(ai.avg), null],
+    [`× ${pct2(ai.exitPct)} exit, what a cash buyer pays`, usd(ai.exitPrice), null],
+    [`− Wholesale fee`, usd(ai.fee), null],
+    ["= Max buy", usd(ai.maxBuy), `${pct2(ai.avg > 0 ? (ai.maxBuy / ai.avg) * 100 : 0)} of value`],
+  ] : [];
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <SectionTitle>As-Is formula (no comps, no repair estimate)</SectionTitle>
+      <div className="-mt-1 mb-3 text-[11.5px] leading-snug text-slate-700">
+        Jerry Norton's instant offer: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. Use it as a quick screen and a cross-check on the MAO above, not as a replacement for real comps and a repair number.
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {src.map(([k, label, site]) => (
+          <div key={k}>
+            <Field label={label} hint="as-is value"><MoneyInput value={vals[k]} onChange={set[k]} placeholder="0" /></Field>
+            {site && look(site) && (
+              <a href={look(site)} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-[10.5px] font-semibold text-emerald-700 hover:underline">
+                <Search className="h-3 w-3" /> Look it up on {label} <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+      {ai.count === 1 && (
+        <div className="mt-2 text-[11px] leading-snug text-amber-800">Only one value so far. The formula averages up to four, so add the others when you can. One site's estimate can be far off on a house that needs work.</div>
+      )}
+      {ai.spread > 25 && (
+        <div className="mt-2 text-[11px] leading-snug text-amber-800">The online values are {pct2(ai.spread)} apart. Check whether one site has old or wrong data (beds, baths, sq ft) before trusting the average.</div>
+      )}
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <Field label="Exit %" hint={ai.typedExit ? "typed here" : ai.tier ? "from the scale" : ai.custom ? "type it, over $500K" : ""}>
+          <PlainInput value={vals.aiExit} onChange={set.aiExit} placeholder={ai.tier ? String(ai.tier.exit) : ""} suffix="%" />
+        </Field>
+        <Field label="Wholesale fee" hint={ai.typedFee ? "typed here" : ai.tier ? "from the scale" : ai.custom ? "type it, over $500K" : ""}>
+          <MoneyInput value={vals.aiFee} onChange={set.aiFee} placeholder={ai.tier ? String(ai.tier.fee) : ""} />
+        </Field>
+        <Field label="Opening offer %" hint={ai.typedOffer ? "typed here" : ai.tier ? "of the max buy, from the scale" : ai.custom ? "type it, over $500K" : ""}>
+          <PlainInput value={vals.aiOffer} onChange={set.aiOffer} placeholder={ai.tier ? String(ai.tier.offer) : ""} suffix="%" />
+        </Field>
+      </div>
+      {ai.needsCustom && (
+        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
+          The average is over $500K. The scale has no numbers past $500K, so type the Exit %, the wholesale fee and the opening offer % to run it.
+        </div>
+      )}
+      <div className="mt-3 grid gap-4 md:grid-cols-2">
+        <div className="overflow-hidden rounded-xl border border-slate-200">
+          {ai.ready ? (
+            <>
+              {rows.map(([label, val, sub], i) => (
+                <div key={i} className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-sm">
+                  <span className="text-slate-700">{label}</span>
+                  <span className="text-right font-mono text-slate-800">{val}{sub && <span className="ml-2 font-sans text-[10.5px] text-slate-600">{sub}</span>}</span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between bg-emerald-50 px-3 py-2.5">
+                <span className="text-sm font-bold text-slate-900">Opening offer <span className="font-normal text-[11px] text-slate-700">({pct2(ai.offerPct)} of max buy, {pct2(ai.avg > 0 ? (ai.offer / ai.avg) * 100 : 0)} of value)</span></span>
+                <span className="font-mono text-lg font-bold text-emerald-700">{usd(ai.offer)}</span>
+              </div>
+            </>
+          ) : (
+            <div className="px-3 py-4 text-center text-[12px] text-slate-600">{ai.count ? "Fill in the boxes above to run it." : "Enter at least one online as-is value to run it."}</div>
+          )}
+        </div>
+        <div className="space-y-2">
+          {ai.ready && (
+            <div className={`rounded-lg border px-3 py-2 text-[12px] leading-snug ${ai.maxBuy <= 0 ? "border-rose-200 bg-rose-50 text-rose-800" : over == null ? "border-slate-200 bg-slate-50 text-slate-700" : over > 0 ? "border-rose-200 bg-rose-50 text-rose-800" : ask <= ai.offer ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+              {ai.maxBuy <= 0 ? <>The fee is more than a cash buyer would pay. This formula says there is no cash deal here.</>
+                : over == null ? <>Open at <b>{usd(ai.offer)}</b> and negotiate up to <b>{usd(ai.maxBuy)}</b> at most. Enter the seller's asking price above to grade it.</>
+                : over > 0 ? <>Their number is <b>{usd(over)}</b> over the as-is max buy of {usd(ai.maxBuy)}.</>
+                : ask <= ai.offer ? <>Their number is at or under the opening offer. Strong cash deal on this formula.</>
+                : <>Their number is between the opening offer and the max buy, with <b>{usd(ai.maxBuy - ask)}</b> of room left.</>}
+            </div>
+          )}
+          {gap != null && (
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-snug text-slate-700">
+              ARV method MAO: <b className="font-mono">{usd(arvMao)}</b>. As-Is max buy: <b className="font-mono">{usd(ai.maxBuy)}</b>.{" "}
+              {Math.abs(gap) <= Math.max(10000, arvMao * 0.1)
+                ? <>The two methods land close together, which is a good sign the numbers are sound.</>
+                : <span className="text-amber-800">They are <b>{usd(Math.abs(gap))}</b> apart. {gap > 0 ? "The As-Is formula is higher, so check whether the repair number is too high or the online values are too optimistic for this condition." : "The As-Is formula is lower, so check whether the ARV is too high or the repairs too light."} Find out which one is off before you make the offer.</span>}
+            </div>
+          )}
+          <div className="overflow-hidden rounded-lg border border-slate-200 text-[11px]">
+            <div className="grid grid-cols-4 bg-slate-50 px-2 py-1 font-semibold uppercase tracking-wide text-slate-700">
+              <span>Avg value</span><span className="text-right">Exit %</span><span className="text-right">Fee</span><span className="text-right">Offer %</span>
+            </div>
+            {ASIS_SCALE.map((t, i) => (
+              <div key={i} className={`grid grid-cols-4 px-2 py-1 font-mono ${ai.tierIdx === i ? "bg-emerald-50 font-bold text-emerald-800" : "text-slate-700"}`}>
+                <span className="font-sans">{t.label}</span><span className="text-right">{t.exit}%</span><span className="text-right">{usd(t.fee)}</span><span className="text-right">{t.offer}%</span>
+              </div>
+            ))}
+            <div className={`grid grid-cols-4 px-2 py-1 ${ai.tierIdx === 5 ? "bg-amber-50 font-bold text-amber-900" : "text-slate-700"}`}>
+              <span>Over $500K</span><span className="col-span-3 text-right">type your own</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const CRow = ({ label, a, b, muted }) => (
   <tr className="border-t border-slate-100">
     <td className="py-1.5 font-sans text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}</td>

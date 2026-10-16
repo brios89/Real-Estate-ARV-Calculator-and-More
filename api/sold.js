@@ -67,13 +67,18 @@ export default async function handler(req, res) {
 
     if (!r.ok) {
       const body = await r.text();
-      // 404 = nothing found; 401 = bad key; 429 = out of calls / rate limited
+      // RentCast's own reason, e.g. "billing/subscription-inactive". Shown to the rep so the screen says what happened.
+      let reason = "";
+      try { const j = JSON.parse(body); reason = String(j.error || j.message || "").slice(0, 120); } catch { reason = ""; }
+      // Per RentCast's docs: 401 = missing or invalid key, 403 = key restrictions or a billing problem
+      // (no active API subscription or a failed payment), 404 = nothing found, 429 = 20 requests/second limit.
       return res.status(r.status).json({
         error:
           r.status === 404 ? "RentCast found no sold records for that area. Widen the radius or date range, or comp manually."
           : r.status === 401 ? "RentCast rejected the API key. Re-check RENTCAST_API_KEY in Vercel."
-          : r.status === 429 ? "RentCast call limit reached for this period (free tier = 50/mo)."
-          : `RentCast error ${r.status}.`,
+          : r.status === 403 ? `RentCast blocked the request: the API subscription is inactive, a payment failed, or the key has restrictions. Check the RentCast API dashboard.${reason ? ` (RentCast says: ${reason})` : ""}`
+          : r.status === 429 ? "RentCast is getting too many requests at once. Wait a few seconds and try again."
+          : `RentCast error ${r.status}.${reason ? ` (RentCast says: ${reason})` : ""}`,
         detail: body.slice(0, 300),
       });
     }

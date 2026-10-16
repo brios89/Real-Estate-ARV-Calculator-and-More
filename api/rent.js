@@ -69,13 +69,15 @@ export default async function handler(req, res) {
 
     if (!r.ok) {
       const body = await r.text();
+      let reason = "";
+      try { const j = JSON.parse(body); reason = String(j.error || j.message || "").slice(0, 120); } catch { reason = ""; }
       return res.status(r.status).json({
         error:
           r.status === 404 ? "RentCast couldn't estimate rent for that address. Enter rent manually."
           : r.status === 401 ? "RentCast rejected the API key. Re-check RENTCAST_API_KEY in Vercel."
-          : r.status === 403 ? "RentCast says the API subscription is inactive or has a billing problem. Check the API dashboard."
-          : r.status === 429 ? "RentCast call limit reached for this period (free tier = 50/mo)."
-          : `RentCast error ${r.status}.`,
+          : r.status === 403 ? `RentCast blocked the request: the API subscription is inactive, a payment failed, or the key has restrictions. Check the RentCast API dashboard.${reason ? ` (RentCast says: ${reason})` : ""}`
+          : r.status === 429 ? "RentCast is getting too many requests at once. Wait a few seconds and try again."
+          : `RentCast error ${r.status}.${reason ? ` (RentCast says: ${reason})` : ""}`,
         detail: body.slice(0, 300),
       });
     }

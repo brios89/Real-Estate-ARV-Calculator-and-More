@@ -10,7 +10,15 @@ export default async function handler(req, res) {
       headers: { "X-Api-Key": key, Accept: "application/json" },
     });
     const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data?.error || `RentCast error (${r.status})` });
+    if (!r.ok) {
+      const reason = String(data?.error || data?.message || "").slice(0, 120);
+      return res.status(r.status).json({
+        error: r.status === 403
+          ? `RentCast blocked the request: the API subscription is inactive, a payment failed, or the key has restrictions. Check the RentCast API dashboard.${reason ? ` (RentCast says: ${reason})` : ""}`
+          : r.status === 401 ? "RentCast rejected the API key. Re-check RENTCAST_API_KEY in Vercel."
+          : (reason || `RentCast error (${r.status})`),
+      });
+    }
     const p = Array.isArray(data) ? data[0] : data;
     if (!p) return res.status(404).json({ error: "No property record found for that address." });
 
