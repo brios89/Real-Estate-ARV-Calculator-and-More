@@ -748,40 +748,52 @@ const TAB_DEFAULTS = {
 // range, subtract the wholesale fee for that range, and open at a set % of that max buy.
 // The sheet calls $100,000 exactly "Under $100K" for the offer % but not for the exit %. Here one
 // rule is used for all three: under $100,000 is the first range, $100,000 to $200,000 the second.
+//
+// Fees are Jerry's, unchanged, and per B they are now the default wholesale fee across the whole app.
+// Exit % and offer % were tuned for Louisville per B (Oct 16 2026). Jerry's were 35/50/60/65/70 exit
+// and 55/65/75/80/85 offer. The exit % now comes from YLHB's own buyer math (ARV x 75% under $200K,
+// 80% over, minus repairs) on a moderate rehab ($30/sf, the calculator's rate), assuming the online
+// values already price in about three-quarters of the repairs, rounded down to the nearest 5%.
+// The offer % is YLHB's 80% anchor (ANCHOR_PCT), kept at Jerry's 85% in the top range.
+// Both are a starting point to check against closed deals, not a measured Louisville number.
 const ASIS_SCALE = [
-  { label: "Under $100K", exit: 35, fee: 10000, offer: 55 },
-  { label: "$100K to $200K", exit: 50, fee: 20000, offer: 65 },
-  { label: "$200K to $300K", exit: 60, fee: 25000, offer: 75 },
-  { label: "$300K to $400K", exit: 65, fee: 30000, offer: 80 },
-  { label: "$400K to $500K", exit: 70, fee: 40000, offer: 85 },
+  { label: "Under $100K", exit: 55, fee: 10000, offer: 80, jerry: { exit: 35, offer: 55 } },
+  { label: "$100K to $200K", exit: 60, fee: 20000, offer: 80, jerry: { exit: 50, offer: 65 } },
+  { label: "$200K to $300K", exit: 70, fee: 25000, offer: 80, jerry: { exit: 60, offer: 75 } },
+  { label: "$300K to $400K", exit: 70, fee: 30000, offer: 80, jerry: { exit: 65, offer: 80 } },
+  { label: "$400K to $500K", exit: 70, fee: 40000, offer: 85, jerry: { exit: 70, offer: 85 } },
 ];
+const scaleTier = (v) => (v <= 0 ? -1 : v < 100000 ? 0 : v <= 200000 ? 1 : v <= 300000 ? 2 : v <= 400000 ? 3 : v <= 500000 ? 4 : 5);
+// The app-wide default wholesale fee: Jerry's fee for the range the ARV falls in. The scale stops at
+// $500K, so above that the top fee stands until a rep types one. No ARV yet means no fee yet.
+const scaleFee = (arv) => { const t = scaleTier(num(arv)); return t < 0 ? 0 : ASIS_SCALE[Math.min(t, ASIS_SCALE.length - 1)].fee; };
 const pct2 = (n) => (isFinite(n) ? `${Math.round(n * 100) / 100}%` : "—");
 const asIsCalc = (v) => {
   const vals = [v.aiZillow, v.aiRealtor, v.aiRedfin, v.aiOther].map(num).filter((x) => x > 0);
   const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-  const tierIdx = avg <= 0 ? -1 : avg < 100000 ? 0 : avg <= 200000 ? 1 : avg <= 300000 ? 2 : avg <= 400000 ? 3 : avg <= 500000 ? 4 : 5;
+  const tierIdx = scaleTier(avg);
   const tier = tierIdx >= 0 && tierIdx < ASIS_SCALE.length ? ASIS_SCALE[tierIdx] : null;
   const typed = (x) => String(x ?? "").trim() !== "";
   const custom = tierIdx === 5;                          // over $500K: the sheet says "custom", so the rep types all three
   const exitPct = typed(v.aiExit) ? num(v.aiExit) : tier ? tier.exit : 0;
-  const fee = typed(v.aiFee) ? num(v.aiFee) : tier ? tier.fee : 0;
+  const fee = typed(v.aiFee) ? num(v.aiFee) : typed(v.dealFeeTyped) ? num(v.dealFeeTyped) : tier ? tier.fee : 0;
   const offerPct = typed(v.aiOffer) ? num(v.aiOffer) : tier ? tier.offer : 0;
-  const needsCustom = custom && !(typed(v.aiExit) && typed(v.aiFee) && typed(v.aiOffer));
+  const needsCustom = custom && !(typed(v.aiExit) && (typed(v.aiFee) || typed(v.dealFeeTyped)) && typed(v.aiOffer));
   const exitPrice = Math.round(avg * exitPct / 100);
   const maxBuy = Math.round(exitPrice - fee);
   const offer = Math.round(maxBuy * offerPct / 100);
   const ready = avg > 0 && exitPct > 0 && offerPct > 0 && !needsCustom;
   const spread = vals.length > 1 ? (Math.max(...vals) / Math.min(...vals) - 1) * 100 : 0;
   return { vals, count: vals.length, avg: Math.round(avg), tierIdx, tier, custom, needsCustom, exitPct, fee, offerPct, exitPrice, maxBuy, offer, ready, spread,
-    typedExit: typed(v.aiExit), typedFee: typed(v.aiFee), typedOffer: typed(v.aiOffer) };
+    typedExit: typed(v.aiExit), typedFee: typed(v.aiFee), dealFee: !typed(v.aiFee) && typed(v.dealFeeTyped), typedOffer: typed(v.aiOffer) };
 };
-// YLHB standard assignment fee. Back to $15K per B (Sep 29 2026). It was $20K from Sep 24, and during
-// that stretch every save wrote "20000" whether or not anyone chose it, so that exact value is read as
-// the old default rather than a deliberate fee. Only a fee that differs from the default is saved now,
-// so a future change to the default reaches every deal nobody customized.
-const FEE_DEFAULT = "15000";
-const FEE_LEGACY_DEFAULTS = ["20000"];
-const savedFee = (v) => (v && !FEE_LEGACY_DEFAULTS.includes(String(v)) ? String(v) : FEE_DEFAULT);
+// History: a flat $15K fee (back to $15K Sep 29 2026 after $20K from Sep 24, when every save wrote
+// "20000" whether or not anyone chose it).
+// Oct 16 2026, per B: the default fee is now Jerry Norton's scale by the ARV's price range (scaleFee).
+// A blank fee means "follow the scale". The old flat defaults ($15K, and $20K from Sep 24 to Sep 29)
+// read as blank on reload, so those deals pick up the scale. Any other saved fee was chosen on purpose.
+const FEE_LEGACY_DEFAULTS = ["15000", "20000"];
+const savedFee = (v) => (v && !FEE_LEGACY_DEFAULTS.includes(String(v)) ? String(v) : "");
 // The strategy a deal ended up as, and the buyer deck that goes with it. Novation has no buyer deck,
 // because the house is sold to a retail buyer on the MLS, not to an investor.
 const WENT_WITH = [
@@ -2100,8 +2112,9 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           )}
           <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
           <WField label="Your wholesale / assignment fee">
-            <WText money value={deal.wholesaleFee} onChange={deal.setWholesaleFee} placeholder={FEE_DEFAULT} />
+            <WText money value={deal.feeField.typed} onChange={deal.feeField.set} placeholder={deal.feeField.auto > 0 ? String(deal.feeField.auto) : "set by the ARV"} />
           </WField>
+          <FeeScaleNote f={deal.feeField} />
           <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
             You get paid first. Your fee comes out of the deal before the seller's offer, so the number you quote already pays you.
           </div>
@@ -2992,7 +3005,8 @@ export default function App() {
   const [overPct, setOverPct] = useState(80);    // over $200k band
 
   // cash/mao
-  const [wholesaleFee, setWholesaleFee] = useState(FEE_DEFAULT);
+  const [feeTyped, setFeeTyped] = useState("");   // blank = Jerry's scale fee for the ARV's range (wholesaleFee below)
+  const setWholesaleFee = setFeeTyped;
 
 
   // Buyer-deck flip assumptions, shown next to the deck button on the Cash/MAO tab.
@@ -3069,7 +3083,7 @@ export default function App() {
     novAsIs: setNovAsIs, novCommission: setNovCommission, novClosing: setNovClosing, novProfit: setNovProfit, novRepairs: setNovRepairs,
     aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin, aiOther: setAiOther, aiExit: setAiExit, aiFee: setAiFee, aiOffer: setAiOffer,
   };
-  const asIs = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer });
+  const asIs = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer, dealFeeTyped: feeTyped });
   const tabsChanged = () => {
     const d = {};
     for (const k of Object.keys(TAB_DEFAULTS)) if (String(tabVals[k] ?? "") !== TAB_DEFAULTS[k]) d[k] = String(tabVals[k]);
@@ -3207,6 +3221,11 @@ export default function App() {
     if (soldVal <= 0) return 0;
     return Math.max(0, soldVal + subjAdjust);
   }, [soldSummary, arvOverride, subjAdjust]);
+  // The fee every strategy runs on: the rep's number when typed, otherwise the scale fee for this ARV.
+  const feeAuto = scaleFee(arv);
+  const wholesaleFee = String(feeTyped ?? "").trim() !== "" ? feeTyped : String(feeAuto);
+  const feeTierLabel = scaleTier(arv) >= 0 ? (scaleTier(arv) > 4 ? "an ARV over $500K, the top of the scale" : `an ARV of ${ASIS_SCALE[scaleTier(arv)].label}`) : "";
+  const feeField = { typed: feeTyped, set: setFeeTyped, auto: feeAuto, tierLabel: feeTierLabel, over500: scaleTier(arv) > 4 };
 
   const arvStat = useMemo(() => {
     const o = num(arvOverride);
@@ -3297,14 +3316,14 @@ export default function App() {
     const d = {
       arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf,
       soldIncluded, manualSold, mlsOnly, tabs,
-      fee: wholesaleFee !== FEE_DEFAULT ? wholesaleFee : null,
+      fee: String(feeTyped ?? "").trim() !== "" ? feeTyped : null,
       rentBasis,
       compSearch: (compSearch.mi !== 1 || compSearch.sf !== 250 || compSearch.mo !== 12) ? compSearch : null,
       // est = RentCast's number (never the rep's), so a reopened deal can still show "RentCast says".
       rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst || rentSaved, comps: rentComps } : null,
     };
     // A rent pull on its own is worth keeping: the card, range and comp map should survive a reload.
-    const blank = !tabs && compSearch.mi === 1 && compSearch.sf === 250 && compSearch.mo === 12 && !rentBasis && !rentLow && !rentHigh && wholesaleFee === FEE_DEFAULT && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
+    const blank = !tabs && compSearch.mi === 1 && compSearch.sf === 250 && compSearch.mo === 12 && !rentBasis && !rentLow && !rentHigh && !String(feeTyped ?? "").trim() && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
       && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
     return blank ? null : d;
   };
@@ -3341,7 +3360,7 @@ export default function App() {
     setAdjBeds(0); setAdjBaths(0);
     setRehabLevel(""); setCustomPsf(""); setMlsOnly(true);   // one house's condition never prices another
     setCompSearch(COMP_SEARCH_DEFAULT);
-    setWholesaleFee(FEE_DEFAULT);   // a fee negotiated on one deal does not carry to the next
+    setFeeTyped("");   // a fee negotiated on one deal does not carry to the next
     // Strategy tabs too. They only fill empty fields from the call, so a leftover balance or price from
     // the last house would sit there, never get replaced, and quietly run that house's numbers.
     for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](v);
@@ -3372,7 +3391,8 @@ export default function App() {
       setCallTouched(Object.keys(INITIAL_CALL).some((k) => (rec.call || {})[k] && rec.call[k] !== INITIAL_CALL[k]));
       if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
       // desk.fee is only ever written for a fee someone chose, so it wins outright, even at $20,000.
-      setWholesaleFee(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
+      // desk.fee is only ever written for a fee someone typed, so it wins outright.
+      setFeeTyped(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
       // rec.rent is the rent the deal ran on, which may be the rep's own number. Only use it as the
       // RentCast estimate when it is not just the rep's typed/slid rent echoed back.
       const typedSaved = rec.desk && rec.desk.tabs && num(rec.desk.tabs.rentOverride) > 0 ? num(rec.desk.tabs.rentOverride) : 0;
@@ -3448,7 +3468,7 @@ export default function App() {
     if (untouched && !pullPayload() && !deskPayload()) return;
     const at = new Date().toISOString();
     try {
-      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee: wholesaleFee === FEE_DEFAULT ? "" : wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), at }));
+      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee: feeTyped, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), at }));
       setCallSavedAt(at);
     } catch { /* private mode or full storage — the call still works, it just will not persist */ }
 
@@ -3462,7 +3482,7 @@ export default function App() {
       fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
-        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee: wholesaleFee === FEE_DEFAULT ? "" : wholesaleFee, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), by: syncId.name, address }),
+        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee: feeTyped, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), by: syncId.name, address }),
       })
         .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
         .then((d) => {
@@ -3473,7 +3493,7 @@ export default function App() {
         .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
     }, 1200);
     syncTimer.current = { key: saveKey, id: timerId };
-  }, [callState, repairOverride, wholesaleFee, effRent, address, syncId,
+  }, [callState, repairOverride, feeTyped, effRent, address, syncId,
       arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh, rentComps, compSearch]);
 
   // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
@@ -3667,7 +3687,7 @@ export default function App() {
                 save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
@@ -4201,17 +4221,17 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ deckOpenKey: deckKey("cash"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
-              address, asIs, asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: tabSet }} />
+            <CashTab {...{ deckOpenKey: deckKey("cash"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
+              address, asIs, heavyRehab: rehabLevel === "gut" || (!rehabLevel && impliedCondition(repairs, sqft) === "heavy"), asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: tabSet }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ deckOpenKey: deckKey("subto"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ deckOpenKey: deckKey("subto"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ deckOpenKey: deckKey("hybrid"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ deckOpenKey: deckKey("hybrid"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
-            <SellerFinanceTab {...{ deckOpenKey: deckKey("sf"), onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
+            <SellerFinanceTab {...{ deckOpenKey: deckKey("sf"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
             <NovationTab {...{ repairs, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs }} />
@@ -5050,7 +5070,10 @@ function CashTab(props) {
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <SectionTitle>Your wholesale numbers</SectionTitle>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck."><MoneyInput value={wholesaleFee} onChange={setWholesaleFee} /></Field>
+          <div>
+            <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck. Leave it blank to use the fee scale for the ARV's price range."><MoneyInput value={props.feeField.typed} onChange={props.feeField.set} placeholder={props.feeField.auto > 0 ? String(props.feeField.auto) : "set by the ARV"} filled /></Field>
+            <FeeScaleNote f={props.feeField} />
+          </div>
           <Field label="Seller asking price" hint="same as Their number in the Offer Call" info="This is the same number as Their number in the Offer Call. Change it in either place and both update. It grades the deal while you negotiate and prints on the buyer deck as your contract price (plus your wholesale fee), so once you are under contract, update it to the locked number."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
         </div>
       </div>
@@ -5091,7 +5114,7 @@ function CashTab(props) {
         </div>
       </div>
 
-      <AsIsPanel address={props.address} ai={props.asIs} vals={props.asIsVals} set={props.asIsSet} ask={ask} arvMao={activeInvestorMao} arv={arv} />
+      <AsIsPanel address={props.address} ai={props.asIs} vals={props.asIsVals} set={props.asIsSet} ask={ask} arvMao={activeInvestorMao} arv={arv} heavyRehab={props.heavyRehab} />
 
       <BrrrrPanel
         deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened} rentInfo={props.rentInfo}
@@ -5110,9 +5133,24 @@ function CashTab(props) {
     </div>
   );
 }
+// One line under every wholesale fee box: where the number comes from and how to get back to the scale.
+const FeeScaleNote = ({ f }) => {
+  if (!f) return null;
+  const typed = String(f.typed ?? "").trim() !== "";
+  return (
+    <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
+      {typed
+        ? <>Your number for this deal. Clear it to go back to the fee scale{f.auto > 0 ? ` (${usd(f.auto)})` : ""}.</>
+        : f.auto > 0
+          ? <>From the fee scale: <b>{usd(f.auto)}</b> for {f.tierLabel}.{f.over500 ? " The scale stops at $500K, so type your own fee if this one is too low." : " Type a number to override it for this deal."}</>
+          : <>Fills in from the fee scale once the deal has an ARV: $10K under $100K, $20K to $200K, $25K to $300K, $30K to $400K, $40K to $500K.</>}
+    </div>
+  );
+};
+
 // As-Is formula panel (Jerry Norton's Instant Offer Calculator). A fast screen off the online values,
 // shown next to the ARV MAO so the rep can see when the two methods disagree.
-function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv }) {
+function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
   const a = String(address || "").trim();
   const look = (site) => a ? gsearch(`${a} ${site}`) : null;
   const src = [
@@ -5131,7 +5169,7 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv }) {
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <SectionTitle>As-Is formula (no comps, no repair estimate)</SectionTitle>
       <div className="-mt-1 mb-3 text-[11.5px] leading-snug text-slate-700">
-        Jerry Norton's instant offer: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. Use it as a quick screen and a cross-check on the MAO above, not as a replacement for real comps and a repair number.
+        Jerry Norton's instant offer, with the exit and offer percentages tuned for Louisville: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. Use it as a quick screen and a cross-check on the MAO above, not as a replacement for real comps and a repair number.
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {src.map(([k, label, site]) => (
@@ -5155,13 +5193,18 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv }) {
         <Field label="Exit %" hint={ai.typedExit ? "typed here" : ai.tier ? "from the scale" : ai.custom ? "type it, over $500K" : ""}>
           <PlainInput value={vals.aiExit} onChange={set.aiExit} placeholder={ai.tier ? String(ai.tier.exit) : ""} suffix="%" />
         </Field>
-        <Field label="Wholesale fee" hint={ai.typedFee ? "typed here" : ai.tier ? "from the scale" : ai.custom ? "type it, over $500K" : ""}>
+        <Field label="Wholesale fee" hint={ai.typedFee ? "typed here" : ai.dealFee ? "your fee for this deal" : ai.tier ? "scale, by the as-is value" : ai.custom ? "type it, over $500K" : ""}>
           <MoneyInput value={vals.aiFee} onChange={set.aiFee} placeholder={ai.tier ? String(ai.tier.fee) : ""} />
         </Field>
         <Field label="Opening offer %" hint={ai.typedOffer ? "typed here" : ai.tier ? "of the max buy, from the scale" : ai.custom ? "type it, over $500K" : ""}>
           <PlainInput value={vals.aiOffer} onChange={set.aiOffer} placeholder={ai.tier ? String(ai.tier.offer) : ""} suffix="%" />
         </Field>
       </div>
+      {ai.ready && heavyRehab && (
+        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
+          This house reads as a gut job. The Louisville percentages assume a moderate rehab, so this formula will overpay on heavy repairs. Trust the ARV MAO above on this one.
+        </div>
+      )}
       {ai.needsCustom && (
         <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
           The average is over $500K. The scale has no numbers past $500K, so type the Exit %, the wholesale fee and the opening offer % to run it.
@@ -5210,12 +5253,16 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv }) {
             </div>
             {ASIS_SCALE.map((t, i) => (
               <div key={i} className={`grid grid-cols-4 px-2 py-1 font-mono ${ai.tierIdx === i ? "bg-emerald-50 font-bold text-emerald-800" : "text-slate-700"}`}>
-                <span className="font-sans">{t.label}</span><span className="text-right">{t.exit}%</span><span className="text-right">{usd(t.fee)}</span><span className="text-right">{t.offer}%</span>
+                <span className="font-sans">{t.label}</span>
+                <span className="text-right">{t.exit}%{t.jerry.exit !== t.exit && <span className="ml-1 font-normal text-slate-500 line-through">{t.jerry.exit}</span>}</span>
+                <span className="text-right">{usd(t.fee)}</span>
+                <span className="text-right">{t.offer}%{t.jerry.offer !== t.offer && <span className="ml-1 font-normal text-slate-500 line-through">{t.jerry.offer}</span>}</span>
               </div>
             ))}
             <div className={`grid grid-cols-4 px-2 py-1 ${ai.tierIdx === 5 ? "bg-amber-50 font-bold text-amber-900" : "text-slate-700"}`}>
               <span>Over $500K</span><span className="col-span-3 text-right">type your own</span>
             </div>
+            <div className="border-t border-slate-100 px-2 py-1 text-[10px] leading-snug text-slate-600">Crossed-out numbers are Jerry's originals. Louisville numbers come from YLHB's buyer math on a moderate rehab. Check them against our closed deals.</div>
           </div>
         </div>
       </div>
@@ -5479,7 +5526,7 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
 }
 
 // ---------- shared: "wholesale this creative contract" panel ----------
-function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, dealCost, costLabel, financingValue = 0, buyerCashIn = 0, annualCF = 0 }) {
+function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, feeField, dealCost, costLabel, financingValue = 0, buyerCashIn = 0, annualCF = 0 }) {
   const fee = num(wholesaleFee);                               // assignment fee — shared with the Cash/MAO tab's wholesale fee
   const haveDeal = arv > 0 && dealCost > 0;
   const equity = haveDeal ? arv - repairs - dealCost : 0;      // hard spread you created by locking it up creative
@@ -5527,8 +5574,9 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
           hint="shared across all tabs"
           info="What you'd charge another investor to take over this creative contract. This is the SAME number as 'Your wholesale fee' on the Cash / MAO tab — set it on any tab and it updates everywhere. It comes out of the total value you created — equity PLUS the present value of the below-market rate."
         >
-          <MoneyInput value={wholesaleFee} onChange={setWholesaleFee} placeholder="Type your fee" />
+          <MoneyInput value={feeField ? feeField.typed : wholesaleFee} onChange={feeField ? feeField.set : setWholesaleFee} placeholder={feeField && feeField.auto > 0 ? String(feeField.auto) : "Type your fee"} filled />
         </Field>
+        {feeField && <FeeScaleNote f={feeField} />}
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Equity in the deal" value={haveDeal ? usd(equity) : "—"} tone={haveDeal ? (equity > 0 ? "good" : "warn") : "default"} sub="ARV − repairs − basis" />
@@ -5817,7 +5865,7 @@ function SubToTab(props) {
         </div>
       </div>
       {graded && <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />}
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee} feeField={props.feeField}
         dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
       <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
@@ -5910,7 +5958,7 @@ function HybridTab(props) {
         </div>
       </div>
       {graded && <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />}
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee} feeField={props.feeField}
         dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
       <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
@@ -6001,7 +6049,7 @@ function SellerFinanceTab(props) {
           </div>
         </div>
       </div>
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee}
+      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee} feeField={props.feeField}
         dealCost={price} costLabel="Seller-finance price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
       <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
       <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
