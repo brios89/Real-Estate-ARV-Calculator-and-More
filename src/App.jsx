@@ -1870,8 +1870,17 @@ const NumbersPlanBody = ({ cs, upd, deal, gap }) => {
   const valueFrame = <Line>Value framing: “What Zillow doesn't know is the actual condition of the property.” · “We buy houses as-is. No repairs, no commissions, no inspections, and no showings.” · “We can close quickly and make this process simple.”</Line>;
   const anchorLine = anchor > 0 && (
     <>
-      <Line>“In a perfect world, we would probably need to be somewhere in the {say}. Now obviously the world isn't perfect, but how close could you get me to that?”</Line>
-      <Hint>That is your opening offer, {usd(anchor)}. Say it once, then stop talking. Every move after this goes up toward the seller, and none of them go past {usd(max)}.</Hint>
+      {/* The anchor, as B teaches it (Oct 16 2026): two separate beats with a pause after each. The first
+          is meant to get a no. The second turns that no into their real number. */}
+      <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
+        <b>Only after trust, authority and rapport.</b> If you have not built those yet, go back to their why and the house before you say a number. An anchor said too early sounds like a lowball, and it costs you the call.
+      </div>
+      <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">Step 1 · say the opening offer</div>
+      <Line>“In a perfect world, we would be in the {say}.”</Line>
+      <Hint>Then pause and let them respond. Do not explain it, soften it or fill the silence. This number is supposed to get a no, so a no means it worked.</Hint>
+      <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">Step 2 · once they say no</div>
+      <Line>“How close to that could you be?”</Line>
+      <Hint>Then pause again and let them answer. Whatever they say next is their real number. Your opening offer is {usd(anchor)}, and every move after this goes up toward the seller, never past {usd(max)}.</Hint>
       <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-900">
         <Lightbulb className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-600" />
         <span><b>Why open low:</b> {ANCHOR_WHY}</span>
