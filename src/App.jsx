@@ -664,6 +664,8 @@ const isLowRate = (v) => { const n = rateNum(v); return n != null && n <= LOW_RA
 // shows. It is flagged everywhere as a placeholder, and it never stands in for a condition read.
 const REPAIR_DEFAULT = 5000;
 const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
+// Why the opening offer exists, in one place so the Cash tab and the call flow say it the same way (per B, Oct 16 2026).
+const ANCHOR_WHY = "It is better for the seller to work you up from your opening offer than for you to work them down from their number. Every move goes in their direction, so they feel like they are winning, and you still land under your max.";
 
 // How far the seller's number sits from our cash max decides what the Numbers stage should coach.
 // "Close" uses the same 15% line the strategy engine already uses for "well above cash", so the two
@@ -1170,7 +1172,7 @@ const buildCallNarrative = (cs, deal, strat) => {
     const bits = [];
     if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}${deal.arvSource ? ` (${deal.arvSource})` : ""}`);
     if (deal.repairs > 0) bits.push(deal.repairsDefault ? `repairs at the ${usd(deal.repairs)} default (condition not confirmed)` : `estimated repairs ${usd(deal.repairs)}`);
-    if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`);
+    if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`, `opening offer ${usd(Math.round(deal.maxCash * ANCHOR_PCT))}`);
     if (deal.asIs) bits.push(`As-Is formula max buy ${usd(deal.asIs.maxBuy)} with an opening offer of ${usd(deal.asIs.offer)}`);
     s4.push(`Deal Desk numbers at the time of the report: ${bits.join(", ")}.`);
   }
@@ -1287,6 +1289,7 @@ const buildCallReport = (cs, deal, strat) => {
       ${row("ARV source", deal.arvSource ? esc(deal.arvSource) : "<span style=\"color:#b45309\">not tagged</span>")}
       ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) + (deal.repairsDefault ? ` <span style="color:#b45309">default placeholder, condition not confirmed</span>` : "") : "&mdash;")}
       ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
+      ${row("Opening offer", deal.maxCash > 0 ? esc(usd(Math.round(deal.maxCash * ANCHOR_PCT))) + ` <span style="color:#475569">(${Math.round(ANCHOR_PCT * 100)}% of the MAO)</span>` : "&mdash;")}
       ${deal.asIs ? row("As-Is formula", esc(`Average online value ${usd(deal.asIs.avg)} (${deal.asIs.count} source${deal.asIs.count === 1 ? "" : "s"}), max buy ${usd(deal.asIs.maxBuy)}, opening offer ${usd(deal.asIs.offer)}`)) : ""}
       ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
     </table>
@@ -1856,7 +1859,11 @@ const NumbersPlanBody = ({ cs, upd, deal, gap }) => {
   const anchorLine = anchor > 0 && (
     <>
       <Line>“In a perfect world, we would probably need to be somewhere in the {say}. Now obviously the world isn't perfect, but how close could you get me to that?”</Line>
-      <Hint>That is your anchor, {usd(anchor)}. Say it once, then stop talking. Every move after this goes up toward the seller, and none of them go past {usd(max)}.</Hint>
+      <Hint>That is your opening offer, {usd(anchor)}. Say it once, then stop talking. Every move after this goes up toward the seller, and none of them go past {usd(max)}.</Hint>
+      <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-900">
+        <Lightbulb className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-600" />
+        <span><b>Why open low:</b> {ANCHOR_WHY}</span>
+      </div>
     </>
   );
   const hold = (
@@ -1993,7 +2000,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
                 {deal.arv > 0 ? <>ARV {usd(deal.arv)}</> : null}
                 {deal.arv > 0 && deal.maxCash > 0 ? " · " : ""}
-                {deal.maxCash > 0 ? <>max allowable cash offer <b className="text-slate-700">{usd(deal.maxCash)}</b> · anchor at <b className="text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</b></> : null}
+                {deal.maxCash > 0 ? <>max allowable cash offer <b className="text-slate-700">{usd(deal.maxCash)}</b> · opening offer <b className="text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</b></> : null}
               </div>
             )}
           </div>
@@ -2115,7 +2122,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
             </div>
           )}
-          <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Mary" /></WField>
+          <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Lead Gen Department" /></WField>
           <WField label="Your wholesale / assignment fee">
             <WText money value={deal.feeField.typed} onChange={deal.feeField.set} placeholder={deal.feeField.auto > 0 ? String(deal.feeField.auto) : "set by the ARV"} />
           </WField>
@@ -2128,8 +2135,8 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 1 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening</div>
-          <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and my partner {cs.bookedBy.trim() || "Mary"} scheduled a call for us today because you were looking to sell your property on ____. Is that right?”</Line>
-          <Line>Or simply: “Hi {nm}, my name is ____ and I'm partners with {cs.bookedBy.trim() || "Mary"}. How are you doing today?”</Line>
+          <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and {cs.bookedBy.trim() ? `my partner ${cs.bookedBy.trim()}` : "our Lead Gen Department"} scheduled a call for us today because you were looking to sell your property on ____. Is that right?”</Line>
+          <Line>Or simply: “Hi {nm}, my name is ____ and {cs.bookedBy.trim() ? `I'm partners with ${cs.bookedBy.trim()}` : "I'm following up from our Lead Gen Department"}. How are you doing today?”</Line>
           <Hint>Acknowledge their surroundings and mirror their energy. Slow it down — comfort first, authority second, numbers later.</Hint>
         </div>)}
 
@@ -2311,7 +2318,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
               </div>
               <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-                Repairs come straight off what you can pay, so every item on the checklist above is worth real money. Anchor at <b className="text-emerald-700">{deal.maxCash > 0 ? usd(Math.round(deal.maxCash * ANCHOR_PCT)) : "—"}</b>, never go past the max.
+                Repairs come straight off what you can pay, so every item on the checklist above is worth real money. Open at <b className="text-emerald-700">{deal.maxCash > 0 ? usd(Math.round(deal.maxCash * ANCHOR_PCT)) : "—"}</b>, never go past the max.
               </div>
             </div>
           )}
@@ -2529,12 +2536,12 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </div>
               {deal.maxCash > 0 && (
                 <div className="mt-2 border-t border-amber-300 pt-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-700">Open here — your anchor</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-700">Opening offer · say this first</div>
                   <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</div>
                   <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-700">Max allowable cash offer</div>
                   <div className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(deal.maxCash)}</div>
                   <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
-                    Say the anchor, not the ceiling. That leaves {usd(deal.maxCash - Math.round(deal.maxCash * ANCHOR_PCT))} of room to move toward them and still keep your {usd(num(deal.wholesaleFee))} fee. Never go above the ceiling.
+                    Say the opening offer, not the ceiling. That leaves {usd(deal.maxCash - Math.round(deal.maxCash * ANCHOR_PCT))} of room to move toward them and still keep your {usd(num(deal.wholesaleFee))} fee. Never go above the ceiling. {ANCHOR_WHY}
                     {strat.gap != null && strat.gap > 0 ? <> They want <b className="text-slate-700">{usd(strat.gap)}</b> more than this.</> : strat.gap != null ? <> Their number is already under it.</> : null}
                   </div>
                   <PayoffAlert cs={cs} maxCash={deal.maxCash} />
@@ -5090,6 +5097,11 @@ function CashTab(props) {
                 <td className={`py-2 text-right text-base font-bold ${!isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoUnder)}</td>
                 <td className={`py-2 text-right text-base font-bold ${isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoOver)}</td>
               </tr>
+              <tr className="border-t border-slate-100">
+                <td className="py-1.5 font-sans text-[11px] font-semibold uppercase tracking-wide text-slate-700">Opening offer ({Math.round(ANCHOR_PCT * 100)}% of MAO)</td>
+                <td className={`py-1.5 text-right ${!isOver ? "font-bold text-emerald-700" : "text-slate-700"}`}>{usd(Math.max(0, Math.round(investorMaoUnder * ANCHOR_PCT)))}</td>
+                <td className={`py-1.5 text-right ${isOver ? "font-bold text-emerald-700" : "text-slate-700"}`}>{usd(Math.max(0, Math.round(investorMaoOver * ANCHOR_PCT)))}</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -5098,6 +5110,11 @@ function CashTab(props) {
           <Stat label={`${activePct}% Rule MAO`} value={usd(activeRuleMao)} tone={activeRuleMao > 0 ? "default" : "bad"} big sub="ARV × band − repairs" />
           <Stat label="MAO (Max Allowable Offer)" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
           <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
+          <Stat label="Opening offer" value={activeInvestorMao > 0 ? usd(Math.round(activeInvestorMao * ANCHOR_PCT)) : "—"} tone={activeInvestorMao > 0 ? "good" : "default"} big sub={`${Math.round(ANCHOR_PCT * 100)}% of MAO · say this first`} />
+          <div className="sm:col-span-2 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11.5px] leading-snug text-emerald-900">
+            <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+            <span><b>Open at the opening offer, not the MAO.</b> {ANCHOR_WHY}{activeInvestorMao > 0 ? ` That leaves ${usd(activeInvestorMao - Math.round(activeInvestorMao * ANCHOR_PCT))} of room between the two.` : ""}</span>
+          </div>
         </div>
       </div>
 
