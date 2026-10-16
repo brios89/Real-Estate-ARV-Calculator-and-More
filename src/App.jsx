@@ -664,6 +664,8 @@ const isLowRate = (v) => { const n = rateNum(v); return n != null && n <= LOW_RA
 // Per B (Oct 16 2026): until someone picks a condition or types a number, repairs run at $5K so the MAO
 // shows. It is flagged everywhere as a placeholder, and it never stands in for a condition read.
 const REPAIR_DEFAULT = 5000;
+// Per B (Oct 16 2026): never more than $10K down (cash to the seller at closing) on a creative offer.
+const CREATIVE_DOWN_MAX = 10000;
 const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
 // Why the opening offer exists, in one place so the Cash tab and the call flow say it the same way (per B, Oct 16 2026).
 const ANCHOR_WHY = "It is better for the seller to work you up from your opening offer than for you to work them down from their number. Every move goes in their direction, so they feel like they are winning, and you still land under your max.";
@@ -1071,6 +1073,18 @@ function scoreStrategies(c, deal) {
   if (condMismatch) {
     const msg = `Condition says ${c.condition} but ${usd(deal.repairs)} of repairs reads as ${condMismatch}. The offer is built on the dollars — fix whichever is wrong.`;
     for (const o of out) if (["cash", "subto", "nov"].includes(o.id)) o.warn.push(msg);
+  }
+  // The $10K creative cap. Warnings only, so the scores stay what they were.
+  {
+    const needAt = num(c.needCash);
+    if (needAt > CREATIVE_DOWN_MAX) {
+      const msg = `They need ${usd(needAt)} at closing. We never put more than ${usd(CREATIVE_DOWN_MAX)} down on a creative offer, so the other ${usd(needAt - CREATIVE_DOWN_MAX)} has to be paid over time, or this is not a creative deal.`;
+      for (const o of out) if (["subto", "hybrid", "sf"].includes(o.id)) o.warn.push(msg);
+    }
+    if (c.loan === "yes" && bal > 0 && ask > 0 && ask - bal > CREATIVE_DOWN_MAX) {
+      const st = out.find((o) => o.id === "subto");
+      if (st) st.warn.push(`Their number is ${usd(ask - bal)} above the loan. A straight Sub-To hands that to them at closing, and we never put more than ${usd(CREATIVE_DOWN_MAX)} down. Carry the rest as a seller note (Hybrid) or get the price down.`);
+    }
   }
   for (const o of out) o.sc = Math.max(0, Math.min(100, Math.round(o.sc)));
   out.sort((a, b) => b.sc - a.sc);
@@ -2533,6 +2547,12 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <WField label="What is it for?"><WText value={cs.needCashNotes} onChange={(v) => upd("needCashNotes", v)} placeholder="movers + deposit" /></WField>
           </div>
           <NeedCheck nd={readCashNeed(cs, deal.maxCash)} />
+          {num(cs.needCash) > CREATIVE_DOWN_MAX && (
+            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] leading-snug text-rose-900">
+              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-rose-600" />
+              <span><b>Over our creative max.</b> They need {usd(num(cs.needCash))} at closing, and we never put more than {usd(CREATIVE_DOWN_MAX)} down on a creative offer. Find out if part of it can come over time, or this one is cash only.</span>
+            </div>
+          )}
           <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-600">Rebuttals — tap to open</div>
           {REBUTTALS.map((r, i) => (
             <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -5243,6 +5263,18 @@ function CashTab(props) {
     </div>
   );
 }
+// Under every creative down payment box: the $10K cap, said the moment a number goes over it.
+const DownCapNote = ({ amount, what = "down" }) => {
+  const a = num(amount);
+  if (a <= CREATIVE_DOWN_MAX) return a > 0 ? <div className="mt-1 text-[10.5px] text-slate-600">Max {usd(CREATIVE_DOWN_MAX)} {what} on a creative offer.</div> : null;
+  return (
+    <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2 py-1.5 text-[10.5px] leading-snug text-rose-900">
+      <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-rose-600" />
+      <span><b>{usd(a - CREATIVE_DOWN_MAX)} over our {usd(CREATIVE_DOWN_MAX)} max.</b> We never put more than {usd(CREATIVE_DOWN_MAX)} {what} on a creative offer. Move the rest into the payments over time, or bring the price down.</span>
+    </div>
+  );
+};
+
 // One line under every wholesale fee box: where the number comes from and how to get back to the scale.
 const FeeScaleNote = ({ f }) => {
   if (!f) return null;
@@ -5983,7 +6015,7 @@ function SubToTab(props) {
             <Field label="Existing loan balance"><MoneyInput value={stBal} onChange={setStBal} /></Field>
             <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
             <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
-            <Field label="Cash to seller" hint="equity"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /></Field>
+            <Field label="Cash to seller" hint="at closing · $10K max"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /><DownCapNote amount={stCashSeller} what="to the seller at closing" /></Field>
             <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
             <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={stRent} onChange={setStRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
@@ -6070,7 +6102,7 @@ function HybridTab(props) {
           <SectionTitle>Hybrid (sub-to + seller note)</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Purchase price"><MoneyInput value={hyPrice} onChange={setHyPrice} /></Field>
-            <Field label="Down payment"><MoneyInput value={hyDown} onChange={setHyDown} /></Field>
+            <Field label="Down payment" hint="$10K max"><MoneyInput value={hyDown} onChange={setHyDown} /><DownCapNote amount={hyDown} /></Field>
             <Field label="Existing loan balance" hint="taken sub-to"><MoneyInput value={hyBal} onChange={setHyBal} /></Field>
             <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
             <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
@@ -6164,7 +6196,7 @@ function SellerFinanceTab(props) {
           <SectionTitle>Seller financing inputs</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Purchase price"><MoneyInput value={sfPrice} onChange={setSfPrice} /></Field>
-            <Field label="Down payment"><MoneyInput value={sfDown} onChange={setSfDown} /></Field>
+            <Field label="Down payment" hint="$10K max"><MoneyInput value={sfDown} onChange={setSfDown} /><DownCapNote amount={sfDown} /></Field>
             <Field label="Interest rate" hint="0% ok"><PlainInput value={sfRate} onChange={setSfRate} suffix="%" /></Field>
             <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
             <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
