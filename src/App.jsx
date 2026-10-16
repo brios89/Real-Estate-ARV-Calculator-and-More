@@ -619,6 +619,7 @@ const ownerFullName = (names) => {
 
 const INITIAL_CALL = {
   sellerName: "", bookedBy: "",
+  callType: "", lastTalked: "", lastNotes: "",   // "followup" = nobody booked it, we are calling back (per B, Oct 16 2026)
   motivation: "", motivNotes: "",
   occupancy: "", tenantRent: "", leaseEnds: "", stmt: "",
   signed: "", accessHow: "", accessCode: "", accessTimes: "", accessNotes: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
@@ -741,11 +742,18 @@ const impliedCondition = (repairs, sqft) => {
 // used to clear the tabs on an address change and to tell whether there is anything worth saving.
 const TAB_DEFAULTS = {
   rentOverride: "", holdingOverride: "",
-  stBal: "", stPiti: "", stArrears: "", stCashSeller: "", stClosing: "3500", stRent: "", stReservePct: "12",
-  hyPrice: "", hyDown: "", hyBal: "", hyPiti: "", hyRate: "0", hyTerm: "30", hyClosing: "3500", hyRent: "", hyReservePct: "12",
-  sfPrice: "", sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0", sfTaxIns: "", sfRent: "", sfReservePct: "12",
-  novAsIs: "", novCommission: "6", novClosing: "5000", novProfit: "30000", novRepairs: "",
-  aiZillow: "", aiRealtor: "", aiRedfin: "", aiOther: "", aiExit: "", aiFee: "", aiOffer: "",
+  // Shared across strategies (per B, Oct 16 2026: one number, every screen). Closing costs and reserves
+  // are one value for Sub-To, Hybrid and Seller Finance (BRRRR keeps its own 10% reserves). Price, loan balance, payment, rent,
+  // repairs, taxes and insurance, HOA and the fee are not here at all: they live on the call or the
+  // deal itself, and every box that shows them edits that one value.
+  closing: "3500", reservePct: "12", loanYrsLeft: "30", mktRate: "7.5",
+  stArrears: "", stCashSeller: "",
+  hyDown: "", hyRate: "0", hyTerm: "30",
+  sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0",
+  novAsIs: "", novCommission: "6", novClosing: "5000", novProfit: "30000",
+  aiZillow: "", aiRealtor: "", aiRedfin: "", aiOther: "", aiExit: "", aiOffer: "",
+  brPurchase: "", brPurchaseMode: "", brLtv: "75", brRate: "7.5", brTerm: "30",
+  brReservePct: "10",   // BRRRR keeps its own 10% reserves (per B, Oct 16 2026). The strategy tabs share 12%.
 };
 
 // The As-Is formula from Jerry Norton's Instant Offer Calculator (per B, Oct 16 2026). No comps and no
@@ -782,16 +790,18 @@ const asIsCalc = (v) => {
   const typed = (x) => String(x ?? "").trim() !== "";
   const custom = tierIdx === 5;                          // over $500K: the sheet says "custom", so the rep types all three
   const exitPct = typed(v.aiExit) ? num(v.aiExit) : tier ? tier.exit : 0;
-  const fee = typed(v.aiFee) ? num(v.aiFee) : typed(v.dealFeeTyped) ? num(v.dealFeeTyped) : tier ? tier.fee : 0;
+  // One fee for the whole deal: the rep's typed fee, else the deal's scale fee (by the ARV, or by this
+  // average when there is no ARV yet). The panel's fee box edits that same deal fee.
+  const fee = typed(v.dealFeeTyped) ? num(v.dealFeeTyped) : num(v.dealFeeAuto) > 0 ? num(v.dealFeeAuto) : tier ? tier.fee : 0;
   const offerPct = typed(v.aiOffer) ? num(v.aiOffer) : tier ? tier.offer : 0;
-  const needsCustom = custom && !(typed(v.aiExit) && (typed(v.aiFee) || typed(v.dealFeeTyped)) && typed(v.aiOffer));
+  const needsCustom = custom && !(typed(v.aiExit) && fee > 0 && typed(v.aiOffer));
   const exitPrice = Math.round(avg * exitPct / 100);
   const maxBuy = Math.round(exitPrice - fee);
   const offer = Math.round(maxBuy * offerPct / 100);
   const ready = avg > 0 && exitPct > 0 && offerPct > 0 && !needsCustom;
   const spread = vals.length > 1 ? (Math.max(...vals) / Math.min(...vals) - 1) * 100 : 0;
   return { vals, count: vals.length, avg: Math.round(avg), tierIdx, tier, custom, needsCustom, exitPct, fee, offerPct, exitPrice, maxBuy, offer, ready, spread,
-    typedExit: typed(v.aiExit), typedFee: typed(v.aiFee), dealFee: !typed(v.aiFee) && typed(v.dealFeeTyped), typedOffer: typed(v.aiOffer) };
+    typedExit: typed(v.aiExit), typedFee: typed(v.dealFeeTyped), feeFromArv: !typed(v.dealFeeTyped) && !!v.dealFeeFromArv && num(v.dealFeeAuto) > 0, typedOffer: typed(v.aiOffer) };
 };
 // History: a flat $15K fee (back to $15K Sep 29 2026 after $20K from Sep 24, when every save wrote
 // "20000" whether or not anyone chose it).
@@ -1118,7 +1128,9 @@ const buildCallNarrative = (cs, deal, strat) => {
   const L = { light: "light", moderate: "moderate", heavy: "heavy", vacant: "vacant", owner: "owner occupied", tenant: "tenant occupied", asap: "ASAP (two weeks or less)", soon: "within 30-60 days", flexible: "flexible on timing", distress: "property distress", hardship: "financial hardship", urgency: "urgency" };
   const p = [];
   const s1 = [];
-  s1.push(`Offer call${cs.sellerName.trim() ? ` with ${cs.sellerName.trim()}` : ""}${deal.address ? ` regarding ${deal.address}` : ""}${cs.bookedBy.trim() ? `, booked by ${cs.bookedBy.trim()}` : ""}.`);
+  const fu = cs.callType === "followup";
+  s1.push(`${fu ? "Follow-up call" : "Offer call"}${cs.sellerName.trim() ? ` with ${cs.sellerName.trim()}` : ""}${deal.address ? ` regarding ${deal.address}` : ""}${fu ? (cs.lastTalked.trim() ? `, last talked ${cs.lastTalked.trim()}` : "") : (cs.bookedBy.trim() ? `, booked by ${cs.bookedBy.trim()}` : "")}.`);
+  if (fu && cs.lastNotes.trim()) s1.push(`Where it left off last time: ${cs.lastNotes.trim().replace(/[.\s]+$/, "")}.`);
   if (cs.motivation) s1.push(`Seller's main driver is ${L[cs.motivation] || cs.motivation}.`);
   if (cs.motivNotes.trim()) s1.push(`In their words: "${cs.motivNotes.trim()}".`);
   for (const k of motivationChecks(cs, deal)) s1.push(`Worth a second look: ${k.msg}`);
@@ -1262,7 +1274,7 @@ const buildCallReport = (cs, deal, strat) => {
       <div class="note">Closer Control moves buttons around from time to time, so if a label does not match, look for the upload or attach control inside the contact's Documents area.</div>
     </div>
     <h2>Call basics</h2><table>
-      ${row("Seller", v(cs.sellerName))}${row("Booked by (lead manager)", v(cs.bookedBy))}
+      ${row("Seller", v(cs.sellerName))}${cs.callType === "followup" ? `${row("Call type", "Follow-up, nobody booked it")}${row("Last talked", v(cs.lastTalked))}${row("Where it left off", v(cs.lastNotes))}${row("Last spoke with", v(cs.bookedBy))}` : row("Booked by (lead manager)", v(cs.bookedBy))}
       ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}${(() => { const mc = motivationChecks(cs, deal); return mc.length ? row("Motivation check", `<span style="color:#b45309">${mc.map((k) => esc(k.msg)).join("<br>")}</span>`) : ""; })()}
     </table>
     <h2>Property</h2><table>
@@ -2122,7 +2134,19 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
             </div>
           )}
-          <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Lead Gen Department" /></WField>
+          <WField label="What kind of call is this?">
+            <WChips value={cs.callType} onChange={(v) => upd("callType", v)} opts={[["booked", "Booked appointment"], ["followup", "Follow-up, nobody booked it"]]} />
+          </WField>
+          {cs.callType === "followup" ? (<>
+            <div className="mt-1 rounded-lg border-l-4 border-sky-500 bg-sky-50 px-3 py-2 text-[11px] leading-snug text-slate-700">
+              <b className="text-sky-900">They are not expecting you.</b> Read the last call report and the CRM notes before you dial. Know their name, their number from last time and what was holding it up, so you pick up where it left off instead of starting over.
+            </div>
+            <WField label="When did we last talk?"><WText value={cs.lastTalked} onChange={(v) => upd("lastTalked", v)} placeholder="Oct 2" /></WField>
+            <WField label="Where it left off"><WArea value={cs.lastNotes} onChange={(v) => upd("lastNotes", v)} placeholder="wanted $150K, needed to talk to her brother, said call back after the 15th" /></WField>
+            <WField label="Who talked to them last? (optional)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Lead Gen Department" /></WField>
+          </>) : (
+            <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Lead Gen Department" /></WField>
+          )}
           <WField label="Your wholesale / assignment fee">
             <WText money value={deal.feeField.typed} onChange={deal.feeField.set} placeholder={deal.feeField.auto > 0 ? String(deal.feeField.auto) : "set by the ARV"} />
           </WField>
@@ -2133,7 +2157,23 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-700">“People do not care how much you know, until they know how much you care.”</div>
         </div>)}
 
-        {stage === 1 && (<div>
+        {stage === 1 && cs.callType === "followup" && (<div>
+          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening · follow-up call</div>
+          <Line>“Hey, is this {nm}?” … “Hey {nm}, this is ____ with Your Local Home Buyer. We spoke {cs.lastTalked.trim() ? `on ${cs.lastTalked.trim()}` : "a little while back"} about your property on ____. I wanted to follow up and see where things are with it. Did I catch you at an okay time?”</Line>
+          <Hint>Ask for permission first. They did not plan this call, so a yes to “okay time” earns you the next five minutes. If it is a bad time, do not push.</Hint>
+          <Line>Bad time: “No problem at all. When is a better time for me to give you a quick call back?”</Line>
+          <Line>They do not remember: “No worries. You had reached out about possibly selling the house on ____. Are you still thinking about selling, or has anything changed?”</Line>
+          {cs.lastNotes.trim() && (
+            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-snug text-slate-700">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Where it left off</div>
+              <div className="mt-0.5">{cs.lastNotes.trim()}</div>
+            </div>
+          )}
+          <Line>Pick up the thread: “Last time we talked, you mentioned ____. How did that go?”</Line>
+          <Hint>Fill the blank from where it left off. Do not rerun the whole first call. Confirm what is still true, find out what changed, and spend your time on whatever was holding it up last time.</Hint>
+        </div>)}
+
+        {stage === 1 && cs.callType !== "followup" && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening</div>
           <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and {cs.bookedBy.trim() ? `my partner ${cs.bookedBy.trim()}` : "our Lead Gen Department"} scheduled a call for us today because you were looking to sell your property on ____. Is that right?”</Line>
           <Line>Or simply: “Hi {nm}, my name is ____ and {cs.bookedBy.trim() ? `I'm partners with ${cs.bookedBy.trim()}` : "I'm following up from our Lead Gen Department"}. How are you doing today?”</Line>
@@ -2142,7 +2182,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 2 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Rapport &amp; motivation</div>
-          <Line>“Catch me up to speed — what's going on with the house?”</Line>
+          {cs.callType === "followup" ? (<>
+            <Line>“Last time we talked, you mentioned ____. Is that still the situation, or has anything changed since then?”</Line>
+            {cs.motivNotes.trim() && <div className="mt-1 rounded-md bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-700"><b>Last time:</b> {cs.motivNotes.trim()}</div>}
+            <Hint>Their reason may have gotten stronger or gone away. Either way, it changes the offer, so update the motivator and the notes below to match today, not last time.</Hint>
+          </>) : <Line>“Catch me up to speed — what's going on with the house?”</Line>}
           <Line>“What has you thinking about selling?”</Line>
           <Line>“How were you hoping we could help?”</Line>
           <Hint>Don't interrogate — keep it natural. Probe with “What's that been like?” · “How long has that been going on?” · “What happens next once you sell?”</Hint>
@@ -2453,7 +2497,10 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 5 && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Price discovery</div>
-          <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>
+          {cs.callType === "followup" && num(cs.ask) > 0 ? (<>
+            <Line>“Last time you mentioned you were hoping to get around {usd(num(cs.ask))}. Is that still where you are at?”</Line>
+            <Hint>If the number moved, update Their number below. A lower number on a follow-up is common once they have tested the market, so let them say it first.</Hint>
+          </>) : <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>}
           <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
           <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
           <WField label="“How did you come up with that number?” (optional)"><WArea value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
@@ -3036,42 +3083,67 @@ export default function App() {
   const askingPrice = callState.ask;
   const setAskingPrice = (v) => { setCallTouched(true); setCallState((p) => ({ ...p, ask: v })); };
 
-  // sub-to
-  const [stBal, setStBal] = useState("");
-  const [stPiti, setStPiti] = useState("");
+  // ---- One value per fact (per B, Oct 16 2026) ----
+  // Every box that shows the same fact edits the same value, so a change anywhere shows everywhere.
+  const setCallField = (k, v) => { setCallTouched(true); setCallState((p) => ({ ...p, [k]: v })); };
+  // The seller's price: Their number, the Cash tab's asking price, and the Hybrid and Seller Finance price.
+  const stBal = callState.balance, hyBal = callState.balance;          // the loan balance from the call
+  // A balance or payment typed on a strategy tab means there is a loan, so the Offer Call shows it too.
+  const setLoanField = (k, v) => { setCallTouched(true); setCallState((p) => ({ ...p, [k]: v, loan: num(v) > 0 ? "yes" : p.loan })); };
+  const setStBal = (v) => setLoanField("balance", v), setHyBal = setStBal;
+  const hyPrice = callState.ask, sfPrice = callState.ask;
+  const setHyPrice = setAskingPrice, setSfPrice = setAskingPrice;
+  // The payment. The box edits the seller's monthly payment from the call. The math runs on the full
+  // PITI: that payment plus taxes and insurance when they are not in escrow, plus HOA dues.
+  const pitiExtras = (callState.escrowed === "no" ? num(callState.tiMonthly) : 0) + (callState.hoa === "yes" ? num(callState.hoaAmt) : 0);
+  const callPiti = num(callState.payment) > 0 ? String(Math.round(num(callState.payment) + pitiExtras)) : "";
+  const stPiti = callPiti, hyPiti = callPiti;
+  const stPay = callState.payment, setStPay = (v) => setLoanField("payment", v);
+  const setStPiti = setStPay, setHyPiti = setStPay;   // older prop names, same payment
+  // Taxes + insurance (monthly) and HOA dues, the same numbers the call captures.
+  const taxIns = callState.tiMonthly, setTaxIns = (v) => setCallField("tiMonthly", v);
+  const hoaAmt = callState.hoaAmt;
+  const setHoaAmt = (v) => { setCallTouched(true); setCallState((p) => ({ ...p, hoaAmt: v, hoa: num(v) > 0 ? "yes" : p.hoa })); };
+  // The loan's rate from the call drives the Rate Savings panels on Sub-To and Hybrid.
+  const setCallRate = (n) => setCallField("rate", String(Math.round(n * 1000) / 1000));
   const [stArrears, setStArrears] = useState("");
   const [stCashSeller, setStCashSeller] = useState("");
-  const [stClosing, setStClosing] = useState("3500");
-  const [stRent, setStRent] = useState("");
-  const [stReservePct, setStReservePct] = useState("12");
+  const [closing, setClosing] = useState("3500");          // buyer's closing costs, every terms strategy
+  const [reservePct, setReservePct] = useState("12");     // vacancy + maintenance + management, every rental view
+  const [loanYrsLeft, setLoanYrsLeft] = useState("30");   // years left on the seller's loan
+  const [mktRate, setMktRate] = useState("7.5");          // today's market rate, for the rate-savings math
+  const stClosing = closing, hyClosing = closing, setStClosing = setClosing, setHyClosing = setClosing;
+  const stReservePct = reservePct, hyReservePct = reservePct, sfReservePct = reservePct;
+  const setStReservePct = setReservePct, setHyReservePct = setReservePct, setSfReservePct = setReservePct;
+  const stRent = rentOverride, hyRent = rentOverride, sfRent = rentOverride;
+  const setStRent = setRentOverride, setHyRent = setRentOverride, setSfRent = setRentOverride;
+  const sfTaxIns = taxIns, setSfTaxIns = setTaxIns;
 
-  // hybrid
-  const [hyPrice, setHyPrice] = useState("");
+  // hybrid terms
   const [hyDown, setHyDown] = useState("");
-  const [hyBal, setHyBal] = useState("");
-  const [hyPiti, setHyPiti] = useState("");
   const [hyRate, setHyRate] = useState("0");
   const [hyTerm, setHyTerm] = useState("30");
-  const [hyClosing, setHyClosing] = useState("3500");
-  const [hyRent, setHyRent] = useState("");
-  const [hyReservePct, setHyReservePct] = useState("12");
 
-  // seller finance
-  const [sfPrice, setSfPrice] = useState("");
+  // seller finance terms
   const [sfDown, setSfDown] = useState("");
   const [sfRate, setSfRate] = useState("0");
   const [sfAmort, setSfAmort] = useState("30");
   const [sfBalloon, setSfBalloon] = useState("0");
-  const [sfTaxIns, setSfTaxIns] = useState("");
-  const [sfRent, setSfRent] = useState("");
-  const [sfReservePct, setSfReservePct] = useState("12");
+
+  // BRRRR inputs, kept here so they survive a tab switch and save with the deal
+  const [brPurchase, setBrPurchase] = useState("");
+  const [brPurchaseMode, setBrPurchaseMode] = useState("");   // "ask" or "askfee" keeps following the price and fee
+  const [brLtv, setBrLtv] = useState("75");
+  const [brRate, setBrRate] = useState("7.5");
+  const [brTerm, setBrTerm] = useState("30");
+  const [brReservePct, setBrReservePct] = useState("10");
 
   // novation
   const [novAsIs, setNovAsIs] = useState("");
   const [novProfit, setNovProfit] = useState("30000");
   const [novCommission, setNovCommission] = useState("6");     // % of the sale price
   const [novClosing, setNovClosing] = useState("5000");        // flat $
-  const [novRepairs, setNovRepairs] = useState("");            // blank = use the deal's repair number
+  const novRepairs = repairOverride, setNovRepairs = setRepairOverride;   // the deal's repair number
 
   // As-Is formula (Cash tab): the online values, plus optional overrides of the scale (blank = scale)
   const [aiZillow, setAiZillow] = useState("");
@@ -3079,27 +3151,31 @@ export default function App() {
   const [aiRedfin, setAiRedfin] = useState("");
   const [aiOther, setAiOther] = useState("");
   const [aiExit, setAiExit] = useState("");
-  const [aiFee, setAiFee] = useState("");
+  const aiFee = feeTyped, setAiFee = setFeeTyped;   // the deal's wholesale fee, not a second one
   const [aiOffer, setAiOffer] = useState("");
 
   // One handle on every strategy-tab field, so they can be cleared, saved and restored per address.
   const tabVals = {
     rentOverride, holdingOverride,
-    stBal, stPiti, stArrears, stCashSeller, stClosing, stRent, stReservePct,
-    hyPrice, hyDown, hyBal, hyPiti, hyRate, hyTerm, hyClosing, hyRent, hyReservePct,
-    sfPrice, sfDown, sfRate, sfAmort, sfBalloon, sfTaxIns, sfRent, sfReservePct,
-    novAsIs, novCommission, novClosing, novProfit, novRepairs,
-    aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer,
+    closing, reservePct, loanYrsLeft, mktRate,
+    stArrears, stCashSeller,
+    hyDown, hyRate, hyTerm,
+    sfDown, sfRate, sfAmort, sfBalloon,
+    novAsIs, novCommission, novClosing, novProfit,
+    aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiOffer,
+    brPurchase, brPurchaseMode, brLtv, brRate, brTerm, brReservePct,
   };
   const tabSet = {
     rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
-    stBal: setStBal, stPiti: setStPiti, stArrears: setStArrears, stCashSeller: setStCashSeller, stClosing: setStClosing, stRent: setStRent, stReservePct: setStReservePct,
-    hyPrice: setHyPrice, hyDown: setHyDown, hyBal: setHyBal, hyPiti: setHyPiti, hyRate: setHyRate, hyTerm: setHyTerm, hyClosing: setHyClosing, hyRent: setHyRent, hyReservePct: setHyReservePct,
-    sfPrice: setSfPrice, sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon, sfTaxIns: setSfTaxIns, sfRent: setSfRent, sfReservePct: setSfReservePct,
-    novAsIs: setNovAsIs, novCommission: setNovCommission, novClosing: setNovClosing, novProfit: setNovProfit, novRepairs: setNovRepairs,
-    aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin, aiOther: setAiOther, aiExit: setAiExit, aiFee: setAiFee, aiOffer: setAiOffer,
+    closing: setClosing, reservePct: setReservePct, loanYrsLeft: setLoanYrsLeft, mktRate: setMktRate,
+    stArrears: setStArrears, stCashSeller: setStCashSeller,
+    hyDown: setHyDown, hyRate: setHyRate, hyTerm: setHyTerm,
+    sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon,
+    novAsIs: setNovAsIs, novCommission: setNovCommission, novClosing: setNovClosing, novProfit: setNovProfit,
+    aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin, aiOther: setAiOther, aiExit: setAiExit, aiOffer: setAiOffer,
+    brPurchase: setBrPurchase, brPurchaseMode: setBrPurchaseMode, brLtv: setBrLtv, brRate: setBrRate, brTerm: setBrTerm, brReservePct: setBrReservePct,
   };
-  const asIs = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer, dealFeeTyped: feeTyped });
+  // (asIs is computed below the deal fee, since the formula runs on the same fee as everything else)
   const tabsChanged = () => {
     const d = {};
     for (const k of Object.keys(TAB_DEFAULTS)) if (String(tabVals[k] ?? "") !== TAB_DEFAULTS[k]) d[k] = String(tabVals[k]);
@@ -3135,12 +3211,8 @@ export default function App() {
       if (c !== next) setter(next);
       fed[key] = next;
     };
-    follow("hyPrice", hyPrice, setHyPrice, ask);               // Hybrid
-    follow("sfPrice", sfPrice, setSfPrice, ask);               // Seller Finance
-    follow("stBal", stBal, setStBal, bal);                     // Sub-To
-    follow("hyBal", hyBal, setHyBal, bal);                     // Hybrid
-    follow("stPiti", stPiti, setStPiti, piti);
-    follow("hyPiti", hyPiti, setHyPiti, piti);
+    // Price, balance and payment are no longer copied: those boxes ARE the call's numbers now.
+    void piti;
     // On a Sub-To the seller's equity above the balance is what they walk with in cash.
     follow("stCashSeller", stCashSeller, setStCashSeller, equity);
   }, [callState.ask, callState.balance, callState.payment, callState.escrowed, callState.tiMonthly, callState.hoa, callState.hoaAmt]);
@@ -3238,10 +3310,17 @@ export default function App() {
     return Math.max(0, soldVal + subjAdjust);
   }, [soldSummary, arvOverride, subjAdjust]);
   // The fee every strategy runs on: the rep's number when typed, otherwise the scale fee for this ARV.
-  const feeAuto = scaleFee(arv);
+  // With no ARV yet, the As-Is formula's average picks the range, so there is still one fee for the deal.
+  const asIsAvgNow = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther }).avg;
+  const feeBasis = arv > 0 ? arv : asIsAvgNow;
+  const feeAuto = scaleFee(feeBasis);
   const wholesaleFee = String(feeTyped ?? "").trim() !== "" ? feeTyped : String(feeAuto);
-  const feeTierLabel = scaleTier(arv) >= 0 ? (scaleTier(arv) > 4 ? "an ARV over $500K, the top of the scale" : `an ARV of ${ASIS_SCALE[scaleTier(arv)].label}`) : "";
-  const feeField = { typed: feeTyped, set: setFeeTyped, auto: feeAuto, tierLabel: feeTierLabel, over500: scaleTier(arv) > 4 };
+  const feeBasisWord = arv > 0 ? "an ARV" : "an as-is value";
+  const feeTierLabel = scaleTier(feeBasis) >= 0 ? (scaleTier(feeBasis) > 4 ? `${feeBasisWord} over $500K, the top of the scale` : `${feeBasisWord} of ${ASIS_SCALE[scaleTier(feeBasis)].label}`) : "";
+  const feeField = { typed: feeTyped, set: setFeeTyped, auto: feeAuto, tierLabel: feeTierLabel, over500: scaleTier(feeBasis) > 4 };
+  const asIs = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiOffer, dealFeeTyped: feeTyped, dealFeeAuto: feeAuto, dealFeeFromArv: arv > 0 });
+  // Taxes + insurance when nobody has typed them: about 1.5% of the ARV a year (U.S. averages, see BRRRR).
+  const taxInsEst = arv > 0 ? (arv * 0.015) / 12 : 0;
 
   const arvStat = useMemo(() => {
     const o = num(arvOverride);
@@ -3401,7 +3480,16 @@ export default function App() {
     setPullAt(null);
     const local = readSavedCall(address);
     const applyRecord = (rec, from) => {
-      setCallState({ ...INITIAL_CALL, ...rec.call });
+      // Deals saved before the sync kept price, balance, payment and taxes per strategy tab. Fold any of
+      // those into the call's own value when the call left it blank, so nothing typed is lost.
+      const lt = (rec.desk && rec.desk.tabs) || {};
+      const pick = (...ks) => { for (const k of ks) if (lt[k] != null && String(lt[k]).trim() !== "" && num(lt[k]) > 0) return String(lt[k]); return ""; };
+      const call0 = { ...INITIAL_CALL, ...rec.call };
+      if (!String(call0.ask || "").trim()) call0.ask = pick("hyPrice", "sfPrice");
+      if (!String(call0.balance || "").trim()) call0.balance = pick("stBal", "hyBal");
+      if (!String(call0.payment || "").trim()) call0.payment = pick("stPiti", "hyPiti");
+      if (!String(call0.tiMonthly || "").trim()) call0.tiMonthly = pick("sfTaxIns");
+      setCallState(call0);
       // Only a record with real call content counts as a call in progress. A pull-only record
       // (someone looked the address up and never dialed) leaves the pill reading "Offer Call".
       setCallTouched(Object.keys(INITIAL_CALL).some((k) => (rec.call || {})[k] && rec.call[k] !== INITIAL_CALL[k]));
@@ -3428,6 +3516,12 @@ export default function App() {
       setMlsOnly(dk.mlsOnly !== false);
       setManualSold(Array.isArray(dk.manualSold) ? dk.manualSold : []);
       for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](dk.tabs && dk.tabs[k] != null ? String(dk.tabs[k]) : v);
+      // Older saves: shared values that used to sit on one strategy tab.
+      if (!(dk.tabs && dk.tabs.closing != null)) { const c = pick("stClosing", "hyClosing"); if (c) setClosing(c); }
+      if (!(dk.tabs && dk.tabs.reservePct != null)) { const r = pick("stReservePct", "hyReservePct", "sfReservePct"); if (r) setReservePct(r); }
+      if (!(dk.tabs && num(dk.tabs.rentOverride) > 0)) { const r = pick("stRent", "hyRent", "sfRent"); if (r) setRentOverride(r); }
+      if (!(num(rec.repairOverride) > 0)) { const r = pick("novRepairs"); if (r) setRepairOverride(r); }
+      if (!(rec.desk && rec.desk.fee) && !savedFee(rec.wholesaleFee)) { const f = pick("aiFee"); if (f) setFeeTyped(f); }
       // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
       // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
       if (rec.pull && rec.pull.at) {
@@ -4215,20 +4309,20 @@ export default function App() {
 
         <div className="mt-4">
           {tab === "cash" && (
-            <CashTab {...{ deckOpenKey: deckKey("cash"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
-              address, asIs, heavyRehab: rehabLevel === "gut" || (!rehabLevel && !repairsDefault && impliedCondition(repairs, sqft) === "heavy"), asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: tabSet }} />
+            <CashTab {...{ deckOpenKey: deckKey("cash"), feeField, brrrrIn: { brPurchase, setBrPurchase, brPurchaseMode, setBrPurchaseMode, brLtv, setBrLtv, brRate, setBrRate, brTerm, setBrTerm, repairOverride, setRepairOverride, taxIns, setTaxIns, hoaAmt, setHoaAmt, reservePct: brReservePct, setReservePct: setBrReservePct }, onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
+              address, asIs, heavyRehab: rehabLevel === "gut" || (!rehabLevel && !repairsDefault && impliedCondition(repairs, sqft) === "heavy"), asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: { ...tabSet, aiFee: setFeeTyped } }} />
           )}
           {tab === "subto" && (
-            <SubToTab {...{ deckOpenKey: deckKey("subto"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
+            <SubToTab {...{ deckOpenKey: deckKey("subto"), feeField, stPay, setStPay, pitiExtras, loanRate: num(callState.rate), setCallRate, loanYrsLeft, setLoanYrsLeft, mktRate, setMktRate, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
           )}
           {tab === "hybrid" && (
-            <HybridTab {...{ deckOpenKey: deckKey("hybrid"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
+            <HybridTab {...{ deckOpenKey: deckKey("hybrid"), feeField, stPay, setStPay, pitiExtras, loanRate: num(callState.rate), setCallRate, loanYrsLeft, setLoanYrsLeft, mktRate, setMktRate, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
           )}
           {tab === "sf" && (
-            <SellerFinanceTab {...{ deckOpenKey: deckKey("sf"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
+            <SellerFinanceTab {...{ deckOpenKey: deckKey("sf"), feeField, taxInsEst, mktRate, setMktRate, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
           )}
           {tab === "nov" && (
-            <NovationTab {...{ repairs, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs }} />
+            <NovationTab {...{ repairs, asIsAvg: asIs.avg, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs }} />
           )}
         </div>
 
@@ -5121,6 +5215,7 @@ function CashTab(props) {
       <AsIsPanel address={props.address} ai={props.asIs} vals={props.asIsVals} set={props.asIsSet} ask={ask} arvMao={activeInvestorMao} arv={arv} heavyRehab={props.heavyRehab} />
 
       <BrrrrPanel
+        shared={props.brrrrIn}
         deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened} rentInfo={props.rentInfo}
         arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
         askingPrice={askingPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
@@ -5166,7 +5261,7 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
   const rows = ai.ready ? [
     [`Average as-is value (${ai.count} source${ai.count === 1 ? "" : "s"})`, usd(ai.avg), null],
     [`× ${pct2(ai.exitPct)} exit, what a cash buyer pays${ai.typedExit ? " (typed here)" : ""}`, usd(ai.exitPrice), null],
-    [`− Wholesale fee${ai.typedFee ? " (typed here)" : ai.dealFee ? " (typed for this deal)" : ""}`, usd(ai.fee), null],
+    [`− Wholesale fee${ai.typedFee ? " (your fee for this deal)" : ai.feeFromArv ? " (the deal's fee, set by the ARV)" : ""}`, usd(ai.fee), null],
     ["= Max buy", usd(ai.maxBuy), `${pct2(ai.avg > 0 ? (ai.maxBuy / ai.avg) * 100 : 0)} of value`],
   ] : [];
   return (
@@ -5197,8 +5292,9 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
         <Field label="Exit %" hint={ai.typedExit ? "typed here" : ai.tier ? "from the scale" : ai.custom ? "type it, over $500K" : ""}>
           <PlainInput value={vals.aiExit} onChange={set.aiExit} placeholder={ai.tier ? String(ai.tier.exit) : ""} suffix="%" />
         </Field>
-        <Field label="Wholesale fee" hint={ai.typedFee ? "typed here" : ai.dealFee ? "your fee for this deal" : ai.tier ? "scale, by the as-is value" : ai.custom ? "type it, over $500K" : ""}>
-          <MoneyInput value={vals.aiFee} onChange={set.aiFee} placeholder={ai.tier ? String(ai.tier.fee) : ""} />
+        <Field label="Wholesale fee" hint={ai.typedFee ? "the deal's fee · same everywhere" : ai.feeFromArv ? "the deal's fee, by the ARV" : ai.tier ? "scale, by the as-is value" : ai.custom ? "type it, over $500K" : ""}
+          info="This is the deal's wholesale fee, the same one on the Cash tab, the Offer Call and every strategy. Typing here changes it everywhere. Clear it to go back to the fee scale.">
+          <MoneyInput value={vals.aiFee} onChange={set.aiFee} placeholder={ai.fee > 0 ? String(ai.fee) : ai.tier ? String(ai.tier.fee) : ""} />
         </Field>
         <Field label="Opening offer %" hint={ai.typedOffer ? "typed here" : ai.tier ? "of the max buy, from the scale" : ai.custom ? "type it, over $500K" : ""}>
           <PlainInput value={vals.aiOffer} onChange={set.aiOffer} placeholder={ai.tier ? String(ai.tier.offer) : ""} suffix="%" />
@@ -5270,14 +5366,14 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
                 right here, so the table and the math never look like they disagree. */}
             {ai.ready && ai.tier && (() => {
               const diffs = [];
-              if (ai.fee !== ai.tier.fee) diffs.push(<>a <b>{usd(ai.fee)}</b> fee {ai.dealFee ? "typed in the wholesale fee box for this deal" : "typed in the fee box above"} instead of the scale's {usd(ai.tier.fee)}</>);
+              if (ai.fee !== ai.tier.fee) diffs.push(<>the deal's <b>{usd(ai.fee)}</b> fee {ai.typedFee ? "typed for this deal" : "for the ARV's range"} instead of {usd(ai.tier.fee)} for the as-is range</>);
               if (ai.exitPct !== ai.tier.exit) diffs.push(<>a <b>{pct2(ai.exitPct)}</b> exit instead of {ai.tier.exit}%</>);
               if (ai.offerPct !== ai.tier.offer) diffs.push(<>a <b>{pct2(ai.offerPct)}</b> opening offer instead of {ai.tier.offer}%</>);
               if (!diffs.length) return null;
               return (
                 <div className="flex items-start gap-1.5 border-t border-amber-200 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-900">
                   <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
-                  <span>The math is using {diffs.map((d, i) => <span key={i}>{i ? (i === diffs.length - 1 ? " and " : ", ") : ""}{d}</span>)}. Clear {diffs.length > 1 ? "those boxes" : "that box"} to go back to the green row.</span>
+                  <span>The math is using {diffs.map((d, i) => <span key={i}>{i ? (i === diffs.length - 1 ? " and " : ", ") : ""}{d}</span>)}. {ai.fee !== ai.tier.fee && !ai.typedFee && diffs.length === 1 ? "The whole deal runs on one fee, picked by the ARV. Type a fee to set your own." : `Clear ${diffs.length > 1 ? "those boxes" : "that box"} to go back to the green row.`}</span>
                 </div>
               );
             })()}
@@ -5298,20 +5394,26 @@ const CRow = ({ label, a, b, muted }) => (
 );
 
 // ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
-  const [purchase, setPurchase] = useState("");
-  const [rehab, setRehab] = useState("");
-  const [taxIns, setTaxIns] = useState("");
-  const [hoa, setHoa] = useState("");
-  const [ltv, setLtv] = useState("75");
-  const [rate, setRate] = useState("7.5");
-  const [term, setTerm] = useState("30");
-  const [reservePct, setReservePct] = useState("10");
+function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
+  // Every input here is a deal value, so it matches every other screen and survives a tab switch:
+  // rehab is the deal's repair number, taxes/insurance and HOA are the call's, reserves are shared.
+  const sh = shared || {};
+  const rehab = sh.repairOverride ?? "", setRehab = sh.setRepairOverride || (() => {});
+  const taxIns = sh.taxIns ?? "", setTaxIns = sh.setTaxIns || (() => {});
+  const hoa = sh.hoaAmt ?? "", setHoa = sh.setHoaAmt || (() => {});
+  const ltv = sh.brLtv ?? "75", setLtv = sh.setBrLtv || (() => {});
+  const rate = sh.brRate ?? "7.5", setRate = sh.setBrRate || (() => {});
+  const term = sh.brTerm ?? "30", setTerm = sh.setBrTerm || (() => {});
+  const reservePct = sh.reservePct ?? "10", setReservePct = sh.setReservePct || (() => {});   // BRRRR's own 10%
 
-  const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
   const ask = num(askingPrice);                              // asking / contract price (set on the Cash / MAO tab above)
   const fee = num(wholesaleFee);                             // your assignment fee — shared Cash-tab value
   const askPlusFee = ask + fee;                              // what an end buyer pays when you wholesale it
+  // The quick-fill buttons keep following the price and fee after they are tapped. Typing a number stops that.
+  const mode = sh.brPurchaseMode || "";
+  const purchase = mode === "ask" ? (ask > 0 ? String(Math.round(ask)) : "") : mode === "askfee" ? (ask > 0 ? String(Math.round(askPlusFee)) : "") : (sh.brPurchase ?? "");
+  const setPurchase = (v) => { if (sh.setBrPurchaseMode) sh.setBrPurchaseMode(""); if (sh.setBrPurchase) sh.setBrPurchase(v); };
+  const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
   const fix = num(rehab) > 0 ? num(rehab) : repairs;
   const rnt = num(rentDefault);                              // shared rent (Generate or manual), already = override || estimate
   const allIn = buy + fix;
@@ -5364,12 +5466,12 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
         <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
           <MoneyInput value={purchase} onChange={setPurchase} placeholder="Purchase price (plus wholesale fee)" />
           <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <button type="button" onClick={() => setPurchase(String(Math.round(ask)))} disabled={ask <= 0}
+            <button type="button" onClick={() => sh.setBrPurchaseMode && sh.setBrPurchaseMode("ask")} disabled={ask <= 0}
               className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
               title={ask > 0 ? "Fill with your asking / contract price — keeping it yourself, no fee to add" : "Enter a Seller asking price on the Cash / MAO tab above first"}>
               Use asking{ask > 0 ? ` · ${usd(ask)}` : ""}
             </button>
-            <button type="button" onClick={() => setPurchase(String(Math.round(askPlusFee)))} disabled={ask <= 0}
+            <button type="button" onClick={() => sh.setBrPurchaseMode && sh.setBrPurchaseMode("askfee")} disabled={ask <= 0}
               className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
               title={ask > 0 ? `Wholesaling it — asking + your ${usd(fee)} wholesale fee, what the buyer pays` : "Enter a Seller asking price on the Cash / MAO tab above first"}>
               Asking + fee{ask > 0 ? ` · ${usd(askPlusFee)}` : ""}
@@ -5377,9 +5479,9 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
           </div>
           {ask <= 0
             ? <div className="mt-1 text-[10px] italic text-slate-600">Set a <b className="text-slate-700">Seller asking price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
-            : <div className="mt-1 text-[10px] text-slate-600">Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-700">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-700">Keeping it</b> → just the price.</div>}
+            : <div className="mt-1 text-[10px] text-slate-600">{mode ? <>Following the {mode === "ask" ? "asking price" : "asking price plus your fee"}, so it updates when either changes. Type a number to stop following.</> : <>Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-700">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-700">Keeping it</b> → just the price.</>}</div>}
         </Field>
-        <Field label="Rehab budget" info="Defaults to the repair estimate up top."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
+        <Field label="Rehab budget" info="The deal's repair number. Typing here changes it everywhere: the Deal Desk, the Offer Call and every strategy."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Pulled automatically with Auto-comp — type here to use your own number instead.">
           <MoneyInput value={rentOverride} onChange={setRentOverride} filled={num(rentDefault) > 0}
             placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : (rentLoading ? "Pulling…" : "Type the rent")} />
@@ -5396,7 +5498,7 @@ function BrrrrPanel({ deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDef
             </div>
           )}
         </Field>
-        <Field label="HOA" hint="monthly, if any" info="Monthly HOA / association dues, if the property has them. Also part of PITIA."><MoneyInput value={hoa} onChange={setHoa} /></Field>
+        <Field label="HOA" hint="monthly, if any" info="Monthly HOA / association dues, if the property has them. Also part of PITIA. Same number as the HOA dues in the Offer Call."><MoneyInput value={hoa} onChange={setHoa} /></Field>
         <Field label="Reserves" hint="% of rent" info="Vacancy + maintenance + management set-aside. NOT part of the lender's DSCR, but real money — used here for your true cash flow."><PlainInput value={reservePct} onChange={setReservePct} suffix="%" /></Field>
       </div>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
@@ -5636,6 +5738,10 @@ function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, de
   const currentYear = new Date().getFullYear();
   const [rateStr, setRateStr] = useState(rate.toFixed(2));            // editable buffer for the rate input
   const [yearStr, setYearStr] = useState(String(currentYear + term)); // editable buffer for the maturity-year input
+  // Keep the typed boxes in step when the rate or term changes somewhere else (the Offer Call, the
+  // other tab, the slider). A half-typed value that already means the same number is left alone.
+  useEffect(() => { const n = parseFloat(rateStr); if (!(Math.abs((isNaN(n) ? -1 : n) - rate) < 1e-9)) setRateStr(rate.toFixed(2)); }, [rate]);
+  useEffect(() => { const y = parseInt(yearStr, 10); if (y !== currentYear + term) setYearStr(String(currentYear + term)); }, [term]);
   const P = loanAmount;
   const effOrig = Math.max(term, origTerm);                 // original term can't be less than years left
   const seasoned = Math.max(0, effOrig - term);             // years the seller has already paid down
@@ -5842,12 +5948,11 @@ function SubToTab(props) {
   const equity = arv - (bal + cashSeller + arrears + repairs);
   const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  // shared rate-savings inputs (feed both Rate Savings + the creative-wholesale value)
-  const [rsRate, setRsRate] = useState(callRate > 0 ? callRate : 4);
-  // The seller's real rate from the call replaces the 4% placeholder whenever it is known.
-  useEffect(() => { if (callRate > 0) setRsRate(callRate); }, [callRate]);
-  const [rsTerm, setRsTerm] = useState(30);
-  const [rsMkt, setRsMkt] = useState(7.5);
+  // Rate-savings inputs are deal values: the loan's rate is the call's rate (4% stands in until it is
+  // known), and the years left and market rate are shared with Hybrid.
+  const rsRate = callRate > 0 ? callRate : 4, setRsRate = props.setCallRate;
+  const rsTerm = num(props.loanYrsLeft) || 30, setRsTerm = (n) => props.setLoanYrsLeft(String(n));
+  const rsMkt = num(props.mktRate) || 7.5, setRsMkt = (n) => props.setMktRate(String(n));
   const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
   // Without the payment there is no cash flow to show. A blank PITI used to count as $0, which
   // printed rent minus reserves as a big green cash flow number.
@@ -5865,11 +5970,11 @@ function SubToTab(props) {
           <SectionTitle>Subject-to inputs</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Existing loan balance"><MoneyInput value={stBal} onChange={setStBal} /></Field>
-            <Field label="PITI (monthly)" hint="inherited payment"><MoneyInput value={stPiti} onChange={setStPiti} /></Field>
+            <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
             <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
             <Field label="Cash to seller" hint="equity"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /></Field>
             <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
-            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "auto-filled — type to override" : ""} info="Carried over from the rent you generate in the Cash / MAO tab's BRRRR panel. Type here to use a different rent for this strategy only."><MoneyInput value={stRent} onChange={setStRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
+            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={stRent} onChange={setStRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
           </div>
         </div>
@@ -5934,10 +6039,10 @@ function HybridTab(props) {
   const equity = arv - price - repairs;
   const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  const [rsRate, setRsRate] = useState(callRate > 0 ? callRate : 4);
-  useEffect(() => { if (callRate > 0) setRsRate(callRate); }, [callRate]);   // seller's real rate beats the 4% placeholder
-  const [rsTerm, setRsTerm] = useState(30);
-  const [rsMkt, setRsMkt] = useState(7.5);
+  // Same deal values as the Sub-To tab: the call's rate, the years left on the loan and the market rate.
+  const rsRate = callRate > 0 ? callRate : 4, setRsRate = props.setCallRate;
+  const rsTerm = num(props.loanYrsLeft) || 30, setRsTerm = (n) => props.setLoanYrsLeft(String(n));
+  const rsMkt = num(props.mktRate) || 7.5, setRsMkt = (n) => props.setMktRate(String(n));
   const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
   const pitiMissing = bal > 0 && piti <= 0;   // a loan with no payment entered is unknown, not free
   const graded = price > 0 && rent > 0 && !pitiMissing;
@@ -5956,11 +6061,11 @@ function HybridTab(props) {
             <Field label="Purchase price"><MoneyInput value={hyPrice} onChange={setHyPrice} /></Field>
             <Field label="Down payment"><MoneyInput value={hyDown} onChange={setHyDown} /></Field>
             <Field label="Existing loan balance" hint="taken sub-to"><MoneyInput value={hyBal} onChange={setHyBal} /></Field>
-            <Field label="Sub-to PITI (monthly)"><MoneyInput value={hyPiti} onChange={setHyPiti} /></Field>
+            <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
             <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
             <Field label="Seller note term"><PlainInput value={hyTerm} onChange={setHyTerm} suffix="yrs" /></Field>
             <Field label="Closing costs"><MoneyInput value={hyClosing} onChange={setHyClosing} /></Field>
-            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "auto-filled — type to override" : ""} info="Carried over from the rent you generate in the Cash / MAO tab's BRRRR panel. Type here to use a different rent for this strategy only."><MoneyInput value={hyRent} onChange={setHyRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
+            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={hyRent} onChange={setHyRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={hyReservePct} onChange={setHyReservePct} suffix="%" /></Field>
           </div>
         </div>
@@ -6015,7 +6120,8 @@ function HybridTab(props) {
 // ---------- SELLER FINANCE ----------
 function SellerFinanceTab(props) {
   const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
-  const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns), rent = num(sfRent) || num(rentDefault);
+  // Taxes + insurance are the deal's number (the Offer Call and BRRRR show the same one). Blank uses the ARV estimate.
+  const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns) > 0 ? num(sfTaxIns) : num(props.taxInsEst), rent = num(sfRent) || num(rentDefault);
   const loan = Math.max(0, price - down);
   const pi = pmt(loan, num(sfRate), num(sfAmort));
   const totalMonthly = pi + taxIns;
@@ -6029,10 +6135,10 @@ function SellerFinanceTab(props) {
   const closeCash = down + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
   const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
   const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  // seller-finance terms ARE the loan terms — seed the shared rate inputs from them
-  const [rsRate, setRsRate] = useState(num(sfRate) || 4);
-  const [rsTerm, setRsTerm] = useState(num(sfAmort) || 30);
-  const [rsMkt, setRsMkt] = useState(7.5);
+  // Seller-finance terms ARE the loan terms, so Rate Savings edits the note's rate and amortization directly.
+  const rsRate = num(sfRate), setRsRate = (n) => setSfRate(String(Math.round(n * 1000) / 1000));
+  const rsTerm = num(sfAmort) || 30, setRsTerm = (n) => setSfAmort(String(n));
+  const rsMkt = num(props.mktRate) || 7.5, setRsMkt = (n) => props.setMktRate(String(n));
   const finValue = pvSavings(loan, rsRate, rsMkt, rsTerm);
   let status = "maybe", headline = "Enter price & rent to grade", detail = "";
   if (price > 0 && rent > 0) {
@@ -6051,8 +6157,8 @@ function SellerFinanceTab(props) {
             <Field label="Interest rate" hint="0% ok"><PlainInput value={sfRate} onChange={setSfRate} suffix="%" /></Field>
             <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
             <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
-            <Field label="Taxes + insurance" hint="monthly"><MoneyInput value={sfTaxIns} onChange={setSfTaxIns} /></Field>
-            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "auto-filled — type to override" : ""} info="Carried over from the rent you generate in the Cash / MAO tab's BRRRR panel. Type here to use a different rent for this strategy only."><MoneyInput value={sfRent} onChange={setSfRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
+            <Field label="Taxes + insurance" hint={num(sfTaxIns) > 0 ? "monthly · same on every tab" : "monthly · estimated from the ARV"} info="The deal's taxes and insurance, the same number the Offer Call and the BRRRR panel use. Blank uses an estimate of about 1.5% of the ARV a year."><MoneyInput value={sfTaxIns} onChange={setSfTaxIns} placeholder={num(props.taxInsEst) > 0 ? String(Math.round(num(props.taxInsEst))) : ""} /></Field>
+            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={sfRent} onChange={setSfRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={sfReservePct} onChange={setSfReservePct} suffix="%" /></Field>
           </div>
         </div>
@@ -6109,13 +6215,16 @@ function NovationTab(props) {
   // YLHB's novation sheet, step by step (per B, Sep 29 2026):
   //   As-Is value − commissions (% of value) − closing costs ($) − desired profit − estimated repairs = MAO
   // Replaces the old As-Is × 95% × (100 − 8)% − profit.
-  const asIs = num(novAsIs);
+  // Blank uses the As-Is formula's average of the online values on the Cash tab, so the two never disagree
+  // unless someone types a different value here on purpose.
+  const asIsTyped = num(novAsIs) > 0;
+  const asIs = asIsTyped ? num(novAsIs) : num(props.asIsAvg);
   const commPct = num(novCommission);
   const commission = asIs * (commPct / 100);
   const closing = num(novClosing);
   const profit = num(novProfit);
-  const repairTyped = String(novRepairs ?? "").trim() !== "";
-  const rep = repairTyped ? num(novRepairs) : num(repairs);   // blank follows the deal's repair number
+  const repairTyped = String(novRepairs ?? "").trim() !== "";   // novRepairs IS the deal's typed repair number
+  const rep = num(repairs);                                       // the same repair number every screen uses
   const afterComm = asIs - commission;
   const afterClosing = afterComm - closing;
   const afterProfit = afterClosing - profit;
@@ -6144,11 +6253,11 @@ function NovationTab(props) {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <SectionTitle>Novation inputs</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2"><Field label="As-Is value"><MoneyInput value={novAsIs} onChange={setNovAsIs} placeholder="270000" /></Field></div>
+            <div className="sm:col-span-2"><Field label="As-Is value" hint={asIsTyped ? "typed here" : num(props.asIsAvg) > 0 ? "from the As-Is formula on the Cash tab" : "or fill the As-Is formula on the Cash tab"}><MoneyInput value={novAsIs} onChange={setNovAsIs} placeholder={num(props.asIsAvg) > 0 ? String(Math.round(num(props.asIsAvg))) : "270000"} /></Field></div>
             <Field label="Commissions" hint="% of the value"><PlainInput value={novCommission} onChange={setNovCommission} suffix="%" /></Field>
             <Field label="Closing costs"><MoneyInput value={novClosing} onChange={setNovClosing} /></Field>
             <Field label="Desired profit"><MoneyInput value={novProfit} onChange={setNovProfit} /></Field>
-            <Field label="Estimated repairs" hint={repairTyped ? "typed here" : "from the deal · type to override"}>
+            <Field label="Estimated repairs" hint={repairTyped ? "the deal's number · same everywhere" : "from the deal · typing changes it everywhere"}>
               <MoneyInput value={novRepairs} onChange={setNovRepairs} placeholder={num(repairs) > 0 ? String(Math.round(num(repairs))) : "0"} />
             </Field>
           </div>
