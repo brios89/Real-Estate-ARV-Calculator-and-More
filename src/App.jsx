@@ -2143,6 +2143,19 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Before you dial (SOP Step 1)</div>
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
+          {deal.online && (
+            <WField label="Online as-is values (while you review)">
+              <div className="grid grid-cols-3 gap-2">
+                {[["aiZillow", "Zillow"], ["aiRealtor", "Realtor.com"], ["aiRedfin", "Redfin"]].map(([k, lbl]) => (
+                  <div key={k}>
+                    <div className="mb-0.5 text-[10px] text-slate-600">{lbl}</div>
+                    <WText money value={deal.online.vals[k]} onChange={(v) => deal.online.set[k](v)} placeholder="0" />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-1 text-[10.5px] leading-snug text-slate-600">These feed the As-Is formula on the Cash tab and the Novation tab, so both are ready before you dial. Leave any site blank if it has no estimate.</div>
+            </WField>
+          )}
           <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
           {(deal.ownerType === "Organization" || deal.heldFor) && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-600">
@@ -2420,6 +2433,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             </div>
             <div className="grid grid-cols-2 gap-2">
               <WField label="Rate (if they know) — use decimals, like 3.875"><WText value={cs.rate} onChange={(v) => upd("rate", v)} placeholder="3.875" /></WField>
+              <WField label="Years left on the loan (if they know)"><WText value={deal.loanYrs && deal.loanYrs.value !== "30" ? deal.loanYrs.value : ""} onChange={(v) => deal.loanYrs && deal.loanYrs.set(v)} placeholder="22" /></WField>
             </div>
             {isLowRate(cs.rate) && (
               <div className="mt-2 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3">
@@ -3828,7 +3842,7 @@ export default function App() {
                 save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, repairsDefault, repairsNeedSqft, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, repairsDefault, repairsNeedSqft, online: { vals: { aiZillow, aiRealtor, aiRedfin }, set: { aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin } }, loanYrs: { value: loanYrsLeft, set: (v) => setLoanYrsLeft(String(v).trim() === "" ? "30" : v) }, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
@@ -4296,6 +4310,12 @@ export default function App() {
             control bar rather than five quiet chips: a labeled container, a green active tab, and
             an underline so the selected strategy connects visually to the panel below it. */}
         <div id="deal-tabs" className="mt-6 scroll-mt-3">
+          <div className="mb-3 flex items-start gap-2 rounded-xl border-2 border-sky-300 bg-sky-50 px-3.5 py-2.5">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
+            <div className="text-[12px] leading-snug text-sky-950">
+              <b>Everything below this line is what the end buyer can expect</b> from each exit: their price, cash in, cash flow and returns. It fills in on its own from the Offer Call and Auto-comp, so you do not need to type it here. If a card shows a dash or asks for a number, go back to the call and get that answer from the seller.
+            </div>
+          </div>
           <div className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Pick your exit strategy</div>
           <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-100/70 p-1.5">
             {tabs.map((t) => {
@@ -5491,7 +5511,7 @@ function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs,
   else { dTone = "bad"; dNote = "Won't cover the payment — most lenders pass below 0.75."; }
 
   let brrrrLine = "Fill in your buy price and refi terms to see how much capital comes back out.";
-  if (arv > 0 && allIn > 0) {
+  if (arv > 0 && buy > 0) {
     if (cashLeftIn <= 0) brrrrLine = `Full BRRRR — the ${usd(refiLoan)} refi pulls out everything you put in, plus ${usd(-cashLeftIn)} above your basis. Infinite return: all your capital recycles into the next deal.`;
     else if (cashLeftIn <= 15000) brrrrLine = `Near-full BRRRR — you'd leave just ${usd(cashLeftIn)} in the deal after the ${usd(refiLoan)} refi. Most of your capital comes back out.`;
     else brrrrLine = `Capital-heavy — ${usd(cashLeftIn)} stays trapped in the deal after refi. Push the buy price down or the rehab leaner to recover more.`;
@@ -5583,6 +5603,44 @@ function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs,
       </div>
       <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">{brrrrLine}</div>
       <div className="mt-2 text-[10px] text-slate-600">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
+
+      {/* Same idea as the creative tabs' "If you wholesaled this" card: what a BRRRR buyer gets if you assign
+          it to them at the seller's price plus your fee. Runs on its own from the Offer Call numbers. */}
+      {(() => {
+        const wbBuy = ask > 0 ? ask + fee : 0;                     // what the buyer pays you: their price + your fee
+        const wbAllIn = wbBuy + fix;
+        const wbLeft = wbAllIn - refiLoan;                         // their cash still in after the refi
+        const wbEquity = arv - wbAllIn;
+        const wbCoc = wbLeft > 0 ? (annualCF / wbLeft) * 100 : null;
+        const maxFeeFull = refiLoan - (ask + fix);                 // biggest fee that still lets them pull every dollar out
+        const ready = arv > 0 && ask > 0;
+        let tone = "default", note = "Set the ARV up top and get their number in the Offer Call. This fills in on its own from there.";
+        if (ready) {
+          if (wbLeft <= 0) { tone = "good"; note = `Full BRRRR for your buyer. At ${usd(wbBuy)} (their price plus your ${usd(fee)} fee) and ${usd(fix)} of rehab, the ${usd(refiLoan)} refi gives them back every dollar${wbLeft < 0 ? ` plus ${usd(-wbLeft)}` : ""}.`; }
+          else if (wbLeft <= 15000) { tone = "default"; note = `Near-full BRRRR for your buyer. They leave ${usd(wbLeft)} in after the refi and step into ${usd(Math.max(0, wbEquity))} of equity.`; }
+          else { tone = "warn"; note = `Capital-heavy for a BRRRR buyer. ${usd(wbLeft)} stays in after the refi. Most BRRRR buyers want close to all of it back, so this sells better as a flip or at a lower price.`; }
+        }
+        const box = tone === "good" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-700";
+        return (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="mb-1 flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-slate-600" />
+              <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">If you wholesaled this to a BRRRR buyer</h3>
+            </div>
+            <p className="mb-3 text-[11px] text-slate-600">Assign it to an investor who will rehab, rent and refinance it. They pay the seller's price plus your fee. This is what they can expect, using the rent, rehab and refi terms above.</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat label="Buyer pays" value={ready ? usd(wbBuy) : "—"} sub={`their price + your ${usd(fee)} fee`} />
+              <Stat label="Buyer's cash left in" value={ready ? usd(Math.max(0, wbLeft)) : "—"} tone={ready ? (wbLeft <= 0 ? "good" : wbLeft <= 15000 ? "default" : "warn") : "default"} sub={ready && wbLeft <= 0 ? "all capital back out" : "after the refi"} />
+              <Stat label="Buyer's equity" value={ready ? usd(wbEquity) : "—"} tone={ready ? (wbEquity > 0 ? "good" : "bad") : "default"} sub="ARV − price − fee − rehab" />
+              <Stat label="Buyer cash-on-cash" value={!ready || !(pitia > 0 && rnt > 0) ? "—" : wbCoc === null ? "∞ (all cash out)" : pct(wbCoc)} tone={ready && (wbCoc === null || wbCoc > 8) ? "good" : "default"} sub="annual cash flow ÷ cash left in" />
+            </div>
+            {ready && <div className={`mt-3 rounded-lg border px-3 py-2 text-[11.5px] leading-snug ${box}`}>{note}</div>}
+            {ready && maxFeeFull > 0 && (
+              <div className="mt-1.5 text-[10.5px] text-slate-700">The most you can charge and still give them a full BRRRR (every dollar back at the refi) is <b>{usd(maxFeeFull)}</b>.</div>
+            )}
+          </div>
+        );
+      })()}
 
       {deckCommon && flipDeck && flipDeck.assumptions && (
         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
