@@ -1139,8 +1139,8 @@ const buildCallNarrative = (cs, deal, strat) => {
   if (cs.loan === "yes" && cs.stmt) s2.push(`Mortgage statement: ${STMT_LABEL[cs.stmt].toLowerCase()}.`);
   if (cs.signed === "yes") {
     const acc = [cs.accessHow ? ACCESS_LABEL[cs.accessHow] : null, cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean);
-    s2.push(`Agreement signed. Access: ${acc.length ? acc.join(". ") : "not captured yet"}.`);
-  } else if (cs.signed === "no") s2.push("Agreement not signed yet.");
+    s2.push(`Agreement approved. Access: ${acc.length ? acc.join(". ") : "not captured yet"}.`);
+  } else if (cs.signed === "no") s2.push("Agreement not approved yet.");
   if (cs.occupancy === "tenant" && num(cs.tenantRent) > 0) s2.push(`Tenant in place paying ${usd(num(cs.tenantRent))}/mo${String(cs.leaseEnds || "").trim() ? `, lease ends ${String(cs.leaseEnds).trim()}` : ""}.`);
   if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.conditionAuto === "yes" ? " (going by the repair number)" : ""}${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
   else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
@@ -1284,7 +1284,7 @@ const buildCallReport = (cs, deal, strat) => {
         const keys = COND_ITEMS.filter(([k]) => items[k] !== undefined);
         if (!keys.length) return row("Walkthrough checklist", "&mdash;");
         return keys.map(([k, label]) => row(label, items[k] ? esc(items[k]) : "noted, no detail")).join("");
-      })()}${cs.signed ? row("Agreement", cs.signed === "yes" ? "Signed" : "<span style=\"color:#b45309\">Not signed yet</span>") : ""}${cs.signed === "yes" ? row("Access", cs.accessHow ? esc([ACCESS_LABEL[cs.accessHow], cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean).join(" · ")) : "<span style=\"color:#b45309\">No access instructions yet</span>") : ""}${cs.loan === "yes" ? row("Mortgage statement", cs.stmt ? (cs.stmt === "received" ? esc(STMT_LABEL[cs.stmt]) : `<span style="color:#b45309">${esc(STMT_LABEL[cs.stmt])}</span>`) : "<span style=\"color:#b45309\">Not asked yet</span>") : ""}${row("Occupancy", v(cs.occupancy))}${cs.occupancy === "tenant" && num(cs.tenantRent) > 0 ? row("Tenant pays now", `${esc(usd(num(cs.tenantRent)))}/mo${String(cs.leaseEnds || "").trim() ? ` &middot; lease ends ${esc(String(cs.leaseEnds).trim())}` : ""}`) : ""}
+      })()}${cs.signed ? row("Agreement", cs.signed === "yes" ? "Approved" : "<span style=\"color:#b45309\">Not approved yet</span>") : ""}${cs.signed === "yes" ? row("Access", cs.accessHow ? esc([ACCESS_LABEL[cs.accessHow], cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean).join(" · ")) : "<span style=\"color:#b45309\">No access instructions yet</span>") : ""}${cs.loan === "yes" ? row("Mortgage statement", cs.stmt ? (cs.stmt === "received" ? esc(STMT_LABEL[cs.stmt]) : `<span style="color:#b45309">${esc(STMT_LABEL[cs.stmt])}</span>`) : "<span style=\"color:#b45309\">Not asked yet</span>") : ""}${row("Occupancy", v(cs.occupancy))}${cs.occupancy === "tenant" && num(cs.tenantRent) > 0 ? row("Tenant pays now", `${esc(usd(num(cs.tenantRent)))}/mo${String(cs.leaseEnds || "").trim() ? ` &middot; lease ends ${esc(String(cs.leaseEnds).trim())}` : ""}`) : ""}
       ${isLowRate(cs.rate) ? row("Escalation", `<b style="color:#047857">${esc(String(rateNum(cs.rate)))}% loan &mdash; send to the head of acquisitions if not locked up or if creative was declined</b>`) : ""}
       ${row("HOA", cs.hoa === "yes" ? `Yes${num(cs.hoaAmt) > 0 ? ` &mdash; ${esc(usd(num(cs.hoaAmt)))}/mo` : ""}` : v(cs.hoa))}
       ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
@@ -1758,7 +1758,7 @@ const MortgageStatementStep = ({ cs, upd, compact = false }) => (
     </div>
     {cs.stmt === "declined" && (
       <div className="mt-1.5 text-[11px] leading-snug text-amber-800">
-        Say: “No problem. We can't finalize the numbers without it, so whenever you're comfortable, I'll be right here.” Note it, and flag it to the head of acquisitions before any contract goes out.
+        Say: “No problem. We can't finalize the numbers without it, so whenever you're comfortable, I'll be right here.” Note it, and flag it to the head of acquisitions before any agreement goes out.
       </div>
     )}
   </div>
@@ -2124,7 +2124,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           {(deal.ownerType === "Organization" || deal.heldFor) && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-600">
               {deal.ownerType === "Organization" && (
-                <div className="font-semibold text-amber-700">Owned by an entity, not a person. Find out who actually has authority to sign before you pitch anything.</div>
+                <div className="font-semibold text-amber-700">Owned by an entity, not a person. Find out who actually has authority to approve the agreement before you pitch anything.</div>
               )}
               {deal.heldFor && <div className={deal.ownerType === "Organization" ? "mt-0.5" : ""}>Owned for <b className="text-slate-800">{deal.heldFor}</b>.</div>}
             </div>
@@ -2162,7 +2162,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <Line>“Hey, is this {nm}?” … “Hey {nm}, this is ____ with Your Local Home Buyer. We spoke {cs.lastTalked.trim() ? `on ${cs.lastTalked.trim()}` : "a little while back"} about your property on ____. I wanted to follow up and see where things are with it. Did I catch you at an okay time?”</Line>
           <Hint>Ask for permission first. They did not plan this call, so a yes to “okay time” earns you the next five minutes. If it is a bad time, do not push.</Hint>
           <Line>Bad time: “No problem at all. When is a better time for me to give you a quick call back?”</Line>
-          <Line>They do not remember: “No worries. You had reached out about possibly selling the house on ____. Are you still thinking about selling, or has anything changed?”</Line>
+          <Line>They do not remember: “No worries. You had reached out about getting an offer on the house on ____. Are you still open to an offer, or has anything changed?”</Line>
           {cs.lastNotes.trim() && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-snug text-slate-700">
               <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Where it left off</div>
@@ -2175,7 +2175,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
 
         {stage === 1 && cs.callType !== "followup" && (<div>
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening</div>
-          <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and {cs.bookedBy.trim() ? `my partner ${cs.bookedBy.trim()}` : "our Lead Gen Department"} scheduled a call for us today because you were looking to sell your property on ____. Is that right?”</Line>
+          <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and {cs.bookedBy.trim() ? `my partner ${cs.bookedBy.trim()}` : "our Lead Gen Department"} scheduled a call for us today because you were looking for an offer on your property on ____. Is that right?”</Line>
           <Line>Or simply: “Hi {nm}, my name is ____ and {cs.bookedBy.trim() ? `I'm partners with ${cs.bookedBy.trim()}` : "I'm following up from our Lead Gen Department"}. How are you doing today?”</Line>
           <Hint>Acknowledge their surroundings and mirror their energy. Slow it down — comfort first, authority second, numbers later.</Hint>
         </div>)}
@@ -2187,9 +2187,9 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             {cs.motivNotes.trim() && <div className="mt-1 rounded-md bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-700"><b>Last time:</b> {cs.motivNotes.trim()}</div>}
             <Hint>Their reason may have gotten stronger or gone away. Either way, it changes the offer, so update the motivator and the notes below to match today, not last time.</Hint>
           </>) : <Line>“Catch me up to speed — what's going on with the house?”</Line>}
-          <Line>“What has you thinking about selling?”</Line>
+          <Line>“What has you thinking about getting an offer?”</Line>
           <Line>“How were you hoping we could help?”</Line>
-          <Hint>Don't interrogate — keep it natural. Probe with “What's that been like?” · “How long has that been going on?” · “What happens next once you sell?”</Hint>
+          <Hint>Don't interrogate — keep it natural. Probe with “What's that been like?” · “How long has that been going on?” · “What happens next once you take an offer?”</Hint>
           <WField label="Main motivator">
             <WChips value={cs.motivation} onChange={(v) => upd("motivation", v)} opts={[["distress", "Property distress"], ["hardship", "Financial hardship"], ["urgency", "Urgency"]]} />
           </WField>
@@ -2563,7 +2563,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           const active = showList[0] || null;
           const multi = showList.length > 1;
           const secondFor = (id) => ({
-            nov: "“The short version is we prepare and sell it on your behalf, so you end up closer to full value, and we get paid out of what we add rather than out of your pocket.”",
+            nov: "“The short version is we prepare it and put it in front of retail buyers on your behalf, so the offer you end up with is closer to full value, and we get paid out of what we add rather than out of your pocket.”",
             sf: "“The short version is you get the number you want, and instead of one lump sum today, it comes to you over time on terms we agree on together.”",
             hybrid: "“The short version is you get the number you want. Part of it comes at closing, and the rest comes to you over time instead of all at once.”",
             subto: "“The short version is you get the number you want, and instead of waiting on a bank, we take over what is already in place and handle it from here.”",
@@ -2681,7 +2681,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               <details className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
                 <summary className="cursor-pointer text-[11px] font-semibold text-amber-800">Careful with the word partnership</summary>
                 <div className="mt-1.5 text-[11px] leading-snug text-amber-800">
-                  It is the name of our program, not a description of what the seller becomes. No ownership stake, no share of the profit, no say in what we do with the house. If they ask “so am I a partner in this?”, say: “It is just what we call the program. You are selling us the house, and the agreement spells out exactly what you get and when.”
+                  It is the name of our program, not a description of what the seller becomes. No ownership stake, no share of the profit, no say in what we do with the house. If they ask “so am I a partner in this?”, say: “It is just what we call the program. You are accepting our offer on the house, and the agreement spells out exactly what you get and when.”
                 </div>
               </details>
             )}
@@ -2707,10 +2707,10 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Why leave the loan in my name?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“What your lender cares about is that the payment gets made on time. We take that over and it gets paid. What changes for you is that you are no longer responsible for the house, the repairs, the tenants, or that payment leaving your account.”</div></details>
                 <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“What if you stop paying?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“That is exactly why we put protections in writing. This closes at a title company, the payments are documented, and you get proof of every one.” Do not improvise promises. Anything beyond the agreement goes to the head of acquisitions.</div></details>
                 <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Can the bank call the loan?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">Answer honestly: most mortgages have a due on sale clause, so yes, a lender has that right. As long as the payment is current it is uncommon, and if it happened we would refinance or sell to pay it off. Never tell a seller it cannot happen.</div></details>
-                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“So do I still own part of it?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“No. Partnership is just what we call the program. You are selling us the house, and the agreement says exactly what you get and when.” Do not soften this one.</div></details>
+                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“So do I still own part of it?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“No. Partnership is just what we call the program. You are accepting our offer on the house, and the agreement says exactly what you get and when.” Do not soften this one.</div></details>
 
                 <div className="mt-2.5 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
-                  <b>Never on a call:</b> guarantees of any kind, promising the loan will not be called, legal or tax advice, terms outside an approved contract, or letting “partnership” imply ownership.
+                  <b>Never on a call:</b> guarantees of any kind, promising the loan will not be called, legal or tax advice, terms outside an approved agreement, or letting “partnership” imply ownership.
                 </div>
               </details>
             )}
@@ -2726,7 +2726,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                 <div>
                   <div className="text-[12px] font-bold text-emerald-900">{rateNum(cs.rate)}% loan on this one.</div>
                   <div className="mt-0.5 text-[11px] leading-snug text-emerald-800">
-                    If you did not get it signed, or the seller turned down creative financing, this goes to the head of acquisitions today. Send the report and say what they pushed back on. It does not get marked dead on this call.
+                    If they did not approve the agreement, or the seller turned down creative financing, this goes to the head of acquisitions today. Send the report and say what they pushed back on. It does not get marked dead on this call.
                   </div>
                 </div>
               </div>
@@ -2746,19 +2746,21 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           })()}
           <Line>Commitment close: “If we can make the numbers work, are you ready to move forward today?”</Line>
           <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
-            <b>Never send agreements without walking through them live on the phone.</b> Verify seller info → send the agreement → review it line-by-line together → confirm signatures while you're still on the call.
+            <b>Never send agreements without walking through them live on the phone.</b> Verify seller info → send the agreement → review it line-by-line together → have them approve it while you're still on the call.
           </div>
-          <Line>Stress test (after signing): “When someone asks you why you decided to sell the house to us, what are you going to tell them?” — you want THEIR reason, not your pitch back. Coach if needed: “Would you say it helps you get closer to ___? It saves you time, energy, and money?”</Line>
-          <WField label="Is the agreement signed?">
-            <WChips value={cs.signed} onChange={(v) => upd("signed", v)} opts={[["yes", "Signed"], ["no", "Not yet"]]} />
+          <Line>“The next step is to go over the agreement together, so you can approve it while we're on the phone.”</Line>
+          <Hint>Say “approve the agreement,” never “sign the contract.” Signing a contract feels final and legal. Approving an agreement feels like a yes they are in control of.</Hint>
+          <Line>Stress test (after they approve it): “When someone asks you why you decided to take our offer, what are you going to tell them?” — you want THEIR reason, not your pitch back. Coach if needed: “Would you say it helps you get closer to ___? It saves you time, energy, and money?”</Line>
+          <WField label="Did they approve the agreement?">
+            <WChips value={cs.signed} onChange={(v) => upd("signed", v)} opts={[["yes", "Approved"], ["no", "Not yet"]]} />
           </WField>
           {cs.signed === "yes" && (<>
             <Line>Next steps: “Within the next few days we'll likely need access for photos, walkthroughs, or contractors.”</Line>
             <AccessStep cs={cs} upd={upd} />
           </>)}
-          {cs.signed === "no" && <Hint>Not signed yet. Access comes after the signature, so set the follow-up and log what is holding it up.</Hint>}
+          {cs.signed === "no" && <Hint>Not approved yet. Access comes after they approve the agreement, so set the follow-up and log what is holding it up.</Hint>}
           <Line>End in rapport: “It was great getting to know you.” · “Congratulations on getting this process started.” · “So what's the next chapter for you after this?”</Line>
-          <Hint>Compliance (SOP): no guarantees, no legal advice, approved contracts only. Then: submit to the TC same day, title open within 1 business day, notify Dispositions.</Hint>
+          <Hint>Compliance (SOP): no guarantees, no legal advice, approved agreements only. Then: submit to the TC same day, title open within 1 business day, notify Dispositions.</Hint>
           <button type="button" onClick={downloadReport}
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
             <FileDown className="h-4 w-4" /> Download call report
@@ -4343,7 +4345,7 @@ function InstructionsButton() {
     ["Tighten the comps", "Auto-comp keeps the 8 most-similar sold comps (last 12 months, ±250 sq ft). Comps that are off on beds, baths, age, size, or distance get an amber flag — delete the weak ones and the ARV recalculates live."],
     ["Pick your structure", "Use the tabs to run the deal as Cash/MAO, Sub-To, Hybrid, Seller Finance, Novation, or Rental. Each gives you a verdict and the key numbers."],
     ["Read the verdict", "Green means it pencils, amber means it's tight, red means walk. Hover the ⓘ icons for what any field means."],
-    ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this contract' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
+    ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this agreement' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
     ["See the rate's worth", "The Rate Savings and amortization sliders show what a below-market loan saves over time and how the payment shifts from interest to principal."],
     ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Market rent is pulled automatically with Auto-comp, or type your own."],
     ["Send it to buyers", "Hit 'Download buyer deck' on any creative tab to generate a branded YLHB PowerPoint for your buyers list. Fill the required fields and it builds the slides."],
@@ -5058,7 +5060,7 @@ const ytSearch = (q) => `https://www.youtube.com/results?search_query=${encodeUR
 const EDU = {
   cash: {
     title: "Cash / MAO (wholesaling)",
-    what: "A straight cash play. You lock the property under contract at a low enough price that a cash buyer can fix it and flip it — and you pocket the difference as an assignment fee, or buy it yourself.",
+    what: "A straight cash play. You lock the property up under an agreement at a low enough price that a cash buyer can fix it and flip it — and you pocket the difference as an assignment fee, or buy it yourself.",
     how: "Start from the ARV (what it's worth fixed up), take 75–80% of it (the band), then subtract repairs and your fee. That's your Max Allowable Offer — the most you can pay and still leave meat on the bone for the next buyer.",
     analogy: "Like buying wholesale to resell at retail — your profit is baked in at the buy.",
     videos: [{ label: "Wholesaling basics", q: "pace morby wholesaling for beginners" }, { label: "How to calculate MAO", q: "pace morby maximum allowable offer ARV" }],
@@ -5162,7 +5164,7 @@ function CashTab(props) {
             <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck. Leave it blank to use the fee scale for the ARV's price range."><MoneyInput value={props.feeField.typed} onChange={props.feeField.set} placeholder={props.feeField.auto > 0 ? String(props.feeField.auto) : "set by the ARV"} filled /></Field>
             <FeeScaleNote f={props.feeField} />
           </div>
-          <Field label="Seller asking price" hint="same as Their number in the Offer Call" info="This is the same number as Their number in the Offer Call. Change it in either place and both update. It grades the deal while you negotiate and prints on the buyer deck as your contract price (plus your wholesale fee), so once you are under contract, update it to the locked number."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
+          <Field label="Seller asking price" hint="same as Their number in the Offer Call" info="This is the same number as Their number in the Offer Call. Change it in either place and both update. It grades the deal while you negotiate and prints on the buyer deck as your agreement price (plus your wholesale fee), so once they approve the agreement, update it to the locked number."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
         </div>
       </div>
 
@@ -5463,12 +5465,12 @@ function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs,
       <p className="mb-3 text-[11px] text-slate-600">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the contract price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
+        <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the agreement price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
           <MoneyInput value={purchase} onChange={setPurchase} placeholder="Purchase price (plus wholesale fee)" />
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <button type="button" onClick={() => sh.setBrPurchaseMode && sh.setBrPurchaseMode("ask")} disabled={ask <= 0}
               className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
-              title={ask > 0 ? "Fill with your asking / contract price — keeping it yourself, no fee to add" : "Enter a Seller asking price on the Cash / MAO tab above first"}>
+              title={ask > 0 ? "Fill with your asking / agreement price — keeping it yourself, no fee to add" : "Enter a Seller asking price on the Cash / MAO tab above first"}>
               Use asking{ask > 0 ? ` · ${usd(ask)}` : ""}
             </button>
             <button type="button" onClick={() => sh.setBrPurchaseMode && sh.setBrPurchaseMode("askfee")} disabled={ask <= 0}
@@ -5479,7 +5481,7 @@ function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs,
           </div>
           {ask <= 0
             ? <div className="mt-1 text-[10px] italic text-slate-600">Set a <b className="text-slate-700">Seller asking price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
-            : <div className="mt-1 text-[10px] text-slate-600">{mode ? <>Following the {mode === "ask" ? "asking price" : "asking price plus your fee"}, so it updates when either changes. Type a number to stop following.</> : <>Tap a button to fill from your asking / contract price, or type any amount. <b className="text-slate-700">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-700">Keeping it</b> → just the price.</>}</div>}
+            : <div className="mt-1 text-[10px] text-slate-600">{mode ? <>Following the {mode === "ask" ? "asking price" : "asking price plus your fee"}, so it updates when either changes. Type a number to stop following.</> : <>Tap a button to fill from your asking / agreement price, or type any amount. <b className="text-slate-700">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-700">Keeping it</b> → just the price.</>}</div>}
         </Field>
         <Field label="Rehab budget" info="The deal's repair number. Typing here changes it everywhere: the Deal Desk, the Offer Call and every strategy."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
         <Field label="Monthly rent" info="Market rent once it's fixed and leased. Pulled automatically with Auto-comp — type here to use your own number instead.">
@@ -5557,7 +5559,7 @@ function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs,
             {num(flipDeck.assumptions.holdingOverride) > 0
               ? <>Your number, overriding the calculation. Clear it to go back.</>
               : flipDeck.holdMonths > 0
-                ? <>{flipDeck.holdMonths.toFixed(1)} months at {usd(num(flipDeck.assumptions.carryPerMonth))}/mo. That is {(flipDeck.holdMonths - 3).toFixed(1)} months of work on {usd(repairs)} of repairs, plus 3 months to list, contract and close.</>
+                ? <>{flipDeck.holdMonths.toFixed(1)} months at {usd(num(flipDeck.assumptions.carryPerMonth))}/mo. That is {(flipDeck.holdMonths - 3).toFixed(1)} months of work on {usd(repairs)} of repairs, plus 3 months to list, go under agreement and close.</>
                 : <>Set a repair number above and this calculates itself.</>}
           </div>
           <div className="mt-2">
@@ -5662,7 +5664,7 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
   const buyerRoi = buyerTotalCashIn > 0 ? ((annualCF + buyerEquity) / buyerTotalCashIn) * 100 : null; // + equity stepped into
   const showBuyerReturns = haveDeal && buyerTotalCashIn > 0 && annualCF !== 0;
 
-  let tone = "default", note = "Lock in the deal numbers above, then enter the assignment fee you'd charge to hand this creative contract to another investor.";
+  let tone = "default", note = "Lock in the deal numbers above, then enter the assignment fee you'd charge to hand this creative agreement to another investor.";
   if (arv <= 0) { note = "Set the ARV up top to see what this creative deal could assign for."; }
   else if (!haveDeal) { note = "Fill in this deal's price/basis above to see the value you've created and what it could assign for."; }
   else if (totalValue <= 0) {
@@ -5686,14 +5688,14 @@ function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWh
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-1 flex items-center gap-2">
         <RefreshCw className="h-4 w-4 text-slate-600" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">If you wholesaled this creative contract</h3>
+        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">If you wholesaled this creative agreement</h3>
       </div>
       <p className="mb-3 text-[11px] text-slate-600">Assign this deal to another investor for a fee — they inherit the terms, you collect the spread. Value = equity + what the below-market loan is worth.</p>
       <div className="mb-3">
         <Field
           label="Your assignment fee"
           hint="shared across all tabs"
-          info="What you'd charge another investor to take over this creative contract. This is the SAME number as 'Your wholesale fee' on the Cash / MAO tab — set it on any tab and it updates everywhere. It comes out of the total value you created — equity PLUS the present value of the below-market rate."
+          info="What you'd charge another investor to take over this creative agreement. This is the SAME number as 'Your wholesale fee' on the Cash / MAO tab — set it on any tab and it updates everywhere. It comes out of the total value you created — equity PLUS the present value of the below-market rate."
         >
           <MoneyInput value={feeField ? feeField.typed : wholesaleFee} onChange={feeField ? feeField.set : setWholesaleFee} placeholder={feeField && feeField.auto > 0 ? String(feeField.auto) : "Type your fee"} filled />
         </Field>
