@@ -1119,6 +1119,91 @@ const WText = ({ value, onChange, placeholder, money }) => (
       className={`w-full rounded-md border border-slate-200 bg-white py-1.5 pr-2.5 font-mono text-xs text-slate-800 outline-none focus:border-emerald-400 ${money ? "pl-6" : "pl-2.5"}`} />
   </div>
 );
+// Before any agreement goes out on a creative offer, every term has to be settled with the seller (per B,
+// Oct 16 2026). One row per term: green when we have it, amber with the exact question when we do not.
+// The boxes edit the same numbers the strategy tabs use, so the call and the tab never disagree.
+// Rule: present seller finance as price, down payment, monthly payment and balloon. Never say "zero interest".
+const TermsLockIn = ({ id, cs, upd, t }) => {
+  if (!t || !["subto", "hybrid", "sf"].includes(id)) return null;
+  const has = (v) => String(v ?? "").trim() !== "";
+  const price = num(cs.ask);
+  const rows = [];
+  const row = (label, ok, value, ask, input) => rows.push({ label, ok, value, ask, input });
+  let summary = null;
+  // Years start at a 30-year default. That only counts once the seller has actually agreed to it.
+  const yrsOk = (v, key) => num(v) > 0 && (String(v).trim() !== "30" || cs[key] === "yes");
+  const yrsInput = (v, set, key) => (<>
+    <WText value={v} onChange={(x) => { set(x); if (cs[key]) upd(key, ""); }} placeholder="30" />
+    {String(v).trim() === "30" && cs[key] !== "yes" && (
+      <button type="button" onClick={() => upd(key, "yes")} className="mt-1 rounded-md border border-emerald-300 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-emerald-700 hover:bg-emerald-50">They agreed to 30 years</button>
+    )}
+  </>);
+  row("Price", price > 0, price > 0 ? usd(price) : "", "“What price would work for you if we paid part of it over time?”",
+    <WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="price" />);
+  if (id === "sf") {
+    const down = num(t.sf.down), yrs = num(t.sf.years), bal = num(t.sf.balloon);
+    const loan = Math.max(0, price - down);
+    const monthly = pmt(loan, num(t.sf.rate), yrs);
+    const balloonLeft = bal > 0 && yrs > 0 ? balanceAt(loan, num(t.sf.rate), yrs, bal) : 0;
+    row("Down payment (cash at closing)", has(t.sf.down), has(t.sf.down) ? usd(down) : "", "“How much would you need at closing to make this work?”",
+      <><WText money value={t.sf.down} onChange={t.sf.setDown} placeholder="cash at closing" /><DownCapNote amount={t.sf.down} /></>);
+    row("Years of payments", yrsOk(t.sf.years, "yrsOkSf"), yrs > 0 ? `${yrs} years` : "", "“How many years would you be comfortable receiving payments?”",
+      yrsInput(t.sf.years, t.sf.setYears, "yrsOkSf"));
+    row("Lump sum (balloon)", true, bal > 0 ? `the rest in year ${bal}` : "none", "“Would you want the rest paid off in one lump sum at some point, say in 5 or 7 years?”",
+      <WText value={t.sf.balloon} onChange={t.sf.setBalloon} placeholder="0 = none" />);
+    row("Monthly payment to them", price > 0 && has(t.sf.down) && yrsOk(t.sf.years, "yrsOkSf"), price > 0 && yrs > 0 ? `${usd(monthly)} a month` : "", "Fills in once the price, down payment and years are set.", null);
+    if (price > 0 && has(t.sf.down) && yrsOk(t.sf.years, "yrsOkSf")) summary = `“So here is what that looks like: ${usd(price)} for the house. ${usd(down)} at closing, then ${usd(monthly)} a month for ${bal > 0 ? `${bal} years, and the remaining ${usd(balloonLeft)} paid in full at that point` : `${yrs} years`}. Does that work for you?”`;
+  } else if (id === "hybrid") {
+    const down = num(t.hy.down), bal = num(cs.balance), yrs = num(t.hy.years);
+    const note = Math.max(0, price - bal - down);
+    const notePay = pmt(note, num(t.hy.rate), yrs);
+    row("Down payment (cash at closing)", has(t.hy.down), has(t.hy.down) ? usd(down) : "", "“How much would you need at closing to make this work?”",
+      <><WText money value={t.hy.down} onChange={t.hy.setDown} placeholder="cash at closing" /><DownCapNote amount={t.hy.down} /></>);
+    row("Loan we take over", bal > 0 && num(cs.payment) > 0, bal > 0 ? `${usd(bal)} balance${num(cs.payment) > 0 ? `, ${usd(num(cs.payment))} a month` : ""}` : "", "“Roughly what do you still owe, and what is the monthly payment?” (Property stage)", null);
+    row("Years they carry the rest", yrsOk(t.hy.years, "yrsOkHy"), yrs > 0 ? `${yrs} years` : "", "“How many years would you be comfortable receiving payments on the rest?”",
+      yrsInput(t.hy.years, t.hy.setYears, "yrsOkHy"));
+    row("Monthly payment to them", note > 0 && yrsOk(t.hy.years, "yrsOkHy") && has(t.hy.down), note > 0 && yrs > 0 ? `${usd(notePay)} a month on the ${usd(note)} they carry` : (price > 0 && bal > 0 && note <= 0 ? "nothing left for them to carry" : ""), "Fills in once the price, loan, down payment and years are set.", null);
+    if (price > 0 && bal > 0 && has(t.hy.down) && yrsOk(t.hy.years, "yrsOkHy")) summary = `“So here is what that looks like: ${usd(price)} for the house. ${usd(down)} at closing, we take over the ${num(cs.payment) > 0 ? usd(num(cs.payment)) + " " : ""}monthly payment on your loan, and ${note > 0 ? `you receive ${usd(notePay)} a month for ${yrs} years on the remaining ${usd(note)}` : "that covers the rest"}. Does that work for you?”`;
+  } else {
+    const cash = num(t.st.cash), bal = num(cs.balance), arrears = num(t.st.arrears);
+    row("Cash to them at closing", has(t.st.cash), has(t.st.cash) ? usd(cash) : "", "“How much would you need at closing to make this work?”",
+      <><WText money value={t.st.cash} onChange={t.st.setCash} placeholder="cash at closing" /><DownCapNote amount={t.st.cash} what="to the seller at closing" /></>);
+    row("Loan we take over", bal > 0 && num(cs.payment) > 0, bal > 0 ? `${usd(bal)} balance${num(cs.payment) > 0 ? `, ${usd(num(cs.payment))} a month` : ""}` : "", "“Roughly what do you still owe, and what is the monthly payment?” (Property stage)", null);
+    if (cs.behind === "yes") row("Amount behind", num(t.st.arrears) > 0, num(t.st.arrears) > 0 ? usd(arrears) : "", "“About how much are you behind, in dollars?”",
+      <WText money value={t.st.arrears} onChange={t.st.setArrears} placeholder="arrears" />);
+    if (price > 0 && has(t.st.cash) && bal > 0) summary = `“So here is what that looks like: ${usd(price)} for the house. ${usd(cash)} at closing, and we take over your ${num(cs.payment) > 0 ? usd(num(cs.payment)) + " " : ""}monthly payment${arrears > 0 ? ` and bring the ${usd(arrears)} that is behind current` : ""}. Does that work for you?”`;
+  }
+  const missing = rows.filter((r) => !r.ok).length;
+  return (
+    <div className={`mt-2 rounded-lg border-2 ${missing ? "border-amber-400 bg-amber-50/60" : "border-emerald-400 bg-white"} p-2.5`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className={`text-[11px] font-extrabold uppercase tracking-wide ${missing ? "text-amber-900" : "text-emerald-800"}`}>Lock in the terms before the agreement</div>
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${missing ? "bg-amber-200 text-amber-900" : "bg-emerald-100 text-emerald-800"}`}>{missing ? `${missing} to get` : "All set"}</span>
+      </div>
+      <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">A creative offer is only an offer once the seller has agreed to every number below. Get each one on this call, then read the whole thing back to them before the agreement goes out.</div>
+      {rows.map((r, i) => (
+        <div key={i} className="mt-2 border-t border-slate-200 pt-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-800">
+              {r.ok ? <CheckCircle2 className="h-3 w-3 text-emerald-600" /> : <AlertTriangle className="h-3 w-3 text-amber-600" />}{r.label}
+            </span>
+            {r.value && <span className="font-mono text-[11px] font-bold text-slate-800">{r.value}</span>}
+          </div>
+          {!r.ok && <div className="mt-0.5 text-[11px] leading-snug text-amber-900">{/^“/.test(r.ask) ? <>Ask: {r.ask}</> : r.ask}</div>}
+          {r.input}
+        </div>
+      ))}
+      {summary ? (<>
+        <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-emerald-700">Read it back</div>
+        <Line>{summary}</Line>
+        {id === "sf" && <Hint>Present it as price, down payment, monthly payment and balloon. Do not bring up interest at all.</Hint>}
+      </>) : (
+        <div className="mt-2 text-[10.5px] text-amber-900">The read-back script shows up here once every number above is in.</div>
+      )}
+    </div>
+  );
+};
+
 const WArea = ({ value, onChange, placeholder }) => (
   <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={3}
     className="mt-1.5 w-full resize-y rounded-md border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs leading-relaxed text-slate-800 outline-none focus:border-emerald-400" />
@@ -2143,19 +2228,6 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
           <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Before you dial (SOP Step 1)</div>
           <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
           <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
-          {deal.online && (
-            <WField label="Online as-is values (while you review)">
-              <div className="grid grid-cols-3 gap-2">
-                {[["aiZillow", "Zillow"], ["aiRealtor", "Realtor.com"], ["aiRedfin", "Redfin"]].map(([k, lbl]) => (
-                  <div key={k}>
-                    <div className="mb-0.5 text-[10px] text-slate-600">{lbl}</div>
-                    <WText money value={deal.online.vals[k]} onChange={(v) => deal.online.set[k](v)} placeholder="0" />
-                  </div>
-                ))}
-              </div>
-              <div className="mt-1 text-[10.5px] leading-snug text-slate-600">These feed the As-Is formula on the Cash tab and the Novation tab, so both are ready before you dial. Leave any site blank if it has no estimate.</div>
-            </WField>
-          )}
           <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
           {(deal.ownerType === "Organization" || deal.heldFor) && (
             <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-600">
@@ -2191,6 +2263,29 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             You get paid first. Your fee comes out of the deal before the seller's offer, so the number you quote already pays you.
           </div>
           <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-700">“People do not care how much you know, until they know how much you care.”</div>
+          {deal.online && (
+            <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-2.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Online as-is values</div>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">Optional</span>
+              </div>
+              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-600">Skip this if you are short on time. If you have a minute, look up what each site says the house is worth today and type it in. It feeds the As-Is formula on the Cash tab and the Novation tab. Leave a site blank if it has no estimate.</div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {[["aiZillow", "Zillow", "zillow"], ["aiRealtor", "Realtor.com", "realtor.com"], ["aiRedfin", "Redfin", "redfin"]].map(([k, lbl, site]) => (
+                  <div key={k}>
+                    <div className="mb-0.5 text-[10px] text-slate-600">{lbl}</div>
+                    <WText money value={deal.online.vals[k]} onChange={(v) => deal.online.set[k](v)} placeholder="0" />
+                    {deal.address && (
+                      <a href={gsearch(`${deal.address} ${site}`)} target="_blank" rel="noopener noreferrer"
+                        className="mt-1 inline-flex items-center gap-1 text-[10.5px] font-semibold text-emerald-700 hover:underline">
+                        <Search className="h-3 w-3" /> Look it up <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>)}
 
         {stage === 1 && cs.callType === "followup" && (<div>
@@ -2700,6 +2795,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                     {multi && <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">{k === 0 ? "First" : "Then"} — {o.label}</div>}
                     {overAsk && secondFor(o.id) && <Line>{secondFor(o.id)}</Line>}
                     {o.pitch.map((p, j) => <Line key={j}>{p}</Line>)}
+                    <TermsLockIn id={o.id} cs={cs} upd={upd} t={deal.terms} />
                     {(o.id === "subto" || o.id === "hybrid") && <MortgageStatementStep cs={cs} upd={upd} />}
                     <button type="button" onClick={() => onTab(o.tab)}
                       className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700">
@@ -3258,9 +3354,15 @@ export default function App() {
     };
     // Price, balance and payment are no longer copied: those boxes ARE the call's numbers now.
     void piti;
-    // On a Sub-To the seller's equity above the balance is what they walk with in cash.
-    follow("stCashSeller", stCashSeller, setStCashSeller, equity);
-  }, [callState.ask, callState.balance, callState.payment, callState.escrowed, callState.tiMonthly, callState.hoa, callState.hoaAmt]);
+    // The cash they told us they need at closing is the cash a creative offer puts down (per B, Oct 16
+    // 2026). It fills the down payment on Hybrid and Seller Finance and the cash to seller on Sub-To,
+    // and keeps following the call until someone types a different number on that tab. With no
+    // answer yet, Sub-To falls back to their equity above the loan.
+    const need = num(callState.needCash);
+    follow("stCashSeller", stCashSeller, setStCashSeller, need > 0 ? need : equity);
+    follow("hyDown", hyDown, setHyDown, need);
+    follow("sfDown", sfDown, setSfDown, need);
+  }, [callState.ask, callState.balance, callState.payment, callState.escrowed, callState.tiMonthly, callState.hoa, callState.hoaAmt, callState.needCash]);
 
 
 
@@ -3842,7 +3944,7 @@ export default function App() {
                 save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, repairsDefault, repairsNeedSqft, online: { vals: { aiZillow, aiRealtor, aiRedfin }, set: { aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin } }, loanYrs: { value: loanYrsLeft, set: (v) => setLoanYrsLeft(String(v).trim() === "" ? "30" : v) }, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, repairsDefault, repairsNeedSqft, terms: { sf: { down: sfDown, setDown: setSfDown, years: sfAmort, setYears: setSfAmort, balloon: sfBalloon, setBalloon: setSfBalloon, rate: sfRate }, hy: { down: hyDown, setDown: setHyDown, years: hyTerm, setYears: setHyTerm, rate: hyRate }, st: { cash: stCashSeller, setCash: setStCashSeller, arrears: stArrears, setArrears: setStArrears } }, online: { vals: { aiZillow, aiRealtor, aiRedfin }, set: { aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin } }, loanYrs: { value: loanYrsLeft, set: (v) => setLoanYrsLeft(String(v).trim() === "" ? "30" : v) }, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
@@ -6073,7 +6175,7 @@ function SubToTab(props) {
             <Field label="Existing loan balance"><MoneyInput value={stBal} onChange={setStBal} /></Field>
             <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
             <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
-            <Field label="Cash to seller" hint="at closing · $10K max"><MoneyInput value={stCashSeller} onChange={setStCashSeller} /><DownCapNote amount={stCashSeller} what="to the seller at closing" /></Field>
+            <Field label="Cash to seller" hint="at closing · $10K max" info="Fills from the cash they need at closing in the Offer Call. Without that answer it uses their equity above the loan. Type a different number here to override it."><MoneyInput value={stCashSeller} onChange={setStCashSeller} /><DownCapNote amount={stCashSeller} what="to the seller at closing" /></Field>
             <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
             <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={stRent} onChange={setStRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
             <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
@@ -6160,7 +6262,7 @@ function HybridTab(props) {
           <SectionTitle>Hybrid (sub-to + seller note)</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Purchase price"><MoneyInput value={hyPrice} onChange={setHyPrice} /></Field>
-            <Field label="Down payment" hint="$10K max"><MoneyInput value={hyDown} onChange={setHyDown} /><DownCapNote amount={hyDown} /></Field>
+            <Field label="Down payment" hint="from cash needed · $10K max" info="Fills from the cash they need at closing in the Offer Call. Type a different number here to override it for this strategy."><MoneyInput value={hyDown} onChange={setHyDown} /><DownCapNote amount={hyDown} /></Field>
             <Field label="Existing loan balance" hint="taken sub-to"><MoneyInput value={hyBal} onChange={setHyBal} /></Field>
             <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
             <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
@@ -6254,7 +6356,7 @@ function SellerFinanceTab(props) {
           <SectionTitle>Seller financing inputs</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Purchase price"><MoneyInput value={sfPrice} onChange={setSfPrice} /></Field>
-            <Field label="Down payment" hint="$10K max"><MoneyInput value={sfDown} onChange={setSfDown} /><DownCapNote amount={sfDown} /></Field>
+            <Field label="Down payment" hint="from cash needed · $10K max" info="Fills from the cash they need at closing in the Offer Call. Type a different number here to override it for this strategy."><MoneyInput value={sfDown} onChange={setSfDown} /><DownCapNote amount={sfDown} /></Field>
             <Field label="Interest rate" hint="0% ok"><PlainInput value={sfRate} onChange={setSfRate} suffix="%" /></Field>
             <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
             <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
