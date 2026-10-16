@@ -4283,7 +4283,7 @@ export default function App() {
               </Field>
               <div className="mt-3 flex items-baseline justify-between rounded-lg bg-slate-50 px-3 py-2">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Estimated rehab</span>
-                <span className="font-mono text-xl font-bold tabular-nums text-slate-800">{repairs > 0 ? usd(repairs) : "—"}</span>
+                <span className={`font-mono text-xl tabular-nums ${repairsDefault ? "font-normal text-slate-400" : "font-bold text-slate-800"}`} title={repairsDefault ? "Default until a rehab level or a total is entered" : undefined}>{repairs > 0 ? usd(repairs) : "—"}</span>
               </div>
               {repairsDefault && (
                 <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
