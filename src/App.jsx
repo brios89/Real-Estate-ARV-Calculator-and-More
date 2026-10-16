@@ -660,6 +660,9 @@ const rateNum = (v) => {
 };
 const isLowRate = (v) => { const n = rateNum(v); return n != null && n <= LOW_RATE; };
 
+// Per B (Oct 16 2026): until someone picks a condition or types a number, repairs run at $5K so the MAO
+// shows. It is flagged everywhere as a placeholder, and it never stands in for a condition read.
+const REPAIR_DEFAULT = 5000;
 const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
 
 // How far the seller's number sits from our cash max decides what the Numbers stage should coach.
@@ -749,7 +752,8 @@ const TAB_DEFAULTS = {
 // The sheet calls $100,000 exactly "Under $100K" for the offer % but not for the exit %. Here one
 // rule is used for all three: under $100,000 is the first range, $100,000 to $200,000 the second.
 //
-// Fees are Jerry's, unchanged, and per B they are now the default wholesale fee across the whole app.
+// Fees started as Jerry's and are the default wholesale fee across the whole app. Per B (Oct 16 2026) every
+// range from $100K up is $5K under Jerry's ($20/25/30/40K became $15/20/25/35K). Under $100K stays $10K.
 // Exit % and offer % were tuned for Louisville per B (Oct 16 2026). Jerry's were 35/50/60/65/70 exit
 // and 55/65/75/80/85 offer. The exit % now comes from YLHB's own buyer math (ARV x 75% under $200K,
 // 80% over, minus repairs) on a moderate rehab ($30/sf, the calculator's rate), assuming the online
@@ -757,14 +761,14 @@ const TAB_DEFAULTS = {
 // The offer % is YLHB's 80% anchor (ANCHOR_PCT), kept at Jerry's 85% in the top range.
 // Both are a starting point to check against closed deals, not a measured Louisville number.
 const ASIS_SCALE = [
-  { label: "Under $100K", exit: 55, fee: 10000, offer: 80, jerry: { exit: 35, offer: 55 } },
-  { label: "$100K to $200K", exit: 60, fee: 20000, offer: 80, jerry: { exit: 50, offer: 65 } },
-  { label: "$200K to $300K", exit: 70, fee: 25000, offer: 80, jerry: { exit: 60, offer: 75 } },
-  { label: "$300K to $400K", exit: 70, fee: 30000, offer: 80, jerry: { exit: 65, offer: 80 } },
-  { label: "$400K to $500K", exit: 70, fee: 40000, offer: 85, jerry: { exit: 70, offer: 85 } },
+  { label: "Under $100K", exit: 55, fee: 10000, offer: 80, jerry: { exit: 35, offer: 55, fee: 10000 } },
+  { label: "$100K to $200K", exit: 60, fee: 15000, offer: 80, jerry: { exit: 50, offer: 65, fee: 20000 } },
+  { label: "$200K to $300K", exit: 70, fee: 20000, offer: 80, jerry: { exit: 60, offer: 75, fee: 25000 } },
+  { label: "$300K to $400K", exit: 70, fee: 25000, offer: 80, jerry: { exit: 65, offer: 80, fee: 30000 } },
+  { label: "$400K to $500K", exit: 70, fee: 35000, offer: 85, jerry: { exit: 70, offer: 85, fee: 40000 } },
 ];
 const scaleTier = (v) => (v <= 0 ? -1 : v < 100000 ? 0 : v <= 200000 ? 1 : v <= 300000 ? 2 : v <= 400000 ? 3 : v <= 500000 ? 4 : 5);
-// The app-wide default wholesale fee: Jerry's fee for the range the ARV falls in. The scale stops at
+// The app-wide default wholesale fee: the scale fee for the range the ARV falls in. The scale stops at
 // $500K, so above that the top fee stands until a rep types one. No ARV yet means no fee yet.
 const scaleFee = (arv) => { const t = scaleTier(num(arv)); return t < 0 ? 0 : ASIS_SCALE[Math.min(t, ASIS_SCALE.length - 1)].fee; };
 const pct2 = (n) => (isFinite(n) ? `${Math.round(n * 100) / 100}%` : "—");
@@ -789,7 +793,7 @@ const asIsCalc = (v) => {
 };
 // History: a flat $15K fee (back to $15K Sep 29 2026 after $20K from Sep 24, when every save wrote
 // "20000" whether or not anyone chose it).
-// Oct 16 2026, per B: the default fee is now Jerry Norton's scale by the ARV's price range (scaleFee).
+// Oct 16 2026, per B: the default fee is now the fee scale by the ARV's price range (scaleFee).
 // A blank fee means "follow the scale". The old flat defaults ($15K, and $20K from Sep 24 to Sep 29)
 // read as blank on reload, so those deals pick up the scale. Any other saved fee was chosen on purpose.
 const FEE_LEGACY_DEFAULTS = ["15000", "20000"];
@@ -813,7 +817,7 @@ const motivationChecks = (c, deal) => {
   const m = c.motivation;
   if (!m) return out;
   const cond = (c.condition && c.conditionAuto !== "yes" ? c.condition : null)
-    || impliedCondition(num(deal && deal.repairs), num(deal && deal.sqft)) || c.condition || null;
+    || (deal && deal.repairsDefault ? null : impliedCondition(num(deal && deal.repairs), num(deal && deal.sqft))) || c.condition || null;
   if (m === "urgency" && c.timeline === "flexible") out.push({
     msg: "Urgency is the main motivator, but they said their timeline is flexible.",
     ask: "“You mentioned this needs to happen soon. Is there a date you are working against?”",
@@ -858,11 +862,12 @@ function scoreStrategies(c, deal) {
   // What the rep tapped wins. Failing that, fall back to what the repair number implies.
   // A chip the app set from a typed repair number counts as inferred, not as something the seller said.
   const tapped = c.conditionAuto === "yes" ? "" : c.condition;
-  const implied = tapped ? null : (impliedCondition(deal.repairs, deal.sqft) || c.condition || null);
+  const condRepairs = deal.repairsDefault ? 0 : deal.repairs;   // the $5K placeholder says nothing about condition
+  const implied = tapped ? null : (impliedCondition(condRepairs, deal.sqft) || c.condition || null);
   const cond = tapped || implied;
   // A chip that contradicts the repair dollars is worth saying out loud: the offer is built on the
   // dollars, so the two need to agree before anyone quotes a number.
-  const impliedCheck = tapped ? impliedCondition(deal.repairs, deal.sqft) : null;
+  const impliedCheck = tapped ? impliedCondition(condRepairs, deal.sqft) : null;
   const condMismatch = impliedCheck && impliedCheck !== tapped ? impliedCheck : null;
   const condNote = implied ? ` (read from the ${usd(deal.repairs)} repair number, confirm it on the call)` : "";
   // Value check for every strategy that buys at the seller's number. If their price plus the repairs
@@ -1164,7 +1169,7 @@ const buildCallNarrative = (cs, deal, strat) => {
   if (deal.arv > 0 || deal.maxCash > 0) {
     const bits = [];
     if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}${deal.arvSource ? ` (${deal.arvSource})` : ""}`);
-    if (deal.repairs > 0) bits.push(`estimated repairs ${usd(deal.repairs)}`);
+    if (deal.repairs > 0) bits.push(deal.repairsDefault ? `repairs at the ${usd(deal.repairs)} default (condition not confirmed)` : `estimated repairs ${usd(deal.repairs)}`);
     if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`);
     if (deal.asIs) bits.push(`As-Is formula max buy ${usd(deal.asIs.maxBuy)} with an opening offer of ${usd(deal.asIs.offer)}`);
     s4.push(`Deal Desk numbers at the time of the report: ${bits.join(", ")}.`);
@@ -1280,7 +1285,7 @@ const buildCallReport = (cs, deal, strat) => {
     <h2>Deal numbers at download</h2><table>
       ${row("ARV (After Repair Value)", deal.arv > 0 ? esc(usd(deal.arv)) : "&mdash;")}
       ${row("ARV source", deal.arvSource ? esc(deal.arvSource) : "<span style=\"color:#b45309\">not tagged</span>")}
-      ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) : "&mdash;")}
+      ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) + (deal.repairsDefault ? ` <span style="color:#b45309">default placeholder, condition not confirmed</span>` : "") : "&mdash;")}
       ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
       ${deal.asIs ? row("As-Is formula", esc(`Average online value ${usd(deal.asIs.avg)} (${deal.asIs.count} source${deal.asIs.count === 1 ? "" : "s"}), max buy ${usd(deal.asIs.maxBuy)}, opening offer ${usd(deal.asIs.offer)}`)) : ""}
       ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
@@ -2251,16 +2256,18 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-700">Condition cannot match your repair number until the square footage is known. Run Auto-comp or enter sq ft.</div>
           )}
           <WField label="Estimated repairs">
-            <WText money value={deal.repairOverride} onChange={deal.setRepairOverride} placeholder={deal.repairs > 0 ? String(Math.round(deal.repairs)) : "type a number"} />
+            <WText money value={deal.repairOverride} onChange={deal.setRepairOverride} placeholder={deal.repairsDefault ? "type a number" : deal.repairs > 0 ? String(Math.round(deal.repairs)) : "type a number"} />
           </WField>
           <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
             {num(deal.repairOverride) > 0
               ? <>Using your number: <span className="font-semibold text-slate-600">{usd(num(deal.repairOverride))}</span>. Clear the box to go back to the condition estimate. This drives the MAO.</>
+              : deal.repairsDefault
+                ? <>Using the <span className="font-semibold text-amber-700">{usd(deal.repairs)} default</span> {deal.repairsNeedSqft ? "because there is no sq ft to price the condition with yet. Run Auto-comp or enter the sq ft, or type a real number." : "until you pick a condition above or type a real number."} The MAO is running on it, so confirm the condition before you quote a price.</>
               : deal.repairs > 0
                 ? <>From the condition chip above: <span className="font-semibold text-slate-600">{usd(deal.repairs)}</span>{deal.repairPsf > 0 ? ` (${usd(deal.repairPsf)}/sf)` : ""}. Type a real number here if you have a contractor bid — it overrides the estimate.</>
                 : <>Pick a condition above, or type a real repair number if you have one.</>}
           </div>
-          {cs.condition && impliedCondition(deal.repairs, deal.sqft) && impliedCondition(deal.repairs, deal.sqft) !== cs.condition && (
+          {cs.condition && !deal.repairsDefault && impliedCondition(deal.repairs, deal.sqft) && impliedCondition(deal.repairs, deal.sqft) !== cs.condition && (
             <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-800">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
               <span>
@@ -2268,7 +2275,7 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
               </span>
             </div>
           )}
-          {!cs.condition && impliedCondition(deal.repairs, deal.sqft) && (
+          {!cs.condition && !deal.repairsDefault && impliedCondition(deal.repairs, deal.sqft) && (
             <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-slate-700">
               <Info className="mt-px h-3 w-3 shrink-0 text-slate-600" />
               <span>
@@ -3001,8 +3008,10 @@ export default function App() {
   const [rehabLevel, setRehabLevel] = useState("");   // no default: repairs stay unknown until a rep picks a level or types a number
   const [customPsf, setCustomPsf] = useState("");
   const [repairOverride, setRepairOverride] = useState("");
-  const [underPct, setUnderPct] = useState(75); // under $200k band
-  const [overPct, setOverPct] = useState(80);    // over $200k band
+  // MAO bands, fixed per B (Oct 16 2026): the slider panel came out. It was not saved with a deal, so a
+  // drag on one house quietly carried to the next. Change the numbers here if the policy changes.
+  const underPct = 75; // under $200k band
+  const overPct = 80;  // over $200k band
 
   // cash/mao
   const [feeTyped, setFeeTyped] = useState("");   // blank = Jerry's scale fee for the ARV's range (wholesaleFee below)
@@ -3239,13 +3248,13 @@ export default function App() {
 
   // ---- repairs ----
   const repairPsf = rehabLevel === "cosmetic" ? 15 : rehabLevel === "moderate" ? 30 : rehabLevel === "gut" ? 50 : num(customPsf);
-  const repairs = useMemo(() => {
-    if (num(repairOverride) > 0) return num(repairOverride);
-    return repairPsf * num(sqft);
-  }, [repairPsf, sqft, repairOverride]);
-  // Unknown is not zero. Without a repair number there is no honest MAO, and the MAO is the figure
-  // a rep says out loud to a seller, so it stays blank rather than assuming the house needs nothing.
-  const repairsKnown = num(repairOverride) > 0 || (rehabLevel !== "" && repairPsf > 0 && num(sqft) > 0);
+  const repairsEstimated = num(repairOverride) > 0 ? num(repairOverride) : repairPsf * num(sqft);
+  // Nothing picked or typed yet: run on the $5K placeholder (per B, Oct 16 2026) and flag it.
+  const repairsDefault = !(repairsEstimated > 0);
+  const repairs = repairsDefault ? REPAIR_DEFAULT : repairsEstimated;
+  const repairsNeedSqft = repairsDefault && rehabLevel !== "" && !(num(sqft) > 0);   // a level was picked, but there is no sq ft to price it
+  // The MAO always runs now. The placeholder is called out wherever the repair number shows.
+  const repairsKnown = true;
   // Holding cost scales with the job. A gut sits for months and a paint-and-carpet does not, so the
   // months come from the rehab size and the dollars come from your monthly carry. A typed number wins.
   const rehabMonths = num(rehabPerMonth) > 0 && repairs > 0 ? repairs / num(rehabPerMonth) : 0;
@@ -3687,7 +3696,7 @@ export default function App() {
                 save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
                   sync: syncState, syncId,
                   setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
+                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, repairsDefault, repairsNeedSqft, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
                   rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
                   adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
                   recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
@@ -4097,11 +4106,11 @@ export default function App() {
           typed={num(rentOverride)} hasAddress={!!address.trim()}
           comps={rentComps} subject={rentSubject} change={changeInfo} onRent={setRentOverride} tenantRent={tenantRentNow} />
 
-        {/* CONTROLS: rehab + MAO bands */}
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        {/* CONTROLS: rehab (the MAO band panel came out Oct 16 2026, bands are fixed at 75/80) */}
+        <div className="mt-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <SectionTitle>Rehab level</SectionTitle>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
                 { id: "cosmetic", t: "Light", s: "$15/sf" },
                 { id: "moderate", t: "Moderate", s: "$30/sf" },
@@ -4130,15 +4139,17 @@ export default function App() {
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Estimated rehab</span>
                 <span className="font-mono text-xl font-bold tabular-nums text-slate-800">{repairs > 0 ? usd(repairs) : "—"}</span>
               </div>
-              {!repairsKnown && (
+              {repairsDefault && (
                 <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
                   <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
-                  <span><b>No repair number yet.</b> Pick a rehab level or type a real number. Until then there is no max offer, because an offer that assumes zero repairs is one you cannot honor.</span>
+                  <span><b>Using the {usd(REPAIR_DEFAULT)} default.</b> {repairsNeedSqft ? "A rehab level is picked, but there is no sq ft to price it with, so" : "Nobody has picked a rehab level or typed a number yet, so"} the MAO assumes {usd(REPAIR_DEFAULT)} of repairs. Most houses we buy need more, so confirm the condition before you quote a price.</span>
                 </div>
               )}
               <div className="mt-1 text-[10px] text-slate-600">
                 {num(repairOverride) > 0
                   ? "manual total — overrides the $/sf tiles"
+                  : repairsDefault
+                    ? `default ${usd(REPAIR_DEFAULT)} until a rehab level or a total is entered`
                   : num(sqft) > 0
                     ? `${usd(repairPsf || 0)}/sf × ${num(sqft).toLocaleString()} sf — updates live with the tiles and subject sq ft`
                     : "pick a level and enter subject sq ft above to compute"}
@@ -4146,30 +4157,6 @@ export default function App() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <SectionTitle>MAO % of ARV — by price band</SectionTitle>
-            <div className="grid grid-cols-2 gap-3">
-              <div className={`rounded-lg border px-3 py-2 ${!isOver ? "border-emerald-500 bg-emerald-50" : "border-slate-200"}`}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Under $200k</div>
-                <div className="mt-1 flex items-baseline gap-1">
-                  <span className="font-mono text-2xl font-bold tabular-nums text-slate-900">{underPct}</span>
-                  <span className="text-xs text-slate-700">%</span>
-                </div>
-                <input type="range" min={60} max={85} step={1} value={underPct} onChange={(e) => setUnderPct(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
-              </div>
-              <div className={`rounded-lg border px-3 py-2 ${isOver ? "border-emerald-500 bg-emerald-50" : "border-slate-200"}`}>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Over $200k</div>
-                <div className="mt-1 flex items-baseline gap-1">
-                  <span className="font-mono text-2xl font-bold tabular-nums text-slate-900">{overPct}</span>
-                  <span className="text-xs text-slate-700">%</span>
-                </div>
-                <input type="range" min={60} max={90} step={1} value={overPct} onChange={(e) => setOverPct(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
-              </div>
-            </div>
-            <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
-              ARV {usd(arv)} → <b>{isOver ? "Over $200k" : "Under $200k"}</b> band applies ({activePct}%). Both columns show in the Cash/MAO tab; the green one is this deal.
-            </div>
-          </div>
         </div>
 
         {/* TABS */}
@@ -4222,7 +4209,7 @@ export default function App() {
         <div className="mt-4">
           {tab === "cash" && (
             <CashTab {...{ deckOpenKey: deckKey("cash"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
-              address, asIs, heavyRehab: rehabLevel === "gut" || (!rehabLevel && impliedCondition(repairs, sqft) === "heavy"), asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: tabSet }} />
+              address, asIs, heavyRehab: rehabLevel === "gut" || (!rehabLevel && !repairsDefault && impliedCondition(repairs, sqft) === "heavy"), asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: tabSet }} />
           )}
           {tab === "subto" && (
             <SubToTab {...{ deckOpenKey: deckKey("subto"), feeField, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
@@ -5143,7 +5130,7 @@ const FeeScaleNote = ({ f }) => {
         ? <>Your number for this deal. Clear it to go back to the fee scale{f.auto > 0 ? ` (${usd(f.auto)})` : ""}.</>
         : f.auto > 0
           ? <>From the fee scale: <b>{usd(f.auto)}</b> for {f.tierLabel}.{f.over500 ? " The scale stops at $500K, so type your own fee if this one is too low." : " Type a number to override it for this deal."}</>
-          : <>Fills in from the fee scale once the deal has an ARV: $10K under $100K, $20K to $200K, $25K to $300K, $30K to $400K, $40K to $500K.</>}
+          : <>Fills in from the fee scale once the deal has an ARV: $10K under $100K, $15K to $200K, $20K to $300K, $25K to $400K, $35K to $500K.</>}
     </div>
   );
 };
@@ -5161,8 +5148,8 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
   const gap = ai.ready && arvMao > 0 ? ai.maxBuy - arvMao : null;
   const rows = ai.ready ? [
     [`Average as-is value (${ai.count} source${ai.count === 1 ? "" : "s"})`, usd(ai.avg), null],
-    [`× ${pct2(ai.exitPct)} exit, what a cash buyer pays`, usd(ai.exitPrice), null],
-    [`− Wholesale fee`, usd(ai.fee), null],
+    [`× ${pct2(ai.exitPct)} exit, what a cash buyer pays${ai.typedExit ? " (typed here)" : ""}`, usd(ai.exitPrice), null],
+    [`− Wholesale fee${ai.typedFee ? " (typed here)" : ai.dealFee ? " (typed for this deal)" : ""}`, usd(ai.fee), null],
     ["= Max buy", usd(ai.maxBuy), `${pct2(ai.avg > 0 ? (ai.maxBuy / ai.avg) * 100 : 0)} of value`],
   ] : [];
   return (
@@ -5221,7 +5208,7 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
                 </div>
               ))}
               <div className="flex items-center justify-between bg-emerald-50 px-3 py-2.5">
-                <span className="text-sm font-bold text-slate-900">Opening offer <span className="font-normal text-[11px] text-slate-700">({pct2(ai.offerPct)} of max buy, {pct2(ai.avg > 0 ? (ai.offer / ai.avg) * 100 : 0)} of value)</span></span>
+                <span className="text-sm font-bold text-slate-900">Opening offer <span className="font-normal text-[11px] text-slate-700">({pct2(ai.offerPct)} of max buy{ai.typedOffer ? ", typed here" : ""}, {pct2(ai.avg > 0 ? (ai.offer / ai.avg) * 100 : 0)} of value)</span></span>
                 <span className="font-mono text-lg font-bold text-emerald-700">{usd(ai.offer)}</span>
               </div>
             </>
@@ -5255,14 +5242,29 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
               <div key={i} className={`grid grid-cols-4 px-2 py-1 font-mono ${ai.tierIdx === i ? "bg-emerald-50 font-bold text-emerald-800" : "text-slate-700"}`}>
                 <span className="font-sans">{t.label}</span>
                 <span className="text-right">{t.exit}%{t.jerry.exit !== t.exit && <span className="ml-1 font-normal text-slate-500 line-through">{t.jerry.exit}</span>}</span>
-                <span className="text-right">{usd(t.fee)}</span>
+                <span className="text-right">{usd(t.fee)}{t.jerry.fee !== t.fee && <span className="ml-1 font-normal text-slate-500 line-through">{usd(t.jerry.fee)}</span>}</span>
                 <span className="text-right">{t.offer}%{t.jerry.offer !== t.offer && <span className="ml-1 font-normal text-slate-500 line-through">{t.jerry.offer}</span>}</span>
               </div>
             ))}
             <div className={`grid grid-cols-4 px-2 py-1 ${ai.tierIdx === 5 ? "bg-amber-50 font-bold text-amber-900" : "text-slate-700"}`}>
               <span>Over $500K</span><span className="col-span-3 text-right">type your own</span>
             </div>
-            <div className="border-t border-slate-100 px-2 py-1 text-[10px] leading-snug text-slate-600">Crossed-out numbers are Jerry's originals. Louisville numbers come from YLHB's buyer math on a moderate rehab. Check them against our closed deals.</div>
+            {/* The green row is the scale. When the math above runs on a typed number instead, say so
+                right here, so the table and the math never look like they disagree. */}
+            {ai.ready && ai.tier && (() => {
+              const diffs = [];
+              if (ai.fee !== ai.tier.fee) diffs.push(<>a <b>{usd(ai.fee)}</b> fee {ai.dealFee ? "typed in the wholesale fee box for this deal" : "typed in the fee box above"} instead of the scale's {usd(ai.tier.fee)}</>);
+              if (ai.exitPct !== ai.tier.exit) diffs.push(<>a <b>{pct2(ai.exitPct)}</b> exit instead of {ai.tier.exit}%</>);
+              if (ai.offerPct !== ai.tier.offer) diffs.push(<>a <b>{pct2(ai.offerPct)}</b> opening offer instead of {ai.tier.offer}%</>);
+              if (!diffs.length) return null;
+              return (
+                <div className="flex items-start gap-1.5 border-t border-amber-200 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-900">
+                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
+                  <span>The math is using {diffs.map((d, i) => <span key={i}>{i ? (i === diffs.length - 1 ? " and " : ", ") : ""}{d}</span>)}. Clear {diffs.length > 1 ? "those boxes" : "that box"} to go back to the green row.</span>
+                </div>
+              );
+            })()}
+            <div className="border-t border-slate-100 px-2 py-1 text-[10px] leading-snug text-slate-600">Crossed-out numbers are Jerry's originals. The exit and offer % come from YLHB's buyer math on a moderate rehab, and the fees are YLHB's own. Check them against our closed deals.</div>
           </div>
         </div>
       </div>
