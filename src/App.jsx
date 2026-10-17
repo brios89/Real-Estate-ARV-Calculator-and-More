@@ -2267,9 +2267,9 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
             <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-2.5">
               <div className="flex items-baseline justify-between gap-2">
                 <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Online as-is values</div>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">Optional</span>
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">Quick number</span>
               </div>
-              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-600">Skip this if you are short on time. If you have a minute, look up what each site says the house is worth today and type it in. It feeds the As-Is formula on the Cash tab and the Novation tab. Leave a site blank if it has no estimate.</div>
+              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-600"><b className="text-slate-800">Short on time, or just need a quick number? Use this.</b> Look up what each site says the house is worth today and type it in. The As-Is formula turns it into an opening offer and a max, with no comps or repair estimate needed. It also fills the Novation tab. Leave a site blank if it has no estimate. When you have more time, the comps and repair number give the more accurate offer.</div>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 {[["aiZillow", "Zillow", "zillow"], ["aiRealtor", "Realtor.com", "realtor.com"], ["aiRedfin", "Redfin", "redfin"]].map(([k, lbl, site]) => (
                   <div key={k}>
@@ -2284,6 +2284,11 @@ const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, sa
                   </div>
                 ))}
               </div>
+              {deal.asIs && (
+                <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-900">
+                  <b>Quick number:</b> open at <b>{usd(deal.asIs.offer)}</b> and go no higher than <b>{usd(deal.asIs.maxBuy)}</b>. From the As-Is formula on {usd(deal.asIs.avg)} average value.
+                </div>
+              )}
             </div>
           )}
         </div>)}
@@ -5433,7 +5438,7 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <SectionTitle>As-Is formula (no comps, no repair estimate)</SectionTitle>
       <div className="-mt-1 mb-3 text-[11.5px] leading-snug text-slate-700">
-        Jerry Norton's instant offer, with the exit and offer percentages tuned for Louisville: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. Use it as a quick screen and a cross-check on the MAO above, not as a replacement for real comps and a repair number.
+        Jerry Norton's instant offer, with the exit and offer percentages tuned for Louisville: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. Use it when you are short on time or just need a quick number. When you have more time, the MAO above, built on real comps and a repair number, is the more accurate offer, so use this to cross-check it.
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {src.map(([k, label, site]) => (
@@ -5519,9 +5524,9 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
             {ASIS_SCALE.map((t, i) => (
               <div key={i} className={`grid grid-cols-4 px-2 py-1 font-mono ${ai.tierIdx === i ? "bg-emerald-50 font-bold text-emerald-800" : "text-slate-700"}`}>
                 <span className="font-sans">{t.label}</span>
-                <span className="text-right">{t.exit}%{t.jerry.exit !== t.exit && <span className="ml-1 font-normal text-slate-500 line-through">{t.jerry.exit}</span>}</span>
-                <span className="text-right">{usd(t.fee)}{t.jerry.fee !== t.fee && <span className="ml-1 font-normal text-slate-500 line-through">{usd(t.jerry.fee)}</span>}</span>
-                <span className="text-right">{t.offer}%{t.jerry.offer !== t.offer && <span className="ml-1 font-normal text-slate-500 line-through">{t.jerry.offer}</span>}</span>
+                <span className="text-right">{t.exit}%</span>
+                <span className="text-right">{usd(t.fee)}</span>
+                <span className="text-right">{t.offer}%</span>
               </div>
             ))}
             <div className={`grid grid-cols-4 px-2 py-1 ${ai.tierIdx === 5 ? "bg-amber-50 font-bold text-amber-900" : "text-slate-700"}`}>
@@ -5542,7 +5547,7 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
                 </div>
               );
             })()}
-            <div className="border-t border-slate-100 px-2 py-1 text-[10px] leading-snug text-slate-600">Crossed-out numbers are Jerry's originals. The exit and offer % come from YLHB's buyer math on a moderate rehab, and the fees are YLHB's own. Check them against our closed deals.</div>
+            <div className="border-t border-slate-100 px-2 py-1 text-[10px] leading-snug text-slate-600">The exit and offer % come from YLHB's buyer math on a moderate rehab, and the fees are YLHB's own. Check them against our closed deals.</div>
           </div>
         </div>
       </div>
