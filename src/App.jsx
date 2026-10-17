@@ -4412,6 +4412,14 @@ export default function App() {
 
         </div>
 
+        {/* QUICK NUMBER: the As-Is formula sits above the strategy tabs so it is there on every tab,
+            for a fast number when there is no time for comps (per B, Oct 17 2026). */}
+        <div className="mt-6">
+          <AsIsPanel address={address} ai={asIs} vals={{ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }} set={{ ...tabSet, aiFee: setFeeTyped }}
+            ask={num(askingPrice)} arvMao={activeInvestorMao} arv={arv}
+            heavyRehab={rehabLevel === "gut" || (!rehabLevel && !repairsDefault && impliedCondition(repairs, sqft) === "heavy")} />
+        </div>
+
         {/* TABS */}
         {/* Strategy tabs. These switch the whole deal underneath them, so they read as a real
             control bar rather than five quiet chips: a labeled container, a green active tab, and
@@ -5370,7 +5378,6 @@ function CashTab(props) {
         </div>
       </div>
 
-      <AsIsPanel address={props.address} ai={props.asIs} vals={props.asIsVals} set={props.asIsSet} ask={ask} arvMao={activeInvestorMao} arv={arv} heavyRehab={props.heavyRehab} />
 
       <BrrrrPanel
         shared={props.brrrrIn}
@@ -5436,9 +5443,15 @@ function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
   ] : [];
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <SectionTitle>As-Is formula (no comps, no repair estimate)</SectionTitle>
-      <div className="-mt-1 mb-3 text-[11.5px] leading-snug text-slate-700">
-        Jerry Norton's instant offer, with the exit and offer percentages tuned for Louisville: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. Use it when you are short on time or just need a quick number. When you have more time, the MAO above, built on real comps and a repair number, is the more accurate offer, so use this to cross-check it.
+      <div className="flex items-start justify-between gap-2">
+        <SectionTitle>As-Is formula (no comps, no repair estimate)</SectionTitle>
+        <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-800">Quick number</span>
+      </div>
+      <div className="-mt-1 mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] leading-snug text-emerald-900">
+        <b>Short on time, or just need a quick number? Use this.</b> Type what Zillow, Realtor.com and Redfin say the house is worth today, and it gives you an opening offer and a max. No comps or repair estimate needed. The same boxes are in the Offer Call's Prep stage.
+      </div>
+      <div className="mb-3 text-[11.5px] leading-snug text-slate-700">
+        Jerry Norton's instant offer, with the exit and offer percentages tuned for Louisville: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. When you have more time, the MAO on the Cash / MAO tab, built on real comps and a repair number, is the more accurate offer, so use this to cross-check it.
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {src.map(([k, label, site]) => (
