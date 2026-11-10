@@ -62,26 +62,24 @@ export const EXPENSE_ITEMS = [
 export const UTILITY_KEYS = ["electric", "gas", "water"];
 // Costs a co-living home carries that a traditional whole-house rental usually does not (tenant pays them).
 export const COLIVING_EXTRA_KEYS = ["wifi", "security", "electric", "gas", "water", "cleaning", "supplies"];
-export const MGMT_PER_ROOM = 50;
+export const MGMT_PER_ROOM = 61.5;
 
 // Grading lines (Ace's starting thresholds, tunable).
 export const TARGETS = {
   cocStrong: 20, cocSolid: 12, cocThin: 8,         // cash-on-cash %
-  arbPaybackStrong: 12, arbPaybackSolid: 18, arbPaybackThin: 24, // months to earn back startup cash
   dscrMin: 1.25,                                   // typical DSCR lender minimum
 };
 
 export const DEAL_TYPES = {
   buy: "Buy & Convert",
-  arb: "Rental Arbitrage",
   creative: "Creative Buy",
   hack: "House Hack",
 };
 
 // The whole analysis. `d` is the deal as the student entered it (strings or numbers).
 export function analyze(d) {
-  const type = d.dealType || "buy";
-  const owns = type !== "arb";
+  const type = DEAL_TYPES[d.dealType] ? d.dealType : "buy";
+  const owns = true; // every deal type in the Academy owns or controls title
   const occ = Math.min(100, Math.max(0, num(d.occupancy ?? 95))) / 100;
 
   // ---- Income ----
@@ -99,9 +97,9 @@ export function analyze(d) {
   const ownerRoomValue = rentals.filter((r) => r.owner).reduce((a, r) => a + r.rent, 0);
 
   // ---- Acquisition and debt ----
-  const price = owns ? num(d.price) : 0;
+  const price = num(d.price);
   const reno = Object.values(d.capex || {}).reduce((a, v) => a + num(v), 0);
-  const closing = owns ? num(d.closing) : 0;   // arbitrage has no purchase, so no closing costs
+  const closing = num(d.closing);
   let loan = 0, pAndI = 0, mi = 0, sellerNote = 0, notePay = 0, down = 0, upfrontSeller = 0, loanRate = 0, loanYears = 0, balloonYears = 0;
   let financedReno = false;
   if (type === "buy" || type === "hack") {
@@ -133,9 +131,8 @@ export function analyze(d) {
 
   // Taxes and insurance (ownership only). A Sub-To payment that already includes them is not double counted.
   const escrowedSubto = type === "creative" && (d.creativeMode || "subto") === "subto" && d.stEscrowed !== false;
-  const taxesMo = !owns || escrowedSubto ? 0 : (num(d.taxMode) === 1 ? num(d.taxMonthly) : (price * num(d.taxPct ?? 1.85)) / 100 / 12);
-  const insMo = !owns ? num(d.arbInsurance) : escrowedSubto ? 0 : (num(d.insMode) === 1 ? num(d.insMonthly) : (price * num(d.insPct ?? 1.2)) / 100 / 12);
-  const leaseRent = type === "arb" ? num(d.leaseRent) : 0;
+  const taxesMo = escrowedSubto ? 0 : (num(d.taxMode) === 1 ? num(d.taxMonthly) : (price * num(d.taxPct ?? 1.85)) / 100 / 12);
+  const insMo = escrowedSubto ? 0 : (num(d.insMode) === 1 ? num(d.insMonthly) : (price * num(d.insPct ?? 1.2)) / 100 / 12);
 
   // ---- Operating expenses ----
   const exp = d.expenses || {};
@@ -144,23 +141,22 @@ export function analyze(d) {
   const opex = opexLines.reduce((a, l) => a + l.amt, 0) + mgmt;
   const utilities = UTILITY_KEYS.reduce((a, k) => a + num(exp[k]), 0);
 
-  // NOI: income after operating costs, before the loan. For arbitrage the lease is the cost of the house.
-  const noi = effectiveIncome - opex - taxesMo - insMo - leaseRent;
+  // NOI: income after operating costs, before the loan.
+  const noi = effectiveIncome - opex - taxesMo - insMo;
   const cashFlow = noi - debtService;
 
   // ---- Setup costs ----
   const furn = furnishingEstimate({ ...(d.furnish || {}), hire: !!(d.furnish && d.furnish.hire) });
   const furnishing = d.furnishOverride !== "" && d.furnishOverride != null && num(d.furnishOverride) > 0 ? num(d.furnishOverride) : furn.total;
   const months = num(d.monthsToRent);
-  // Carrying cost while the home fills: the loan or lease, taxes and insurance, HOA, lawn, and about half the utilities.
-  const holdingMonthly = debtService + taxesMo + insMo + leaseRent + num(exp.hoa) + num(exp.lawn) + utilities / 2;
+  // Carrying cost while the home fills: the loan, taxes and insurance, HOA, lawn, and about half the utilities.
+  const holdingMonthly = debtService + taxesMo + insMo + num(exp.hoa) + num(exp.lawn) + utilities / 2;
   const holding = months * holdingMonthly;
-  const arbUpfront = type === "arb" ? num(d.deposit) + num(d.firstMonths ?? 1) * leaseRent + num(d.arbFees) : 0;
   const renoCash = financedReno ? 0 : reno;
   const otherUpfront = num(d.otherUpfront);
-  const cashIn = down + closing + furnishing + renoCash + holding + arbUpfront + upfrontSeller + otherUpfront;
+  const cashIn = down + closing + furnishing + renoCash + holding + upfrontSeller + otherUpfront;
   const cashInLines = [
-    ["Down payment", down], ["Cash to seller + arrears", upfrontSeller], ["Deposit, first month and fees", arbUpfront],
+    ["Down payment", down], ["Cash to seller + arrears", upfrontSeller],
     ["Closing costs", closing], ["Renovation / conversion", renoCash], ["Furnishing and setup", furnishing],
     [`Holding cost (${months} mo until rented)`, holding], ["Other upfront", otherUpfront],
   ].filter(([, v]) => Math.abs(v) > 0.5).map(([label, amt]) => ({ label, amt }));
@@ -169,11 +165,11 @@ export function analyze(d) {
   const annualCF = cashFlow * 12;
   const coc = cashIn > 0 ? (annualCF / cashIn) * 100 : null;
   const pitia = pAndI + mi + notePay + taxesMo + insMo + num(exp.hoa);
-  const dscr = owns && pitia > 0 ? effectiveIncome / pitia : null;   // lender style: rent / PITIA
+  const dscr = pitia > 0 ? effectiveIncome / pitia : null;   // lender style: rent / PITIA
   const allIn = price + reno;
-  const capRate = owns && allIn > 0 ? ((noi * 12) / allIn) * 100 : null;
-  const costPerRoom = rentableCount > 0 ? (owns ? allIn / rentableCount : cashIn / rentableCount) : null;
-  const fixedCosts = opex - mgmt + taxesMo + insMo + leaseRent + debtService;
+  const capRate = allIn > 0 ? ((noi * 12) / allIn) * 100 : null;
+  const costPerRoom = rentableCount > 0 ? allIn / rentableCount : null;
+  const fixedCosts = opex - mgmt + taxesMo + insMo + debtService;
   const perRoomMgmt = d.selfManage ? 0 : num(d.mgmtPerRoom ?? MGMT_PER_ROOM);
   // Occupancy needed to cover every cost (management scales with rooms, so it is counted at full).
   const breakEvenOcc = grossRent > 0 ? Math.max(0, ((fixedCosts + mgmt - otherIncome) / grossRent) * 100) : null;
@@ -187,7 +183,7 @@ export function analyze(d) {
 
   // 5-year view (ownership only).
   let five = null;
-  if (owns) {
+  {
     const yrs = 5, appr = num(d.appreciation ?? 3) / 100;
     const value0 = num(d.arv) > 0 ? num(d.arv) : allIn;
     const appreciation = value0 * (Math.pow(1 + appr, yrs) - 1);
@@ -214,14 +210,8 @@ export function analyze(d) {
       : hack.current > 0 && hack.yourCost < hack.current
         ? { tone: "solid", label: "Cheaper than your rent now", note: `Living there costs about ${fmt$(hack.yourCost)} a month, ${fmt$(hack.current - hack.yourCost)} less than you pay now.` }
         : { tone: "thin", label: "Costs more than you pay now", note: hack.current > 0 ? `Living there costs about ${fmt$(hack.yourCost)} a month, more than the ${fmt$(hack.current)} you pay now.` : `Living there costs about ${fmt$(hack.yourCost)} a month. Enter what you pay for housing now to compare.` };
-  } else if (cashFlow <= 0) verdict = { tone: "pass", label: "Pass at these numbers", note: "It loses money every month. Lower the price or lease, raise the rents, or cut costs." };
-  else if (type === "arb") {
-    const p = paybackMonths;
-    verdict = p <= TARGETS.arbPaybackStrong ? { tone: "strong", label: "Strong arbitrage deal", note: `Startup cash comes back in about ${Math.ceil(p)} months.` }
-      : p <= TARGETS.arbPaybackSolid ? { tone: "solid", label: "Solid arbitrage deal", note: `Startup cash comes back in about ${Math.ceil(p)} months.` }
-        : p <= TARGETS.arbPaybackThin ? { tone: "thin", label: "Thin", note: `Startup cash takes about ${Math.ceil(p)} months to come back. Make sure the lease runs longer than that.` }
-          : { tone: "pass", label: "Pass at these numbers", note: `Startup cash takes about ${Math.ceil(p)} months to come back, which is too long for a lease.` };
-  } else {
+  } else if (cashFlow <= 0) verdict = { tone: "pass", label: "Pass at these numbers", note: "It loses money every month. Lower the price, raise the rents, or cut costs." };
+  else {
     const c = coc ?? 0;
     verdict = c >= TARGETS.cocStrong ? { tone: "strong", label: "Strong deal", note: `${pct(c)} cash-on-cash.` }
       : c >= TARGETS.cocSolid ? { tone: "solid", label: "Solid deal", note: `${pct(c)} cash-on-cash.` }
@@ -231,10 +221,10 @@ export function analyze(d) {
 
   return {
     type, owns, occ, rentableCount, rentedCount, grossRent, grossRoomRent, grossUnitRent, otherIncome, effectiveIncome,
-    price, reno, closing, loan, down, pAndI, mi, notePay, sellerNote, debtService, taxesMo, insMo, leaseRent,
+    price, reno, closing, loan, down, pAndI, mi, notePay, sellerNote, debtService, taxesMo, insMo,
     opexLines, mgmt, opex, utilities, noi, cashFlow, annualCF, furn, furnishing, holding, holdingMonthly, months,
     cashIn, cashInLines, coc, dscr, capRate, costPerRoom, breakEvenOcc, paybackMonths, cfPerRoom, premium, five,
-    balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller, arbUpfront,
+    balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller,
   };
 }
 
@@ -255,17 +245,13 @@ export function whatItTakes(d, targetCoc) {
   const scale = solve(0, 10, (k) => hits(analyze({ ...d, rooms: (d.rooms || []).map((r) => ({ ...r, rent: num(r.rent) * k })), units: (d.units || []).map((u) => ({ ...u, rent: num(u.rent) * k })) })));
   const avgNow = base.rentedCount > 0 ? base.grossRent / base.rentedCount : 0;
   const rentNeeded = scale >= 9.99 ? null : avgNow * scale;
-  // 2) Max price (ownership) or max lease (arbitrage) that still hits the target.
-  let maxPrice = null, maxLease = null;
+  // 2) Max price that still hits the target.
+  let maxPrice = null;
   if (base.type === "buy" || base.type === "hack" || (base.type === "creative" && d.creativeMode === "sf")) {
     const p = solve(0, Math.max(1, base.price) * 4 + 500000, (x) => !hits(analyze({ ...d, price: x })));
     maxPrice = hits(analyze({ ...d, price: 0 })) ? p : null;
   }
-  if (base.type === "arb") {
-    const L = solve(0, 50000, (x) => !hits(analyze({ ...d, leaseRent: x })));
-    maxLease = hits(analyze({ ...d, leaseRent: 0 })) ? L : null;
-  }
-  return { rentNeeded, avgNow, maxPrice, maxLease };
+  return { rentNeeded, avgNow, maxPrice };
 }
 
 export const fmt$ = (n) => (n == null || !isFinite(n) ? "--" : `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString("en-US")}`);

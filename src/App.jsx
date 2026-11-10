@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Home, KeyRound, Handshake, BedDouble, Info, Save, FilePlus2, FolderOpen, Download, Lock, Trash2,
+  Home, Handshake, BedDouble, Info, Save, FilePlus2, FolderOpen, Download, Lock, Trash2,
   CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers,
 } from "lucide-react";
 import {
@@ -31,14 +31,20 @@ const newDeal = () => ({
   occupancy: 95, otherIncome: "", wholeHouseRent: "",
   price: "", ltv: 80, hackLtv: 96.5, miPct: 0.55, financeReno: false, rate: 7, term: 30, closing: 7000,
   taxMode: 0, taxPct: 1.85, taxMonthly: "", insMode: 0, insPct: 1.2, insMonthly: "", arv: "",
-  leaseRent: "", deposit: "", firstMonths: 1, arbFees: "", arbInsurance: "", leaseMonths: 12,
   creativeMode: "subto", stBalance: "", stPayment: "", stEscrowed: true, stRate: "", stYearsLeft: "", stCashToSeller: "", stArrears: "",
   stCarry: "", stCarryRate: 0, stCarryYears: 10, sfDown: "", sfRate: 0, sfAmort: 30, sfBalloon: 0,
   furnish: { bedrooms: "", bathrooms: "", kitchens: "", laundry: "", living: "", dining: "", sqft: "", hire: false }, furnishOverride: "",
   capex: {}, monthsToRent: 1, otherUpfront: "",
-  expenses: Object.fromEntries(EXPENSE_ITEMS.map(([k, , v]) => [k, v])), mgmtPerRoom: MGMT_PER_ROOM, selfManage: false,
+  expenses: Object.fromEntries(EXPENSE_ITEMS.map(([k, , v]) => [k, v])), mgmtPerRoom: MGMT_PER_ROOM.toFixed(2), selfManage: false,
   appreciation: 3, landPct: 20, taxRate: 24, targetCoc: 15, currentHousing: "", notes: "",
 });
+
+// A saved deal from an older version may name a deal type that no longer exists. Fall back to Buy & Convert.
+const cleanDeal = (saved) => {
+  const merged = { ...newDeal(), ...(saved || {}) };
+  if (!DEAL_TYPES[merged.dealType]) merged.dealType = "buy";
+  return merged;
+};
 
 // ---------- small UI pieces ----------
 const Tip = ({ text }) => {
@@ -174,7 +180,7 @@ export default function App() {
 }
 
 function Analyzer({ onLock }) {
-  const [d, setD] = useState(() => ({ ...newDeal(), ...store.get(DRAFT_KEY, {}) }));
+  const [d, setD] = useState(() => cleanDeal(store.get(DRAFT_KEY, {})));
   const [deals, setDeals] = useState(() => store.get(DEALS_KEY, []));
   const [showSaved, setShowSaved] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
@@ -234,7 +240,7 @@ function Analyzer({ onLock }) {
     setDeals(next); store.set(DEALS_KEY, next); setD((p) => ({ ...p, id: rec.id, name }));
     setSavedMsg(`Saved "${name}"`); setTimeout(() => setSavedMsg(""), 2500);
   };
-  const openDeal = (rec) => { setD({ ...newDeal(), ...rec.d, id: rec.id }); setFillRooms(""); setShowSaved(false); window.scrollTo?.(0, 0); };
+  const openDeal = (rec) => { setD(cleanDeal({ ...rec.d, id: rec.id })); setFillRooms(""); setShowSaved(false); window.scrollTo?.(0, 0); };
   const deleteDeal = (id) => { const next = deals.filter((x) => x.id !== id); setDeals(next); store.set(DEALS_KEY, next); };
   const startNew = () => { setD(newDeal()); setFillRooms(""); window.scrollTo?.(0, 0); };
 
@@ -292,7 +298,7 @@ function Analyzer({ onLock }) {
         </span>
         <span className="shrink-0 text-right font-mono tabular-nums">
           <span className={`block text-base font-bold ${a.cashFlow > 0 ? "text-emerald-700" : a.rentedCount ? "text-rose-600" : "text-slate-900"}`}>{fmt$(a.cashFlow)}/mo</span>
-          <span className="block text-[11px] text-slate-600">{type === "arb" ? (a.paybackMonths ? `${Math.ceil(a.paybackMonths)} mo payback` : "--") : type === "hack" ? (a.hack.yourCost <= 0 ? "you live free" : `${fmt$(a.hack.yourCost)} to live there`) : `${pct(a.coc)} cash-on-cash`}</span>
+          <span className="block text-[11px] text-slate-600">{type === "hack" ? (a.hack.yourCost <= 0 ? "you live free" : `${fmt$(a.hack.yourCost)} to live there`) : `${pct(a.coc)} cash-on-cash`}</span>
         </span>
       </a>
 
@@ -300,9 +306,8 @@ function Analyzer({ onLock }) {
         <div className="space-y-5">
           {/* 1. Deal type */}
           <Card n="1" title="What kind of deal is it?" sub="Pick how you are getting control of the house, then how you will rent it.">
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2 sm:grid-cols-3">
               {[["buy", Home, "Buy & Convert", "Buy it with a loan, convert it, rent it by the room."],
-                ["arb", KeyRound, "Rental Arbitrage", "Lease it from a landlord and rent it out by the room."],
                 ["creative", Handshake, "Creative Buy", "Take over the seller's loan (Sub-To) or have them finance it."],
                 ["hack", BedDouble, "House Hack", "Live in one room, rent out the rest."]].map(([v, Icon, l, s]) => (
                 <button key={v} type="button" onClick={() => set("dealType", v)}
@@ -390,7 +395,7 @@ function Analyzer({ onLock }) {
           </Card>
 
           {/* 4. Acquisition */}
-          <Card n="4" title={type === "arb" ? "The lease" : type === "creative" ? "The creative terms" : type === "hack" ? "Buying it to live in" : "Buying it"}>
+          <Card n="4" title={type === "creative" ? "The creative terms" : type === "hack" ? "Buying it to live in" : "Buying it"}>
             {(type === "buy" || type === "hack") && (
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="Purchase price"><Money value={d.price} onChange={(v) => set("price", v)} /></Field>
@@ -404,17 +409,6 @@ function Analyzer({ onLock }) {
                 <Field label="After-repair value" hint="optional" tip="What it will be worth once converted. Used for the 5-year appreciation. Blank uses price plus renovation."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
                 <div className="sm:col-span-3"><Check checked={d.financeReno} onChange={(v) => set("financeReno", v)}>The lender finances the renovation too (rolled into the loan)</Check></div>
                 {type === "hack" && <Field label="What you pay for housing now" hint="monthly" className="sm:col-span-1"><Money value={d.currentHousing} onChange={(v) => set("currentHousing", v)} /></Field>}
-              </div>
-            )}
-            {type === "arb" && (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Monthly lease to landlord"><Money value={d.leaseRent} onChange={(v) => set("leaseRent", v)} /></Field>
-                <Field label="Security deposit"><Money value={d.deposit} onChange={(v) => set("deposit", v)} /></Field>
-                <Field label="Months of rent upfront" tip="First month, and last month if the landlord asks for it."><Num value={d.firstMonths} onChange={(v) => set("firstMonths", v)} /></Field>
-                <Field label="Lease length" hint="months"><Num value={d.leaseMonths} onChange={(v) => set("leaseMonths", v)} /></Field>
-                <Field label="Application / broker fees"><Money value={d.arbFees} onChange={(v) => set("arbFees", v)} /></Field>
-                <Field label="Liability insurance" hint="monthly" tip="The landlord insures the building. You need your own liability policy that covers renting by the room. Get a quote."><Money value={d.arbInsurance} onChange={(v) => set("arbInsurance", v)} /></Field>
-                <div className="sm:col-span-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"><b>Get it in writing.</b> The lease must give you written permission to rent the rooms to others. Without it, you can lose the house and everything you put into it.</div>
               </div>
             )}
             {type === "creative" && (
@@ -453,7 +447,7 @@ function Analyzer({ onLock }) {
                 )}
               </div>
             )}
-            {type !== "arb" && !(type === "creative" && d.creativeMode === "subto" && d.stEscrowed !== false) && (
+            {!(type === "creative" && d.creativeMode === "subto" && d.stEscrowed !== false) && (
               <div className="mt-4 grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2">
                 <Field label="Property taxes" hint={d.taxMode === 1 ? "monthly $" : "% of price per year"} tip="Verify with your county. Hobknob's sheet uses 1.85% of the price per year.">
                   <div className="flex gap-2">
@@ -474,7 +468,7 @@ function Analyzer({ onLock }) {
           {/* 5. Setup costs */}
           <Card n="5" title="Getting it ready" sub="Renovation, furnishing and the time it takes to fill the rooms.">
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Months until rented" tip="How long until the rooms are filled. The house costs money every month before then: the loan or lease, taxes, insurance and about half the utilities."><Num value={d.monthsToRent} onChange={(v) => set("monthsToRent", v)} /></Field>
+              <Field label="Months until rented" tip="How long until the rooms are filled. The house costs money every month before then: the loan, taxes, insurance and about half the utilities."><Num value={d.monthsToRent} onChange={(v) => set("monthsToRent", v)} /></Field>
               <Field label="Other upfront costs" tip="Permits, inspections, photos, listing fees, LLC setup."><Money value={d.otherUpfront} onChange={(v) => set("otherUpfront", v)} /></Field>
             </div>
 
@@ -520,7 +514,7 @@ function Analyzer({ onLock }) {
           <Card n="6" title="Monthly operating costs" sub="Pre-filled with Hobknob's 12-month averages for a 5-bedroom co-living home. Change any of them to match your house and market.">
             <div className="grid gap-3 sm:grid-cols-3">
               {EXPENSE_ITEMS.map(([k, l]) => <Field key={k} label={l}><Money value={d.expenses[k]} onChange={(v) => setIn("expenses", k, v)} /></Field>)}
-              <Field label="Management per room" hint={d.selfManage ? "self-managed" : `x ${a.rentedCount} = ${fmt$(a.mgmt)}`} tip="Hobknob budgets $50 per room per month. Keep it in even if you self-manage, so the deal still works the day you hire it out.">
+              <Field label="Management per room / unit" hint={d.selfManage ? "self-managed" : `x ${a.rentedCount} = ${fmt$(a.mgmt)}`} tip="Hobknob budgets $61.50 per room or unit per month. Keep it in even if you self-manage, so the deal still works the day you hire it out.">
                 <Money value={d.selfManage ? "0" : d.mgmtPerRoom} onChange={(v) => set("mgmtPerRoom", v)} />
               </Field>
             </div>
@@ -528,7 +522,7 @@ function Analyzer({ onLock }) {
           </Card>
 
           {/* 7. Long-term (ownership) */}
-          {a.owns && (
+          {a.five && (
             <Card n="7" title="5-year assumptions" sub="For the 5-year return. Talk to your CPA about your own tax picture.">
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="Appreciation per year"><Num value={d.appreciation} onChange={(v) => set("appreciation", v)} suffix="%" /></Field>
@@ -552,24 +546,21 @@ function Analyzer({ onLock }) {
 
           <div className="grid grid-cols-2 gap-2">
             <Stat label="Monthly cash flow" value={fmt$(a.cashFlow)} tone={a.cashFlow > 0 ? "good" : a.rentedCount ? "bad" : "default"} big sub={a.cfPerRoom != null ? `${fmt$(a.cfPerRoom)} per room` : null} />
-            {type === "arb"
-              ? <Stat label="Payback" value={a.paybackMonths ? `${Math.ceil(a.paybackMonths)} mo` : "--"} big sub="to earn back startup cash" tone={a.paybackMonths && a.paybackMonths <= TARGETS.arbPaybackSolid ? "good" : a.paybackMonths ? "warn" : "default"} />
-              : type === "hack"
+            {type === "hack"
                 ? <Stat label="Your housing cost" value={a.hack.yourCost <= 0 ? "$0" : fmt$(a.hack.yourCost)} big sub={a.hack.yourCost <= 0 ? `and you are paid ${fmt$(-a.hack.yourCost)}` : "per month to live there"} tone={a.hack.yourCost <= 0 ? "good" : "warn"} />
                 : <Stat label="Cash-on-cash" value={pct(a.coc)} big sub="yearly cash flow / cash in" tone={a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default"} />}
             <Stat label="Cash needed" value={fmt$(a.cashIn)} sub="to buy, set up and fill it" />
-            <Stat label={a.owns ? "Cost per rentable room" : "Startup per room"} value={fmt$(a.costPerRoom)} sub={a.owns ? "price + renovation / rooms" : "cash in / rooms"} />
-            {a.owns && <Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"} sub={`rent / loan payment with taxes, insurance, HOA. Most want ${TARGETS.dscrMin}+`} tone={a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
+            <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />
+            {<Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"} sub={`rent / loan payment with taxes, insurance, HOA. Most want ${TARGETS.dscrMin}+`} tone={a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
             <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
             {type === "hack" && <Stat label="Cash-on-cash" value={pct(a.coc)} sub="yearly cash flow / cash in" />}
-            {a.owns && type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
+            {type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">Monthly breakdown</div>
             <Row label={`Rent (${a.rentedCount} ${a.rentedCount === 1 ? "rental" : "rentals"} at 100%)`} value={fmt$(a.grossRent)} />
             <Row label={`At ${pct(a.occ * 100)} occupancy${a.otherIncome ? " + other income" : ""}`} value={fmt$(a.effectiveIncome)} strong />
-            {a.leaseRent > 0 && <Row label="Lease to landlord" value={`-${fmt$(a.leaseRent)}`} />}
             {a.taxesMo > 0 && <Row label="Property taxes" value={`-${fmt$(a.taxesMo)}`} />}
             {a.insMo > 0 && <Row label="Insurance" value={`-${fmt$(a.insMo)}`} />}
             <Row label="Operating costs" value={`-${fmt$(a.opex - a.mgmt)}`} />
@@ -585,10 +576,6 @@ function Analyzer({ onLock }) {
             <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">Cash needed</div>
             {a.cashInLines.length ? a.cashInLines.map((l) => <Row key={l.label} label={l.label} value={fmt$(l.amt)} />) : <div className="text-[12px] text-slate-500">Fill in the deal to see it.</div>}
             <Row label="Total" value={fmt$(a.cashIn)} strong />
-            {type === "arb" && num(d.deposit) > 0 && <div className="mt-1 text-[11px] text-slate-600">The {fmt$(num(d.deposit))} deposit comes back at the end of the lease if the house is in good shape.</div>}
-            {type === "arb" && num(d.leaseMonths) > 0 && a.cashFlow > 0 && (
-              <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[12px] text-slate-700">Over the {num(d.leaseMonths)}-month lease: <b>{fmt$(a.cashFlow * num(d.leaseMonths) - a.cashIn)}</b> after earning back your startup cash{num(d.deposit) > 0 ? `, plus the deposit back` : ""}.</div>
-            )}
           </div>
 
           {a.premium && (
@@ -615,7 +602,6 @@ function Analyzer({ onLock }) {
                   <div className="space-y-1 text-[12.5px] text-emerald-950">
                     {wit.rentNeeded != null && <div>Average rent per {showRooms && !showUnits ? "room" : "rental"}: <b>{fmt$(wit.rentNeeded)}</b> (now {fmt$(wit.avgNow)}).</div>}
                     {wit.maxPrice != null && <div>Most you can pay: <b>{fmt$(wit.maxPrice)}</b>{a.price > 0 ? ` (now ${fmt$(a.price)})` : ""}.</div>}
-                    {wit.maxLease != null && <div>Most you can lease it for: <b>{fmt$(wit.maxLease)}/mo</b>{a.leaseRent > 0 ? ` (now ${fmt$(a.leaseRent)})` : ""}.</div>}
                     {witBreakeven && witBreakeven.rentNeeded != null && <div className="text-[11.5px] text-emerald-900">Break-even rent: {fmt$(witBreakeven.rentNeeded)} average.</div>}
                   </div>
                 </>
@@ -660,7 +646,6 @@ function Checklist({ type }) {
   ];
   const byType = {
     buy: ["A lender that allows rent-by-the-room. Many DSCR lenders do, but confirm before you are under contract.", "Contractor bids for every conversion line, plus 10-15% for surprises."],
-    arb: ["Written permission in the lease to rent the rooms to others.", "A lease long enough to earn back your startup cash.", "Who handles repairs, and the landlord's response time."],
     creative: ["An attorney or title company experienced in Subject-To and seller financing.", "The mortgage statement, to verify the balance, payment and that it is current.", "A plan for the due-on-sale clause, and how payments will be made and verified."],
     hack: ["The lender's owner-occupancy rules: how long you must live there.", "Whether house rules and shared space still work for you as the person living there."],
   };
@@ -693,18 +678,18 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:5px 4px;bord
 <div class="v"><b>${esc(a.verdict.label)}</b><br>${esc(a.verdict.note)}</div>
 <h2>Results</h2><table>
 ${row("Monthly cash flow", fmt$(a.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${row("Cash-on-cash", pct(a.coc))}
-${a.paybackMonths ? row("Payback", `${Math.ceil(a.paybackMonths)} months`) : ""}${a.owns ? row("Cost per rentable room", fmt$(a.costPerRoom)) : ""}
+${row("Cost per rentable room", fmt$(a.costPerRoom))}
 ${a.dscr ? row("Lender DSCR", a.dscr.toFixed(2)) : ""}${a.breakEvenOcc != null ? row("Break-even occupancy", pct(a.breakEvenOcc)) : ""}
 ${a.hack ? row("Your monthly housing cost", fmt$(Math.max(0, a.hack.yourCost))) : ""}</table>
 <h2>Monthly</h2><table>
 ${row("Rent at 100%", fmt$(a.grossRent))}${row(`Income at ${pct(a.occ * 100)} occupancy`, fmt$(a.effectiveIncome))}
-${a.leaseRent ? row("Lease", `-${fmt$(a.leaseRent)}`) : ""}${a.taxesMo ? row("Taxes", `-${fmt$(a.taxesMo)}`) : ""}${a.insMo ? row("Insurance", `-${fmt$(a.insMo)}`) : ""}
+${a.taxesMo ? row("Taxes", `-${fmt$(a.taxesMo)}`) : ""}${a.insMo ? row("Insurance", `-${fmt$(a.insMo)}`) : ""}
 ${a.opexLines.filter((l) => l.amt).map((l) => row(l.label, `-${fmt$(l.amt)}`)).join("")}${a.mgmt ? row("Management", `-${fmt$(a.mgmt)}`) : ""}
 ${row("Net operating income", fmt$(a.noi))}${a.debtService ? row("Debt payments", `-${fmt$(a.debtService)}`) : ""}${row("Cash flow", fmt$(a.cashFlow))}</table>
 <h2>Cash needed</h2><table>${a.cashInLines.map((l) => row(l.label, fmt$(l.amt))).join("")}${row("Total", fmt$(a.cashIn))}</table>
 <h2>Rents</h2><div style="font-size:13px">${esc(rents || "none entered")}</div>
 ${a.five ? `<h2>5-year return</h2><table>${row("Cash flow", fmt$(a.five.cashflow5))}${row("Loan paid down", fmt$(a.five.paydown))}${row("Appreciation", fmt$(a.five.appreciation))}${row("Depreciation tax savings", fmt$(a.five.depreciationSavings))}${row("Total", fmt$(a.five.total))}</table>` : ""}
-${wit ? `<h2>What it takes</h2><div style="font-size:13px">${wit.rentNeeded != null ? `Average rent needed: ${fmt$(wit.rentNeeded)}. ` : ""}${wit.maxPrice != null ? `Most you can pay: ${fmt$(wit.maxPrice)}. ` : ""}${wit.maxLease != null ? `Most you can lease it for: ${fmt$(wit.maxLease)}/mo.` : ""}</div>` : ""}
+${wit ? `<h2>What it takes</h2><div style="font-size:13px">${wit.rentNeeded != null ? `Average rent needed: ${fmt$(wit.rentNeeded)}. ` : ""}${wit.maxPrice != null ? `Most you can pay: ${fmt$(wit.maxPrice)}. ` : ""}</div>` : ""}
 ${d.notes ? `<h2>Notes</h2><div style="font-size:13px;white-space:pre-wrap">${esc(d.notes)}</div>` : ""}
 <p class="muted">Prepared with the Hobknob Co-Living Academy Deal Analyzer on ${new Date().toLocaleDateString()}. For education only. These are estimates, not guarantees, and real results vary. Not financial, legal or tax advice. Verify every number before you commit.</p>
 </body></html>`;

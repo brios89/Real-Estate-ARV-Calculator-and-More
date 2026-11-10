@@ -8,7 +8,9 @@
 
 ## What this app is
 A deal analyzer for Academy students. Students type the property facts and rents, the app does the math. No property-data APIs, so nothing bills per lookup.
-- Deal types: Buy & Convert, Rental Arbitrage, Creative Buy (Sub-To or Seller Finance), House Hack.
+- Deal types: Buy & Convert, Creative Buy (Sub-To or Seller Finance), House Hack.
+- No rental arbitrage. Brian does not teach it and has never done it, so it was removed on purpose. Do not add it back.
+- Management default: $61.50 per rented room or unit per month (`MGMT_PER_ROOM`).
 - Rental models: Co-Living by the room, Private units, Hybrid.
 - Access: a student passcode checked by `api/auth.js` against the `ACADEMY_PASSCODE` env var in Vercel. It fails closed when the variable is missing.
 
@@ -19,9 +21,9 @@ A deal analyzer for Academy students. Students type the property facts and rents
 - Deploy: Vercel auto-deploys the GitHub repo.
 
 ## Validated numbers (do not break)
-The Falls example from Brian's sheet (5 rooms at $799, $181,000, 80% LTV, 7% / 30 yrs, $7,000 closing, $16,100 furnishing, 0 months to rent, Hobknob default expenses) must show $1,050/mo cash flow, $59,300 cash needed, 21.24% cash-on-cash.
+The Falls example from Brian's sheet (5 rooms at $799, $181,000, 80% LTV, 7% / 30 yrs, $7,000 closing, $16,100 furnishing, 0 months to rent, Hobknob default expenses, management set to $50 per room as on the sheet) must show $1,050/mo cash flow, $59,300 cash needed, 21.24% cash-on-cash.
 
 ## Working rules
 1. `npm run build` must pass before claiming done.
 2. Wording is B's call. Do not rename labels he approved without asking.
-3. Verdict thresholds (20/12/8% cash-on-cash, 12/18/24-month arbitrage payback) live in `TARGETS` in calc.js and are B's to tune.
+3. Verdict thresholds (20/12/8% cash-on-cash) live in `TARGETS` in calc.js and are B's to tune.
