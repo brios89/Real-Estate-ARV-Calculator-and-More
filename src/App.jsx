@@ -1,6505 +1,718 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Calculator, Building2, Layers, Banknote, RefreshCw, AlertTriangle, CheckCircle2, MinusCircle, Info, Zap, Loader2, MapPin, ExternalLink, TrendingDown, Search, Play, FileDown, X, HelpCircle, Phone, ChevronRight, ChevronLeft, Lightbulb, Minus } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Home, KeyRound, Handshake, BedDouble, Info, Save, FilePlus2, FolderOpen, Download, Lock, Trash2,
+  CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers,
+} from "lucide-react";
+import {
+  analyze, whatItTakes, num, fmt$, pct, EXPENSE_ITEMS, CAPEX_ITEMS, FURNISH_RATES, MGMT_PER_ROOM, TARGETS, DEAL_TYPES,
+} from "./calc.js";
 
-// Where the proxies live. Same-origin by default on Vercel.
-const RENT_API = "/api/rent";
-const SOLD_API = "/api/sold";
-const SOLID_TARGET = 4; // the sold-comp ARV median runs on the best N solid sales when available
-const MIN_SOLID = 2;    // fewer than this many solid sales in the median trips the thin-comps warning (per B, Aug 5)
-const AUTOCOMPLETE_API = "/api/autocomplete";
+// Hobknob Co-Living Academy Deal Analyzer. Students type the property facts, the app does the rest.
+// No property-data APIs: nothing here bills anyone per lookup.
 
-// Google web search link for any address string
-const gsearch = (addr) => `https://www.google.com/search?q=${encodeURIComponent(addr)}`;
+const BRAND = "#4c9a31"; // the logo green (#6cbb4a), deepened so white button text stays readable
+const DRAFT_KEY = "academy.draft.v1";
+const DEALS_KEY = "academy.deals.v1";
+const PASS_KEY = "academy.pass.v1";
+const MAX_ROOMS = 15, MAX_UNITS = 10;
 
-// Format property details into a readable line: "Single Family · 1 Bed · 1 Bath · Built 1920"
-const propLine = (info) => {
-  if (!info) return "";
-  const parts = [];
-  if (info.propertyType) parts.push(info.propertyType);
-  if (info.beds != null && info.beds !== "") parts.push(`${info.beds} Bed${Number(info.beds) === 1 ? "" : "s"}`);
-  if (info.baths != null && info.baths !== "") parts.push(`${info.baths} Bath${Number(info.baths) === 1 ? "" : "s"}`);
-  if (info.yearBuilt) parts.push(`Built ${info.yearBuilt}`);
-  return parts.join(" · ");
-};
-
-// Junk-comp check (flag-only): compare a comp to the subject and return reasons it may be a weak comp.
-// Tolerances: >1 bed, >1 bath, >15 yrs build age, >250 sq ft, or >1 mi away.
-// Build-type classifier: collapses architecture/property-type strings into families that actually
-// price differently. Style differences (ranch vs colonial) do NOT flag — attached vs detached does.
-const archClass = (arch, ptype) => {
-  const t = `${arch || ""} ${ptype || ""}`.toLowerCase();
-  if (/town\s?house|town\s?home|row\s?house|rowhome|attached/.test(t)) return "attached";
-  if (/condo/.test(t)) return "condo";
-  if (/manufactured|mobile|modular/.test(t)) return "manufactured";
-  if (/duplex|triplex|fourplex|multi/.test(t)) return "multi";
-  return "detached";
+const store = {
+  get(k, fallback) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; } catch { return fallback; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage off: still works for this visit */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
 
-const compFlags = (c, subj, subjSqft, win = {}) => {
-  const band = num(win.sqftBand) > 0 ? num(win.sqftBand) : 250;
-  const reach = num(win.radius) > 0 ? num(win.radius) : 1;
-  const flags = [];
-  if (!c) return flags;
-  const nOr = (v) => (v == null || v === "" ? null : Number(v));
-  const cb = nOr(c.beds), sb = nOr(subj?.beds);
-  if (cb != null && sb != null && Math.abs(cb - sb) > 1) flags.push(`${Math.abs(cb - sb)} bd off`);
-  const cba = nOr(c.baths), sba = nOr(subj?.baths);
-  if (cba != null && sba != null && Math.abs(cba - sba) > 1) flags.push(`${Math.abs(cba - sba)} ba off`);
-  const cy = nOr(c.yearBuilt), sy = nOr(subj?.yearBuilt);
-  if (cy && sy && Math.abs(cy - sy) > 15) flags.push(`built ${Math.abs(cy - sy)} yrs apart`);
-  const cs = nOr(c.sqft), ss = subjSqft;
-  // Size and distance are judged against the search the rep chose, so widening on purpose does not
-  // turn around and flag every comp that the wider search found.
-  if (cs && ss && Math.abs(cs - ss) > band) flags.push(`${Math.abs(cs - ss).toLocaleString()} sf off`);
-  const cd = nOr(c.distance);
-  if (cd != null && cd > reach) flags.push(`${cd.toFixed(1)} mi away`); // 1 mi default = normal appraiser reach in suburban markets (per B, Aug 5)
-  // different build type = different market — a townhouse can't price a detached house
-  if ((c.architecture || c.propertyType) && (subj?.architecture || subj?.propertyType)) {
-    const ca = archClass(c.architecture, c.propertyType), sa = archClass(subj.architecture, subj.propertyType);
-    if (ca !== sa) flags.push(`${ca} vs ${sa} build`);
-  }
-  return flags;
-};
+const newDeal = () => ({
+  name: "", address: "", dealType: "buy", model: "coliving",
+  beds: "", baths: "", sqft: "", bathsAfter: "",
+  roomCount: 5, unitCount: 2,
+  rooms: Array.from({ length: 5 }, () => ({ rent: "", owner: false })),
+  units: Array.from({ length: 2 }, () => ({ rent: "", owner: false })),
+  occupancy: 95, otherIncome: "", wholeHouseRent: "",
+  price: "", ltv: 80, hackLtv: 96.5, miPct: 0.55, financeReno: false, rate: 7, term: 30, closing: 7000,
+  taxMode: 0, taxPct: 1.85, taxMonthly: "", insMode: 0, insPct: 1.2, insMonthly: "", arv: "",
+  leaseRent: "", deposit: "", firstMonths: 1, arbFees: "", arbInsurance: "", leaseMonths: 12,
+  creativeMode: "subto", stBalance: "", stPayment: "", stEscrowed: true, stRate: "", stYearsLeft: "", stCashToSeller: "", stArrears: "",
+  stCarry: "", stCarryRate: 0, stCarryYears: 10, sfDown: "", sfRate: 0, sfAmort: 30, sfBalloon: 0,
+  furnish: { bedrooms: "", bathrooms: "", kitchens: "", laundry: "", living: "", dining: "", sqft: "", hire: false }, furnishOverride: "",
+  capex: {}, monthsToRent: 1, otherUpfront: "",
+  expenses: Object.fromEntries(EXPENSE_ITEMS.map(([k, , v]) => [k, v])), mgmtPerRoom: MGMT_PER_ROOM, selfManage: false,
+  appreciation: 3, landPct: 20, taxRate: 24, targetCoc: 15, currentHousing: "", notes: "",
+});
 
-// Median of a list of positive numbers (used for the group's typical $/sf and the auto size-adjust rate).
-const cleanMedian = (vals) => {
-  const v = vals.filter((x) => x > 0).sort((a, b) => a - b);
-  if (!v.length) return 0;
-  const m = Math.floor(v.length / 2);
-  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
-};
-
-// Group-level price sanity, shared by both comp sections — now tail-aware and run on SIZE-ADJUSTED $/sf
-// (items = [{ appsf, flags }]). Needs 3+ structurally-clean comps so a junk reference median can't flag
-// good comps. LOW tail reads like a distressed sale (bank sale / big fixer / family deal) — leave out.
-// HIGH tail reads like a renovated resale — which is literally what "after repair" means, so the label
-// coaches: verify on Google, and include it if it's truly remodeled.
-const PRICE_OUTLIER_PCT = 0.25;
-const flagPriceOutliers = (items) => {
-  const clean = items.filter((c) => c.flags.length === 0 && c.appsf > 0).map((c) => c.appsf).sort((a, b) => a - b);
-  if (clean.length < 3) return;
-  const m = Math.floor(clean.length / 2);
-  const mid = clean.length % 2 ? clean[m] : (clean[m - 1] + clean[m]) / 2;
-  items.forEach((c) => {
-    if (!(c.appsf > 0)) return;
-    const dev = (c.appsf - mid) / mid;
-    if (dev < -PRICE_OUTLIER_PCT) c.flags.push(`possible distressed sale · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
-    else if (dev > PRICE_OUTLIER_PCT) c.flags.push(`possible renovated resale (flip) · $${Math.round(c.appsf)} vs $${Math.round(mid)}/sf`);
-  });
-};
-// All RentCast dates are midnight-UTC ISO strings ("2026-01-22T00:00:00.000Z"). Every formatter pins
-// timeZone: "UTC" — otherwise Eastern time rolls the display back a day (Jan 22 shows as Jan 21).
-const shortDate = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
-};
-// Full date like "11/18/2024"
-const fullDate = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-  return d.toLocaleDateString("en-US", { timeZone: "UTC" });
-};
-// Clear readable date like "Jan 22, 2026" — used on the sold-comp cards
-const mediumDate = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return String(iso);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
-};
-// Subject's true last-sale line
-const lastSoldLine = (info) => {
-  if (!info || !info.lastSalePrice) return "";
-  const when = fullDate(info.lastSaleDate);
-  return `Last sold ${usd(info.lastSalePrice)}${when ? ` on ${when}` : ""}`;
-};
-// ---------- helpers ----------
-const num = (v) => {
-  const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
-  return isNaN(n) ? 0 : n;
-};
-const usd = (n) =>
-  isFinite(n) ? n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }) : "—";
-const pct = (n) => (isFinite(n) ? `${n.toFixed(1)}%` : "—");
-
-const pmt = (principal, annualRatePct, years) => {
-  const n = years * 12;
-  if (n <= 0 || principal <= 0) return 0;
-  const r = annualRatePct / 100 / 12;
-  if (r === 0) return principal / n;
-  return (principal * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
-};
-const balanceAt = (principal, annualRatePct, years, atYear) => {
-  if (principal <= 0) return 0;
-  const r = annualRatePct / 100 / 12;
-  const k = Math.max(0, atYear) * 12;
-  const M = pmt(principal, annualRatePct, years);
-  if (r === 0) return Math.max(0, principal - M * k);
-  return Math.max(0, principal * Math.pow(1 + r, k) - (M * (Math.pow(1 + r, k) - 1)) / r);
-};
-// Present value (today's dollars) of the monthly payment savings a below-market loan throws off,
-// discounted at the market rate over the remaining term. This is what a cheap assumed loan is "worth"
-// — it grows as the deal rate drops below market.
-const pvSavings = (loan, ratePct, mktPct, years) => {
-  const n = years * 12;
-  if (loan <= 0 || n <= 0) return 0;
-  const mo = pmt(loan, mktPct, years) - pmt(loan, ratePct, years); // monthly savings vs market
-  if (mo <= 0) return 0;
-  const r = mktPct / 100 / 12; // discount at the market monthly rate
-  if (r === 0) return mo * n;
-  return (mo * (1 - Math.pow(1 + r, -n))) / r;
-};
-
-// Returns snapshot + 5-year wealth projection for the buyer deck (shared across creative tabs).
-// Loan-takeover savings — mirrors the on-screen Rate Savings panel so the deck shows identical figures.
-// origTerm defaults to 30 (standard original mortgage term); P/rate/term/mkt/payment come from the deal's loan.
-function computeLoanSavings({ P, rate, term, mkt, origTerm = 30, dealPayment = 0 }) {
-  if (!(P > 0)) return { totalSaved: 0 };
-  const effOrig = Math.max(term, origTerm);
-  const seasoned = Math.max(0, effOrig - term);
-  const payDeal = pmt(P, rate, term);
-  const payNew = pmt(P, mkt, effOrig);
-  const intSubTo = Math.max(0, payDeal * term * 12 - P);
-  const intNew = Math.max(0, payNew * effOrig * 12 - P);
-  const intSameTerm = Math.max(0, pmt(P, mkt, term) * term * 12 - P);
-  const rateSaved = Math.max(0, intSameTerm - intSubTo);
-  const seasoningSaved = Math.max(0, intNew - intSameTerm);
-  const totalSaved = rateSaved + seasoningSaved;
-  const haveRealPmt = dealPayment > 0;
-  const tiPortion = haveRealPmt ? Math.max(0, dealPayment - payDeal) : 0;   // taxes/insurance baked into the real payment
-  const newPmtFull = payNew + tiPortion;                                    // fresh market loan carrying the same T&I
-  const moRelief = haveRealPmt ? Math.max(0, newPmtFull - dealPayment) : Math.max(0, payNew - payDeal);
-  const takePayment = haveRealPmt ? dealPayment : payDeal;
-  return { P, rate, mkt, term, effOrig, seasoned, payDeal, payNew, newPmtFull, intSubTo, intNew, rateSaved, seasoningSaved, totalSaved, moRelief, takePayment, haveRealPmt };
-}
-
-function buildDealExtras({ loanAmt, rate, term, arv, equity, cashFlow, cashToClose, coc, cashIn = 0, reservePct = 0 }) {
-  const paydown5 = loanAmt > 0 ? loanAmt - balanceAt(loanAmt, rate, term, 5) : 0;
-  const appreciation5 = arv > 0 ? arv * (Math.pow(1.03, 5) - 1) : 0;
-  const cumCF5 = cashFlow * 60;
-  const startEquity = Math.max(0, equity);
-  // 1–30 year return curve: equity captured + loan paydown + cumulative cash flow + 3%/yr appreciation
-  const curveSeries = [];
-  for (let y = 1; y <= 30; y++) {
-    const paydown = loanAmt > 0 ? loanAmt - balanceAt(loanAmt, rate, term, y) : 0;
-    const appr = arv > 0 ? arv * (Math.pow(1.03, y) - 1) : 0;
-    const cumCF = cashFlow * 12 * y;
-    curveSeries.push({ year: y, total: startEquity + paydown + appr + cumCF });
-  }
-  const milestones = [1, 5, 10, 15, 20, 25, 30].map((y) => curveSeries[y - 1]).filter(Boolean);
-  return {
-    returns: { cashToClose, monthlyCF: cashFlow, annualCF: cashFlow * 12, coc },
-    upsideBase: { cashIn, monthlyCF: cashFlow, reservePct },
-    projection: { startEquity, paydown5, appreciation5, cumCF5, total5: startEquity + paydown5 + appreciation5 + cumCF5, apprRate: 3 },
-    curve: { series: curveSeries, milestones, cashToClose },
-    exits: [
-      "Hold as a cash-flowing long-term rental",
-      "BRRRR — season, refinance, and recycle your capital",
-      "Resell on terms to your own buyer for a markup",
-    ],
-  };
-}
-
-// ---------- module-scope inputs (stable refs = no focus loss) ----------
-const InfoDot = ({ text }) => {
+// ---------- small UI pieces ----------
+const Tip = ({ text }) => {
   const [open, setOpen] = useState(false);
   return (
     <span className="relative inline-flex">
-      <button type="button"
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        className="text-slate-500 hover:text-emerald-600" aria-label="more info">
+      <button type="button" onClick={() => setOpen((o) => !o)} onBlur={() => setOpen(false)} className="text-slate-400 hover:text-slate-700" aria-label="More info">
         <Info className="h-3.5 w-3.5" />
       </button>
-      {open && (
-        <span className="absolute left-1/2 top-5 z-30 w-52 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-white shadow-lg">
-          {text}
-        </span>
-      )}
+      {open && <span className="absolute left-1/2 top-5 z-30 w-64 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-2.5 text-[11.5px] font-normal normal-case leading-snug tracking-normal text-slate-700 shadow-lg">{text}</span>}
     </span>
   );
 };
-
-const Field = ({ label, hint, info, children }) => (
-  <label className="block">
-    <div className="flex items-baseline justify-between gap-2">
-      <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-        {label}{info && <InfoDot text={info} />}
-      </span>
-      {hint && <span className="text-[10px] text-slate-600">{hint}</span>}
-    </div>
-    <div className="mt-1">{children}</div>
+const Field = ({ label, hint, tip, children, className = "" }) => (
+  <label className={`block ${className}`}>
+    <span className="mb-1 flex items-center justify-between gap-2">
+      <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}{tip && <Tip text={tip} />}</span>
+      {hint && <span className="text-[10.5px] text-slate-500">{hint}</span>}
+    </span>
+    {children}
   </label>
 );
-
-const TextInput = ({ value, onChange, placeholder }) => (
-  <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
-);
-
-// Address typeahead: shows real address suggestions as you type (debounced).
-const AddressAutocomplete = ({ value, onChange, onPick, placeholder }) => {
-  const [sugs, setSugs] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [hi, setHi] = useState(-1);
-  const boxRef = useRef(null);
-  const timer = useRef(null);
-
-  useEffect(() => {
-    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-
-  const fetchSugs = (q) => {
-    if (timer.current) clearTimeout(timer.current);
-    if (!q || q.trim().length < 4) { setSugs([]); setOpen(false); return; }
-    timer.current = setTimeout(async () => {
-      try {
-        const r = await fetch(`${AUTOCOMPLETE_API}?q=${encodeURIComponent(q)}`);
-        if (!r.ok) { setSugs([]); return; }
-        const data = await r.json();
-        setSugs(data.suggestions || []);
-        setOpen((data.suggestions || []).length > 0);
-        setHi(-1);
-      } catch { setSugs([]); }
-    }, 250);
-  };
-
-  const handleChange = (v) => { onChange(v); fetchSugs(v); };
-  const pick = (s) => { onChange(s); onPick && onPick(s); setOpen(false); setSugs([]); };
-
-  const onKey = (e) => {
-    if (!open || !sugs.length) return;
-    if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, sugs.length - 1)); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-    else if (e.key === "Enter" && hi >= 0) { e.preventDefault(); pick(sugs[hi]); }
-    else if (e.key === "Escape") setOpen(false);
-  };
-
-  return (
-    <div ref={boxRef} className="relative">
-      <input
-        type="text" value={value} placeholder={placeholder}
-        onChange={(e) => handleChange(e.target.value)}
-        onFocus={() => sugs.length && setOpen(true)}
-        onKeyDown={onKey}
-        autoComplete="off"
-        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-      />
-      {open && sugs.length > 0 && (
-        <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-          {sugs.map((s, i) => (
-            <li key={i}>
-              <button
-                type="button"
-                onMouseEnter={() => setHi(i)}
-                onClick={() => pick(s)}
-                className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm ${i === hi ? "bg-emerald-50 text-emerald-800" : "text-slate-700 hover:bg-slate-50"}`}
-              >
-                <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-600" />
-                <span>{s}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-};
-
-// filled: the placeholder is a real number the app pulled, not a hint. Show it dark so it reads as
-// data. Still a placeholder underneath, so typing replaces it and a fresh pull can update it.
-const MoneyInput = ({ value, onChange, placeholder, filled }) => (
-  <div className="flex items-center rounded-lg border border-slate-200 bg-white transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
-    <span className="pl-3 pr-1 text-sm text-slate-600">$</span>
-    <input type="text" inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-      className={`w-full bg-transparent py-2 pr-3 text-sm tabular-nums text-slate-900 outline-none font-mono ${filled && !value ? "placeholder:font-semibold placeholder:text-slate-800" : ""}`} />
+const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100";
+const Money = ({ value, onChange, placeholder = "0" }) => (
+  <div className="relative">
+    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">$</span>
+    <input inputMode="decimal" className={`${inputCls} pl-6`} value={value ?? ""} placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value.replace(/[^0-9.]/g, ""))} />
   </div>
 );
-
-const PlainInput = ({ value, onChange, placeholder, suffix }) => (
-  <div className="flex items-center rounded-lg border border-slate-200 bg-white transition focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-100">
-    <input type="text" inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-      className="w-full bg-transparent px-3 py-2 text-sm tabular-nums text-slate-900 outline-none font-mono" />
-    {suffix && <span className="pr-3 text-sm text-slate-600">{suffix}</span>}
+const Num = ({ value, onChange, placeholder = "0", suffix }) => (
+  <div className="relative">
+    <input inputMode="decimal" className={`${inputCls} ${suffix ? "pr-10" : ""}`} value={value ?? ""} placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value.replace(/[^0-9.]/g, ""))} />
+    {suffix && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-500">{suffix}</span>}
   </div>
 );
-
-const Stat = ({ label, value, tone = "default", big = false, sub }) => {
-  const tones = { default: "text-slate-900", good: "text-emerald-600", bad: "text-rose-600", warn: "text-amber-600" };
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}</div>
-      <div className={`mt-0.5 font-mono tabular-nums ${big ? "text-2xl" : "text-lg"} font-bold ${tones[tone]}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-slate-600">{sub}</div>}
-    </div>
-  );
-};
-
-const Verdict = ({ status, headline, detail }) => {
-  const map = {
-    go: { bg: "bg-emerald-50", bd: "border-emerald-200", tx: "text-emerald-800", Icon: CheckCircle2, ic: "text-emerald-600" },
-    maybe: { bg: "bg-amber-50", bd: "border-amber-200", tx: "text-amber-900", Icon: AlertTriangle, ic: "text-amber-600" },
-    no: { bg: "bg-rose-50", bd: "border-rose-200", tx: "text-rose-800", Icon: MinusCircle, ic: "text-rose-600" },
-  };
-  const s = map[status] || map.maybe;
-  const Icon = s.Icon;
-  return (
-    <div className={`flex items-start gap-3 rounded-xl border ${s.bd} ${s.bg} px-4 py-3`}>
-      <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${s.ic}`} />
-      <div>
-        <div className={`text-sm font-bold ${s.tx}`}>{headline}</div>
-        {detail && <div className={`mt-0.5 text-xs ${s.tx} opacity-80`}>{detail}</div>}
-      </div>
-    </div>
-  );
-};
-
-const SectionTitle = ({ children }) => (
-  <h3 className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-600">{children}</h3>
+const Text = ({ value, onChange, placeholder }) => (
+  <input className={inputCls} value={value ?? ""} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
 );
-
-// ---------- comp hover card ----------
-// One card for every comp pin, on both maps, laid out like RentCast's: address on two lines, then
-// distance | beds | baths | sq ft, then the price and a date. Plain HTML because both the Google info
-// window and the Leaflet tooltip take an HTML string.
-const escHtml = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-const longDate = (d) => {
-  const t = Date.parse(d);
-  return Number.isFinite(t) ? new Date(t).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }) : null;
-};
-// Google / Street View / Maps links for any comp, opened in a new tab. Street View needs coordinates.
-const compLinks = (c) => {
-  const a = String(c.address || "").trim();
-  if (!a) return [];
-  const out = [{ label: "Google", href: gsearch(a) }];
-  if (c.lat != null && c.lng != null) out.push({ label: "Street View", href: `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lng}` });
-  out.push({ label: "Google Maps", href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a)}` });
-  return out;
-};
-const compCardHtml = ({ n, address, distance, beds, baths, sqft, price, priceSuffix = "", priceColor = "#06b6d4", dateLine, note, noteColor = "#475569", links = [] }) => {
-  const parts = String(address || "").split(",").map((x) => x.trim()).filter(Boolean);
-  const line1 = parts.length > 2 ? parts.slice(0, -2).join(", ") : parts[0] || "";
-  const line2 = parts.length > 2 ? parts.slice(-2).join(", ") : parts.slice(1).join(", ");
-  const facts = [
-    distance != null ? `${Number(distance).toFixed(2)} mi` : null,
-    beds != null ? `${beds} BD` : null,
-    baths != null ? `${baths} BA` : null,
-    num(sqft) > 0 ? `${Math.round(num(sqft)).toLocaleString()} ft<sup>2</sup>` : null,
-  ].filter(Boolean);
-  const sep = '<span style="color:#cbd5e1;margin:0 7px">|</span>';
-  return `<div style="font-family:inherit;min-width:220px;max-width:290px;padding:10px 12px;line-height:1.35;color:#0f172a">
-    <div style="font-size:13.5px">${n ? `<span style="color:#64748b;font-weight:700;margin-right:4px">#${n}</span>` : ""}${escHtml(line1)}</div>
-    ${line2 ? `<div style="font-size:13.5px">${escHtml(line2)}</div>` : ""}
-    ${facts.length ? `<div style="margin-top:6px;font-size:12.5px;color:#475569">${facts.join(sep)}</div>` : ""}
-    <div style="margin-top:6px;font-size:12.5px;color:#475569">${price ? `<span style="color:${priceColor};font-size:16px;font-weight:600">${usd(price)}</span>${priceSuffix ? ` ${priceSuffix}` : ""}` : ""}${price && dateLine ? sep : ""}${dateLine ? escHtml(dateLine) : ""}</div>
-    ${note ? `<div style="margin-top:5px;font-size:11.5px;color:${noteColor}">${escHtml(note)}</div>` : ""}
-    ${links.length ? `<div style="margin-top:7px;padding-top:6px;border-top:1px solid #e2e8f0;font-size:12px">${links.map((l) => `<a href="${escHtml(l.href)}" target="_blank" rel="noopener noreferrer" style="color:#047857;font-weight:600;text-decoration:none;margin-right:12px">${escHtml(l.label)} &#8599;</a>`).join("")}</div>` : ""}
-  </div>`;
-};
-// Rent comp and sold comp flavors of the card.
-const rentCompHtml = (c, n) => compCardHtml({
-  n, address: c.address, distance: c.distance, beds: c.beds, baths: c.baths, sqft: c.sqft,
-  price: c.rent, priceSuffix: "/mo",
-  dateLine: c.listedDate ? `Listed ${longDate(c.listedDate)}` : (c.daysOld != null ? `Seen ${c.daysOld} days ago` : null),
-  note: [c.removedDate ? `Off market ${longDate(c.removedDate)}` : (c.status === "Active" ? "Still listed" : null), c.match != null ? `${c.match}% match` : null].filter(Boolean).join(" · ") || null,
-  links: compLinks(c),
-});
-const soldCompHtml = (c, n) => compCardHtml({
-  n, address: c.address, distance: c.distance, beds: c.beds, baths: c.baths, sqft: c.sqft,
-  price: c.salePrice, priceColor: "#059669",
-  dateLine: c.saleDate ? `Sold ${longDate(c.saleDate)}` : null,
-  note: `${c.ppsf ? `$${c.ppsf}/sf · ` : ""}${c.included ? "In the ARV · click to remove" : `Out of the ARV${c.flags && c.flags.length ? ` (${c.flags.join(", ")})` : ""} · click to include`}`,
-  noteColor: c.included ? "#047857" : "#b45309",
-  links: compLinks(c),
-});
-
-// ---------- main ----------
-// Interactive comp map (Leaflet, loaded from CDN in index.html). Subject = red ★; comps = numbered pins:
-// emerald = in the ARV, amber = flagged out, slate = out for other reasons. Clicking a pin toggles it
-// in/out of that section's ARV — same effect as the include/exclude buttons on the cards.
-const CompMap = ({ subject, pins, onToggle, pinColor, pinTip, pinHtml, teardrop = false, tall = false }) => {
-  const boxRef = useRef(null);
-  const mapRef = useRef(null);
-  const fitKeyRef = useRef("");
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    if (!boxRef.current || mapRef.current) return;
-    let tries = 0;
-    let cancelled = false;
-    const boot = () => {
-      if (cancelled) return;
-      const L = window.L;
-      if (!L) { if (tries++ < 40) setTimeout(boot, 150); return; }   // wait for the CDN script
-      const m = L.map(boxRef.current, { scrollWheelZoom: false, zoomControl: false });
-      // + / − buttons, and scroll-wheel zoom once someone clicks into the map (so scrolling the page
-      // past the map never hijacks it). Double-click and pinch zoom work as usual.
-      L.control.zoom({ position: "bottomright" }).addTo(m);
-      m.on("click", () => m.scrollWheelZoom.enable());
-      m.on("mouseout", () => m.scrollWheelZoom.disable());
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
-      mapRef.current = { m, layer: L.layerGroup().addTo(m) };
-      setReady(true);
-    };
-    boot();
-    return () => { cancelled = true; if (mapRef.current) { mapRef.current.m.remove(); mapRef.current = null; } };
-  }, []);
-  useEffect(() => {
-    const L = window.L;
-    if (!ready || !L || !mapRef.current) return;
-    const { m, layer } = mapRef.current;
-    m.closePopup();
-    layer.clearLayers();
-    const pts = [];
-    const dot = (bg, txt, size = 24, fs = 11) => L.divIcon({
-      className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-      html: `<div style="background:${bg};color:#fff;border-radius:9999px;width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${fs}px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${txt}</div>`,
-    });
-    const drop = (fill, txt) => L.divIcon({
-      className: "", iconSize: [30, 40], iconAnchor: [15, 39],
-      html: `<div style="position:relative;width:30px;height:40px"><img src="${pinSvg(fill)}" width="30" height="40" style="display:block"/><span style="position:absolute;top:8px;left:0;width:30px;text-align:center;color:#fff;font-weight:700;font-size:11px">${txt}</span></div>`,
-    });
-    if (subject && subject.lat != null && subject.lng != null) {
-      L.marker([subject.lat, subject.lng], { icon: teardrop ? drop(SUBJECT_PIN, "") : dot("#dc2626", "★", 28, 13), zIndexOffset: 1000 })
-        .addTo(layer).bindTooltip(subject.label || "Subject");
-      pts.push([subject.lat, subject.lng]);
-    }
-    pins.forEach((p) => {
-      if (p.lat == null || p.lng == null) return;
-      const bg = pinColor ? pinColor(p) : p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8";
-      const mk = L.marker([p.lat, p.lng], { icon: teardrop ? drop(bg, String(p.n)) : dot(bg, String(p.n)) }).addTo(layer);
-      if (pinHtml) {
-        // A popup, not a tooltip: tooltips vanish the moment the mouse leaves the pin, so the links in
-        // the card could never be clicked. This one stays while the mouse is on the pin or the card.
-        const el = document.createElement("div");
-        el.innerHTML = pinHtml(p);
-        const pop = L.popup({ closeButton: false, autoPan: false, className: "comp-pop", offset: [0, teardrop ? -32 : -8], maxWidth: 320 }).setContent(el);
-        let t = null;
-        const keep = () => clearTimeout(t);
-        const later = () => { clearTimeout(t); t = setTimeout(() => m.closePopup(pop), 350); };
-        el.addEventListener("mouseenter", keep);
-        el.addEventListener("mouseleave", later);
-        mk.on("mouseover", () => { keep(); pop.setLatLng(mk.getLatLng()); m.openPopup(pop); });
-        mk.on("mouseout", later);
-      } else mk.bindTooltip(pinTip ? pinTip(p) : `#${p.n} · ${usd(p.price)} · ${p.included ? "in ARV — click to remove" : "out — click to include"}`);
-      if (onToggle) mk.on("click", () => onToggle(p.i));
-      pts.push([p.lat, p.lng]);
-    });
-    // Re-fit only when the pins themselves move, so a rep's zoom survives everything else updating.
-    const key = pts.map((q) => q.join(",")).join("|");
-    if (pts.length && key !== fitKeyRef.current) { fitKeyRef.current = key; m.invalidateSize(); m.fitBounds(pts, { padding: [28, 28], maxZoom: 16 }); }
-  }, [ready, subject, pins, onToggle, pinColor, pinTip, pinHtml, teardrop]);
-  return <div ref={boxRef} className={tall ? "relative z-0 h-full min-h-[320px] w-full" : "relative z-0 mt-2 h-64 w-full overflow-hidden rounded-lg border border-slate-200"} />;
-};
-
-// Street View links for a comp: interactive pano when we have coordinates, place search otherwise.
-const svLink = (c) => (c.lat != null && c.lng != null
-  ? `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c.lat},${c.lng}`
-  : `https://www.google.com/maps/place/${encodeURIComponent(c.address || "")}`);
-
-// Lot size: RentCast reports square feet; read it like an appraiser (acres once it's big enough to think in acres).
-const fmtLot = (sf) => {
-  const n = Number(sf);
-  if (!n || n <= 0) return null;
-  return n >= 8712 ? `${(n / 43560).toFixed(2)} acres` : `${Math.round(n).toLocaleString()} sf`;
-};
-
-// Comp detail pop-up — opens when a comp card's photo is clicked. Shows everything RentCast already
-// sent with the pull (zero extra API credits). The big photo clicks through to interactive Street
-// View, and the Include button is the exact same toggle as the card's checkbox and the map pin.
-const DetailTile = ({ label, value, amber }) => (value == null || value === "" ? null : (
-  <div className={`rounded-lg border p-2.5 ${amber ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/50"}`}>
-    <div className={`text-[10px] font-semibold uppercase tracking-wide ${amber ? "text-amber-600" : "text-slate-600"}`}>{label}</div>
-    <div className={`mt-0.5 text-sm font-semibold ${amber ? "text-amber-800" : "text-slate-800"}`}>{value}</div>
-  </div>
-));
-
-const CompDetailModal = ({ data, onClose, onToggle }) => {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  if (!data) return null;
-  const d = data;
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-3 sm:p-6" onClick={onClose}>
-      <div className="mx-auto my-4 w-full max-w-2xl rounded-2xl bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Comp #{d.n} · {d.source}</div>
-            <div className="mt-0.5 truncate text-sm font-bold text-slate-900">{d.address || "(address withheld)"}</div>
-          </div>
-          <button type="button" onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"><X className="h-4 w-4" /></button>
-        </div>
-        {d.address && (
-          <a href={d.sv} target="_blank" rel="noopener noreferrer" title="Open interactive Street View"
-            className="relative mt-3 block h-52 w-full overflow-hidden rounded-xl bg-slate-100 sm:h-64">
-            <span className="absolute inset-0 flex items-center justify-center"><Building2 className="h-10 w-10 text-slate-300" /></span>
-            <img src={`/api/photo?size=640x360&address=${encodeURIComponent(d.address)}`} alt=""
-              className="absolute inset-0 h-full w-full object-cover"
-              onError={(e) => { e.currentTarget.style.display = "none"; }} />
-            <span className="absolute bottom-2 right-2 rounded bg-slate-900/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">Street View — click to explore</span>
-          </a>
-        )}
-        {d.flags.length > 0 && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-            <span>{d.flags.join(" · ")}</span>
-          </div>
-        )}
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {d.tiles.map((t, ix) => <DetailTile key={ix} {...t} />)}
-        </div>
-        {d.history && d.history.length > 0 && (
-          <div className="mt-4">
-            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-600">Recorded sale history</div>
-            <div className="mt-1.5 overflow-hidden rounded-lg border border-slate-200">
-              <table className="w-full text-left text-[11px]">
-                <thead><tr className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-600"><th className="px-2.5 py-1.5 font-semibold">Date</th><th className="px-2.5 py-1.5 font-semibold">Price</th><th className="px-2.5 py-1.5 font-semibold">$ / sqft</th></tr></thead>
-                <tbody>
-                  {d.history.map((h, ix) => (
-                    <tr key={ix} className="border-t border-slate-100">
-                      <td className="px-2.5 py-1.5 font-mono text-slate-600">{mediumDate(h.date)}</td>
-                      <td className="px-2.5 py-1.5 font-mono font-bold text-slate-800">{h.price ? usd(h.price) : "—"}</td>
-                      <td className="px-2.5 py-1.5 font-mono text-slate-700">{h.price && d.sqftNum > 0 ? `$${Math.round(h.price / d.sqftNum)}` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-600">County-recorded sales only — MLS listing history and price changes aren't in RentCast's data.</div>
-          </div>
-        )}
-        <div className="mt-4 flex items-center justify-between gap-2">
-          <button type="button" onClick={onToggle}
-            className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-bold ${d.included ? "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
-            <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${d.included ? "border-white bg-white/20 text-white" : "border-slate-300 text-transparent"}`}>✓</span>
-            {d.included ? "In the ARV — click to remove" : "Out of the ARV — click to include"}
-          </button>
-          {d.address && (
-            <a href={gsearch(d.address)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold text-emerald-600 hover:underline">Google this property</a>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ============================== OFFER CALL MODE ==============================
-// A guided walk through YLHB's Acquisitions Script + SOP for the Offer Call.
-// Stages follow the script; answers captured here drive the strategy engine, which
-// ranks Cash / Sub-To / Hybrid / Seller Finance / Novation and hands the rep the
-// exact script language to pitch it. Scoring thresholds live in scoreStrategies —
-// tune them there. Compliance: no guarantees, ever (SOP Step 10).
-
-// Pull a usable first name out of a county owner record. Records are messy: "Darryl Cook",
-// "COOK DARRYL", "COOK, DARRYL", "SMITH FAMILY TRUST". Entities get skipped (no human to greet),
-// "LAST, FIRST" is read after the comma, otherwise the first token wins. Always prefilled as a
-// suggestion the rep can overwrite — the owner of record isn't always who's on the phone.
-const ENTITY_WORDS = /\b(llc|l\.l\.c|inc|corp|corporation|company|co|trust|trustee|estate|properties|holdings|partners|lp|llp|associates|group|bank|na|ministries|church)\b/i;
-const titleCase = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-const ownerFullName = (names) => {
-  const raw = Array.isArray(names) ? names.filter(Boolean)[0] : names;
-  if (!raw) return "";
-  const full = String(raw).trim();
-  if (!full || ENTITY_WORDS.test(full)) return "";
-  // "LAST, FIRST M" -> "First M Last"; otherwise keep the recorded order.
-  const ordered = full.includes(",")
-    ? `${full.split(",").slice(1).join(" ").trim()} ${full.split(",")[0].trim()}`
-    : full;
-  const parts = ordered.split(/\s+/).map((t) => t.replace(/[^A-Za-z'-]/g, "")).filter((t) => t.length > 0);
-  if (!parts.length) return "";
-  return parts.map(titleCase).join(" ");
-};
-
-const INITIAL_CALL = {
-  sellerName: "", bookedBy: "",
-  callType: "", lastTalked: "", lastNotes: "",   // "followup" = nobody booked it, we are calling back (per B, Oct 16 2026)
-  motivation: "", motivNotes: "",
-  occupancy: "", tenantRent: "", leaseEnds: "", stmt: "",
-  signed: "", accessHow: "", accessCode: "", accessTimes: "", accessNotes: "", condition: "", conditionAuto: "", loan: "", balance: "", payment: "", rate: "", behind: "",
-  escrowed: "", tiMonthly: "",   // is taxes+insurance inside that payment, and if not, what they run monthly
-  hoa: "", hoaAmt: "",           // HOA dues come out of the same rent the payment does, so they belong in the test
-  timeline: "", others: "",
-  ask: "", priceBasis: "", needCash: "", needCashNotes: "",
-  condItems: "",                 // JSON map of item key -> note, for the walkthrough checklist
-  wentWith: "",                  // the strategy the deal ended up as (drives which buyer deck to download)
-  chosen: "",                    // the strategy the rep is actually pitching (may differ from the engine's top pick)
-  terms: "",
-};
-
-const PILLARS = [
-  { id: "motivation", label: "Motivation", done: (c) => !!c.motivation },
-  { id: "condition", label: "Condition", done: (c) => !!c.condition },
-  { id: "timeline", label: "Timeline", done: (c) => !!c.timeline },
-  { id: "price", label: "Price", done: (c) => num(c.ask) > 0 },
-];
-
-const REBUTTALS = [
-  { t: "“There's a similar house listed for this much.”", a: "“A listed price is just an asking price, not a sale. The only price that counts is what a buyer who is ready, willing and able will actually pay. Right now, that's us, and this is what we can do.”" },
-  { t: "“Zillow says it's worth this much.”", a: "“Let me ask you this — has an employee of Zillow ever gone into your house to take pictures and analyze how much work it needs or doesn't need? Zillow takes the average sales price of houses sold on the MLS, and most of those are retail ready — updated, no work needed.”" },
-  { t: "“My house appraised for this much.”", a: "“Here's the thing with appraisals — the appraiser isn't the one buying the house. It's only worth what a buyer will pay. And right now average days on market is 60 to 90 days. A lot can happen in that time.”" },
-];
-
-// PITI vs market rent. A sub-to only makes sense as a hold if the payment leaves room for the
-// costs people forget: vacancy, maintenance, CapEx, and management run roughly 25-35% of rent.
-// At or under 65% of rent there is real cash flow. Past 75% you are buying a break-even deal
-// with due-on-sale risk attached. Seller-quoted payments often exclude escrow, so taxes and
-// insurance get added when the rep says the payment does not include them.
-// A loan well under today's market rate is an asset in its own right. At or below this, the deal does
-// not get to quietly die on the vine: it goes to the head of acquisitions if it is not locked up.
-// Per B (Sep 30 2026): 5% or lower (was under 4%).
-const LOW_RATE = 5.0;
-const rateNum = (v) => {
-  const n = parseFloat(String(v || "").replace(/[^0-9.]/g, ""));
-  return isNaN(n) || n <= 0 ? null : n;
-};
-const isLowRate = (v) => { const n = rateNum(v); return n != null && n <= LOW_RATE; };
-
-// Per B (Oct 16 2026): until someone picks a condition or types a number, repairs run at $5K so the MAO
-// shows. It is flagged everywhere as a placeholder, and it never stands in for a condition read.
-const REPAIR_DEFAULT = 5000;
-// Per B (Oct 16 2026): never more than $10K down (cash to the seller at closing) on a creative offer.
-const CREATIVE_DOWN_MAX = 10000;
-const ANCHOR_PCT = 0.8;   // open here, not at the ceiling, so every concession still lands under max
-// Why the opening offer exists, in one place so the Cash tab and the call flow say it the same way (per B, Oct 16 2026).
-const ANCHOR_WHY = "It is better for the seller to work you up from your opening offer than for you to work them down from their number. Every move goes in their direction, so they feel like they are winning, and you still land under your max.";
-
-// How far the seller's number sits from our cash max decides what the Numbers stage should coach.
-// "Close" uses the same 15% line the strategy engine already uses for "well above cash", so the two
-// screens never disagree. Tunable once real calls show where YLHB sellers actually land.
-const CLOSE_BAND_PCT = 0.15;
-const priceBand = (ask, maxCash) => {
-  if (!(maxCash > 0)) return "no-max";
-  if (!(ask > 0)) return "no-ask";
-  if (ask <= Math.round(maxCash * ANCHOR_PCT)) return "under-anchor";
-  if (ask <= maxCash) return "in-range";
-  if (ask - maxCash <= maxCash * CLOSE_BAND_PCT) return "close";
-  return "far";
-};
-// Turns the anchor into how a rep says it out loud: $41,000 -> "low 40s", $187,000 -> "high 180s".
-const anchorWords = (n) => {
-  const k = Math.floor(num(n) / 1000);
-  if (k <= 0) return "";
-  const d = k % 10, tens = k - d;
-  return `${d <= 3 ? "low" : d <= 6 ? "mid" : "high"} ${tens}s`;
-};
-
-// Reads the seller's "cash I need at closing" against their own number, the loan payoff and our cash
-// offer. The ladder asks for money in their pocket AFTER the loan is paid off, so the honest ceiling on
-// that need is their number minus the payoff, not their number. A need above that ceiling is a
-// misunderstanding to clear up on the call, never "room" for a creative deal.
-const readCashNeed = (cs, maxCash) => {
-  const need = num(cs.needCash), ask = num(cs.ask);
-  if (need <= 0) return null;
-  const hasLoan = cs.loan === "yes";
-  const payoff = hasLoan ? num(cs.balance) : 0;
-  const loanUnasked = !cs.loan;
-  const equity = ask > 0 ? ask - payoff : null;            // what their own number leaves after the payoff
-  const cashNet = maxCash > 0 ? Math.round(maxCash) - payoff : null;   // what our max cash offer leaves them
-  const anchor = maxCash > 0 ? Math.round(maxCash * ANCHOR_PCT) : 0;
-  const anchorNet = maxCash > 0 ? anchor - payoff : null;
-  let status = "ok";
-  if (hasLoan && payoff <= 0) status = "no-balance";
-  else if (equity == null) status = "no-ask";
-  else if (equity <= 0 || need > equity) status = "over";
-  const termsRoom = status === "ok" ? equity - need : null;
-  return { need, ask, hasLoan, payoff, loanUnasked, equity, cashNet, anchor, anchorNet, maxCash: Math.round(maxCash || 0), status, termsRoom };
-};
-const PITI_GOOD = 0.65, PITI_LIMIT = 0.75;
-const pitiCheck = (cs, rent) => {
-  const base = num(cs.payment);
-  if (base <= 0 || !rent || rent <= 0) return null;
-  const addTI = cs.escrowed === "no" ? num(cs.tiMonthly) : 0;
-  const addHOA = cs.hoa === "yes" ? num(cs.hoaAmt) : 0;   // dues are a real monthly cost against the same rent
-  const piti = base + addTI + addHOA;
-  const ratio = piti / rent;
-  const missingTI = cs.escrowed === "no" && num(cs.tiMonthly) <= 0;
-  const missingHOA = cs.hoa === "yes" && num(cs.hoaAmt) <= 0;
-  return {
-    piti, rent, ratio, missingTI, missingHOA, hoa: addHOA,
-    unknownEscrow: !cs.escrowed,
-    verdict: ratio <= PITI_GOOD ? "good" : ratio <= PITI_LIMIT ? "thin" : "fail",
-    targetPiti: Math.round(rent * PITI_GOOD),
-  };
-};
-
-// A real repair number already says what the condition is. The calculator prices light at $15/sf,
-// moderate at $30 and a gut at $50, so we read the dollars back through those same rates and split
-// at the midpoints. Used only when the rep has not tapped a condition chip, and always labelled as
-// inferred rather than treated as something the seller said.
-const impliedCondition = (repairs, sqft) => {
-  const r = num(repairs), sf = num(sqft);
-  if (r <= 0 || sf <= 0) return null;
-  const psf = r / sf;
-  return psf < 22 ? "light" : psf <= 40 ? "moderate" : "heavy";
-};
-
-// Every number typed on the strategy tabs belongs to one property. These are the fresh-screen values,
-// used to clear the tabs on an address change and to tell whether there is anything worth saving.
-const TAB_DEFAULTS = {
-  rentOverride: "", holdingOverride: "",
-  // Shared across strategies (per B, Oct 16 2026: one number, every screen). Closing costs and reserves
-  // are one value for Sub-To, Hybrid and Seller Finance (BRRRR keeps its own 10% reserves). Price, loan balance, payment, rent,
-  // repairs, taxes and insurance, HOA and the fee are not here at all: they live on the call or the
-  // deal itself, and every box that shows them edits that one value.
-  closing: "3500", reservePct: "12", loanYrsLeft: "30", mktRate: "7.5",
-  stArrears: "", stCashSeller: "",
-  hyDown: "", hyRate: "0", hyTerm: "30",
-  sfDown: "", sfRate: "0", sfAmort: "30", sfBalloon: "0",
-  novAsIs: "", novCommission: "6", novClosing: "5000", novProfit: "30000",
-  aiZillow: "", aiRealtor: "", aiRedfin: "", aiOther: "", aiExit: "", aiOffer: "",
-  brPurchase: "", brPurchaseMode: "", brLtv: "75", brRate: "7.5", brTerm: "30",
-  brReservePct: "10",   // BRRRR keeps its own 10% reserves (per B, Oct 16 2026). The strategy tabs share 12%.
-};
-
-// The As-Is formula from Jerry Norton's Instant Offer Calculator (per B, Oct 16 2026). No comps and no
-// repair estimate: average the online as-is values, take the share a cash buyer pays for that price
-// range, subtract the wholesale fee for that range, and open at a set % of that max buy.
-// The sheet calls $100,000 exactly "Under $100K" for the offer % but not for the exit %. Here one
-// rule is used for all three: under $100,000 is the first range, $100,000 to $200,000 the second.
-//
-// Fees started as Jerry's and are the default wholesale fee across the whole app. Per B (Oct 16 2026) every
-// range from $100K up is $5K under Jerry's ($20/25/30/40K became $15/20/25/35K). Under $100K stays $10K.
-// Exit % and offer % were tuned for Louisville per B (Oct 16 2026). Jerry's were 35/50/60/65/70 exit
-// and 55/65/75/80/85 offer. The exit % now comes from YLHB's own buyer math (ARV x 75% under $200K,
-// 80% over, minus repairs) on a moderate rehab ($30/sf, the calculator's rate), assuming the online
-// values already price in about three-quarters of the repairs, rounded down to the nearest 5%.
-// The offer % is YLHB's 80% anchor (ANCHOR_PCT), kept at Jerry's 85% in the top range.
-// Both are a starting point to check against closed deals, not a measured Louisville number.
-const ASIS_SCALE = [
-  { label: "Under $100K", exit: 55, fee: 10000, offer: 80, jerry: { exit: 35, offer: 55, fee: 10000 } },
-  { label: "$100K to $200K", exit: 60, fee: 15000, offer: 80, jerry: { exit: 50, offer: 65, fee: 20000 } },
-  { label: "$200K to $300K", exit: 70, fee: 20000, offer: 80, jerry: { exit: 60, offer: 75, fee: 25000 } },
-  { label: "$300K to $400K", exit: 70, fee: 25000, offer: 80, jerry: { exit: 65, offer: 80, fee: 30000 } },
-  { label: "$400K to $500K", exit: 70, fee: 35000, offer: 85, jerry: { exit: 70, offer: 85, fee: 40000 } },
-];
-const scaleTier = (v) => (v <= 0 ? -1 : v < 100000 ? 0 : v <= 200000 ? 1 : v <= 300000 ? 2 : v <= 400000 ? 3 : v <= 500000 ? 4 : 5);
-// The app-wide default wholesale fee: the scale fee for the range the ARV falls in. The scale stops at
-// $500K, so above that the top fee stands until a rep types one. No ARV yet means no fee yet.
-const scaleFee = (arv) => { const t = scaleTier(num(arv)); return t < 0 ? 0 : ASIS_SCALE[Math.min(t, ASIS_SCALE.length - 1)].fee; };
-const pct2 = (n) => (isFinite(n) ? `${Math.round(n * 100) / 100}%` : "—");
-const asIsCalc = (v) => {
-  const vals = [v.aiZillow, v.aiRealtor, v.aiRedfin, v.aiOther].map(num).filter((x) => x > 0);
-  const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-  const tierIdx = scaleTier(avg);
-  const tier = tierIdx >= 0 && tierIdx < ASIS_SCALE.length ? ASIS_SCALE[tierIdx] : null;
-  const typed = (x) => String(x ?? "").trim() !== "";
-  const custom = tierIdx === 5;                          // over $500K: the sheet says "custom", so the rep types all three
-  const exitPct = typed(v.aiExit) ? num(v.aiExit) : tier ? tier.exit : 0;
-  // One fee for the whole deal: the rep's typed fee, else the deal's scale fee (by the ARV, or by this
-  // average when there is no ARV yet). The panel's fee box edits that same deal fee.
-  const fee = typed(v.dealFeeTyped) ? num(v.dealFeeTyped) : num(v.dealFeeAuto) > 0 ? num(v.dealFeeAuto) : tier ? tier.fee : 0;
-  const offerPct = typed(v.aiOffer) ? num(v.aiOffer) : tier ? tier.offer : 0;
-  const needsCustom = custom && !(typed(v.aiExit) && fee > 0 && typed(v.aiOffer));
-  const exitPrice = Math.round(avg * exitPct / 100);
-  const maxBuy = Math.round(exitPrice - fee);
-  const offer = Math.round(maxBuy * offerPct / 100);
-  const ready = avg > 0 && exitPct > 0 && offerPct > 0 && !needsCustom;
-  const spread = vals.length > 1 ? (Math.max(...vals) / Math.min(...vals) - 1) * 100 : 0;
-  return { vals, count: vals.length, avg: Math.round(avg), tierIdx, tier, custom, needsCustom, exitPct, fee, offerPct, exitPrice, maxBuy, offer, ready, spread,
-    typedExit: typed(v.aiExit), typedFee: typed(v.dealFeeTyped), feeFromArv: !typed(v.dealFeeTyped) && !!v.dealFeeFromArv && num(v.dealFeeAuto) > 0, typedOffer: typed(v.aiOffer) };
-};
-// History: a flat $15K fee (back to $15K Sep 29 2026 after $20K from Sep 24, when every save wrote
-// "20000" whether or not anyone chose it).
-// Oct 16 2026, per B: the default fee is now the fee scale by the ARV's price range (scaleFee).
-// A blank fee means "follow the scale". The old flat defaults ($15K, and $20K from Sep 24 to Sep 29)
-// read as blank on reload, so those deals pick up the scale. Any other saved fee was chosen on purpose.
-const FEE_LEGACY_DEFAULTS = ["15000", "20000"];
-const savedFee = (v) => (v && !FEE_LEGACY_DEFAULTS.includes(String(v)) ? String(v) : "");
-// The strategy a deal ended up as, and the buyer deck that goes with it. Novation has no buyer deck,
-// because the house is sold to a retail buyer on the MLS, not to an investor.
-const WENT_WITH = [
-  { id: "cash", label: "Cash", tab: "cash", deck: "Flip + BRRRR" },
-  { id: "subto", label: "Subject-To", tab: "subto", deck: "Subject-To" },
-  { id: "hybrid", label: "Hybrid", tab: "hybrid", deck: "Hybrid" },
-  { id: "sf", label: "Seller finance", tab: "sf", deck: "Seller Finance" },
-  { id: "nov", label: "Novation", tab: "nov", deck: null },
-];
-// Checks the main motivator against the harder answers captured later in the call. It never moves a
-// strategy score (timeline, payments and condition already do that, so scoring the motivator too would
-// count the same fact twice). A contradiction usually means the rep misheard or the seller has not
-// told the whole story, and either is worth one more question before an offer goes out.
-const MOTIV_LABEL = { distress: "Property distress", hardship: "Financial hardship", urgency: "Urgency" };
-const motivationChecks = (c, deal) => {
-  const out = [];
-  const m = c.motivation;
-  if (!m) return out;
-  const cond = (c.condition && c.conditionAuto !== "yes" ? c.condition : null)
-    || (deal && deal.repairsDefault ? null : impliedCondition(num(deal && deal.repairs), num(deal && deal.sqft))) || c.condition || null;
-  if (m === "urgency" && c.timeline === "flexible") out.push({
-    msg: "Urgency is the main motivator, but they said their timeline is flexible.",
-    ask: "“You mentioned this needs to happen soon. Is there a date you are working against?”",
-  });
-  if (m === "hardship" && c.timeline === "flexible") out.push({
-    msg: "Financial hardship usually comes with a clock, but they said their timeline is flexible.",
-    ask: "“If nothing changes, when does this start to cost you?”",
-  });
-  if (m === "hardship" && c.loan === "yes" && c.behind === "no") out.push({
-    msg: "Financial hardship is the main motivator, but they are current on the loan.",
-    ask: "“You mentioned money is tight. What is putting the pressure on, if the mortgage is current?”",
-  });
-  if (m === "distress" && cond === "light") out.push({
-    msg: `Property distress is the main motivator, but the condition reads Light${c.condition && c.conditionAuto !== "yes" ? "" : " from the repair number"}.`,
-    ask: "“What is it about the house that has you ready to be done with it?”",
-  });
-  return out;
-};
-// Sold-comp search window. Defaults are the appraiser-style box the ARV has always used: 1 mile, ±250
-// sq ft, sold in the last 12 months. The rep can step each one up or down and re-pull.
-const COMP_SEARCH_DEFAULT = { mi: 1, sf: 250, mo: 12 };
-const COMP_STEPS = { mi: [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5], sf: [100, 150, 200, 250, 300, 400, 500, 750], mo: [3, 6, 9, 12, 18, 24] };
-const stepTo = (list, cur, dir) => {
-  const i = list.findIndex((v) => v >= cur);
-  const at = i < 0 ? list.length - 1 : i;
-  const exact = list[at] === cur;
-  const next = dir > 0 ? (exact ? at + 1 : at) : at - 1;
-  return list[Math.max(0, Math.min(list.length - 1, next))];
-};
-const FIT_FLOOR = 40;   // Ace's working line: a top score under 40 means nothing actually fits at their number
-// The engine. Inputs: what the rep captured + live deal numbers from the calculator.
-// Every rule that fires adds a human-readable reason so the rep sees WHY, not just a rank.
-function scoreStrategies(c, deal) {
-  const ask = num(c.ask);
-  const maxCash = deal.maxCash > 0 ? deal.maxCash : 0;
-  const arv = deal.arv > 0 ? deal.arv : 0;
-  const bal = num(c.balance);
-  const gap = ask > 0 && maxCash > 0 ? ask - maxCash : null;
-  const equity = c.loan === "yes" && ask > 0 && bal > 0 ? ask - bal : null;
-  const eqPct = equity != null && ask > 0 ? equity / ask : null;
-  const M = (q, why) => ({ q, why });
-  // What the rep tapped wins. Failing that, fall back to what the repair number implies.
-  // A chip the app set from a typed repair number counts as inferred, not as something the seller said.
-  const tapped = c.conditionAuto === "yes" ? "" : c.condition;
-  const condRepairs = deal.repairsDefault ? 0 : deal.repairs;   // the $5K placeholder says nothing about condition
-  const implied = tapped ? null : (impliedCondition(condRepairs, deal.sqft) || c.condition || null);
-  const cond = tapped || implied;
-  // A chip that contradicts the repair dollars is worth saying out loud: the offer is built on the
-  // dollars, so the two need to agree before anyone quotes a number.
-  const impliedCheck = tapped ? impliedCondition(condRepairs, deal.sqft) : null;
-  const condMismatch = impliedCheck && impliedCheck !== tapped ? impliedCheck : null;
-  const condNote = implied ? ` (read from the ${usd(deal.repairs)} repair number, confirm it on the call)` : "";
-  // Value check for every strategy that buys at the seller's number. If their price plus the repairs
-  // is more than the house is worth fixed up, you start underwater no matter how good the terms are.
-  const spread = arv > 0 && ask > 0 ? arv - ask - num(deal.repairs) : null;
-  const underwaterMsg = spread != null && spread < 0
-    ? `At their ${usd(ask)}, plus ${usd(deal.repairs)} of repairs, you would pay ${usd(-spread)} more than the ${usd(arv)} it is worth fixed up. You start underwater.`
-    : null;
-  // The hold test, shared by Sub-To and Hybrid. Hybrid inherits the same payment, so it can never pass
-  // a test Sub-To fails. Before, Hybrid skipped it entirely.
-  const pc = c.loan === "yes" ? pitiCheck(c, deal.rent) : null;
-  const pcPct = pc ? `${Math.round(pc.ratio * 100)}%` : "";
-  const out = [];
-  const gatedBy = [];   // strategies held under the fit line only because an answer is missing
-  let stGate = null, hyGate = null;   // what Sub-To / Hybrid still need before they can be graded at all
-
-  // ---- CASH ----
-  {
-    let sc = 45; const rs = [], warn = [], miss = [];
-    if (gap != null && gap <= maxCash * 0.05) { sc += 30; rs.push("Their number is at or under your max cash offer — just close it."); }
-    if (gap != null && gap > maxCash * 0.15) { sc -= 35; warn.push("Their number is well above cash — pitch cash to anchor, then pivot creative."); }
-    if (cond === "heavy") { sc += 10; rs.push(`Heavy rehab${condNote} — classic cash / wholesale profile.`); }
-    if (c.timeline === "asap") { sc += 8; rs.push("They need speed, and cash closes fastest."); }
-    if (c.behind === "yes") { sc += 8; rs.push("Behind on payments — a fast close stops the bleeding."); }
-    // A cash price has to pay off the loan. Before, cash scored the same whether the seller owed
-    // nothing or twice our max.
-    if (c.loan === "yes" && bal > 0 && maxCash > 0) {
-      const anchorAmt = Math.round(maxCash * ANCHOR_PCT);
-      if (bal > maxCash) {
-        sc -= 40;
-        warn.push(`They owe about ${usd(bal)} and your max cash offer is ${usd(maxCash)}. No cash price you can pay covers the loan, so the seller would have to bring ${usd(bal - maxCash)} to closing or their lender would have to approve a short sale.`);
-      } else if (bal > anchorAmt) {
-        warn.push(`Your ${usd(anchorAmt)} anchor is under their ${usd(bal)} payoff, which is not a number they can accept. Open at or just above the payoff instead.`);
-      }
-    } else if (c.loan === "yes" && bal <= 0 && maxCash > 0) {
-      miss.push(M("“Roughly how much is left on the loan?”", "If they owe more than your max cash offer, a cash deal cannot close."));
-    } else if (!c.loan && maxCash > 0) {
-      miss.push(M("“At closing, will we need to pay off any loan?”", "A loan bigger than your max cash offer kills a cash deal."));
-    }
-    if (ask <= 0) miss.push(M("“If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”", "Their number sets the whole strategy."));
-    if (maxCash <= 0) miss.push(M("Run Auto-comp up top so the ARV and max cash offer are live.", "Without ARV there's no cash number to compare."));
-    out.push({ id: "cash", label: "Cash offer", tab: "cash", sc, rs, warn, miss,
-      // Delivering a low number is the hardest thing a newer rep does. The sequence matters more
-      // than the wording: earn the number first, say it plainly, then stop talking.
-      pitch: [
-        "1. Frame it before you say it. “We buy as-is. No repairs, no cleaning out, no commissions, no inspections, no showings, and we close on whatever date works for you.”",
-        "2. Say the number once, plainly. “Based on all of that, what we can do is ____.” Then stop talking. Do not soften it, do not apologize for it, do not explain it before they react. Whoever talks first after the number loses ground.",
-        "3. If they flinch, do not move. “I understand. What were you hoping to get?” Let them counter. Their counter is information you do not have yet.",
-        "4. Only then, justify it. “We use lenders and private capital, but flips come with repairs, contractors, holding costs, commissions, and a market that can move. We have to buy at a number that still works after all of that.”",
-        "5. If their number is above your ceiling, do not split the difference on the spot. That is what the Partnership Program is for.",
-      ] });
-  }
-
-  // ---- SUB-TO ----
-  {
-    let sc = 0; const rs = [], warn = [], miss = [];
-    if (c.loan !== "yes") {
-      warn.push(c.loan === "no" ? "No loan on the property — nothing to take over. Look at Seller Finance." : "Find out if there's a loan first.");
-      if (!c.loan) miss.push(M("“Do you still owe anything on it?”", "No loan = no Sub-To; free and clear = Seller Finance territory."));
-    } else {
-      sc = 40; rs.push("There's a loan in place to take over.");
-      if (eqPct != null && eqPct <= 0.15) { sc += 20; rs.push("Low equity — their ask sits close to the balance, so a payment takeover solves it."); }
-      if (c.behind === "yes") { sc += 15; rs.push("Behind on payments — take over + reinstate arrears is the classic Sub-To save."); }
-      if (c.terms === "yes" || c.terms === "maybe") { sc += 8; rs.push("They're open to something other than a cash lump sum."); }
-      if (c.timeline === "asap") { sc += 8; rs.push("Sub-To moves fast — no new loan to originate."); }
-      if (cond === "heavy") { sc -= 10; warn.push(`Heavy rehab${condNote} on a Sub-To puts repair risk on you — price it in.`); }
-      // The hold test. This can end the conversation regardless of everything else above.
-      if (pc) {
-        const pct = pcPct;
-        if (pc.verdict === "fail") {
-          sc -= 55;
-          warn.push(`Payment is ${pct} of market rent. That is not a Sub-To hold — it needs to be at or under 65%, which means about ${usd(pc.targetPiti)} a month. Vacancy, maintenance, CapEx and management eat 25-35% of rent before you see a dollar.`);
-        } else if (pc.verdict === "thin") {
-          sc -= 15;
-          warn.push(`Payment is ${pct} of market rent. Break-even territory, so it only works if your exit beats standard rent (mid-term, co-living, or a lease option).`);
-        } else {
-          sc += 15;
-          rs.push(`Payment is ${pct} of market rent, which leaves real room after vacancy, maintenance and CapEx.`);
-        }
-        if (pc.missingTI) warn.push("Taxes and insurance are not in that payment and have not been added, so the real ratio is worse than shown.");
-        if (pc.missingHOA) warn.push("There is an HOA but the dues have not been entered, so the real ratio is worse than shown.");
-      } else if (num(c.payment) > 0 && !deal.rent) {
-        miss.push(M("Pull the market rent in the Property stage.", "Payment versus rent decides whether this is a hold or a headache."));
-      }
-      if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
-      if (bal <= 0) miss.push(M("“Do you still owe anything on it?” — get the rough balance.", "Balance vs. ask decides Sub-To vs. Hybrid."));
-      if (num(c.payment) <= 0) miss.push(M("“What's your current payment?”", "The payment IS the deal — it sets your monthly basis."));
-      if (!(num(c.rate) > 0)) miss.push(M("“Do you happen to know the interest rate on it?”", "A low fixed rate is the asset you are taking over. It sets the financing value on the buyer deck."));
-      if (c.stmt !== "received") miss.push(M("Ask for their most recent mortgage statement.", "It confirms the lender, balance, payment, escrow and whether they are current."));
-      // No payment or no rent means the hold test never ran. Before, a Sub-To with low equity and a
-      // flexible seller reached 68 and "Best fit" without anyone knowing what the payment was.
-      if (!pc) {
-        stGate = num(c.payment) <= 0 ? "their monthly payment" : "the market rent";
-        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Subject-To", need: stGate });
-        sc = Math.min(sc, FIT_FLOOR - 1);
-        warn.push(num(c.payment) <= 0
-          ? "Cannot call Sub-To a fit until you have their monthly payment. The payment is the deal, and it has not been asked yet."
-          : "Cannot call Sub-To a fit until the market rent is in. The payment has to be tested against it.");
-      }
-    }
-    out.push({ id: "subto", label: "Subject-To", tab: "subto", sc, rs, warn, miss, gate: stGate,
-      pitch: ["“What if I just took over your existing payments?”", "Get the payment, rate, and whether they're current — then run the Sub-To tab live."] });
-  }
-
-  // ---- SELLER FINANCE ----
-  {
-    let sc = 0; const rs = [], warn = [], miss = [];
-    if (c.loan === "yes" && ask > 0 && bal > ask * 0.1) {
-      warn.push("Not free and clear. With a real loan balance this becomes a Hybrid (Sub-To the loan, seller carries the rest), which is scored on its own line.");
-    } else {
-      sc = 20;
-      if (c.loan === "no") { sc += 25; rs.push("Free and clear — the textbook seller-finance setup."); }
-      if (gap != null && gap > 0) { sc += 18; rs.push("They want more than cash allows — terms can bridge the price gap."); }
-      if (c.terms === "yes") { sc += 12; rs.push("They're open to becoming the bank."); }
-      else if (c.terms === "maybe") { sc += 6; rs.push("Lukewarm on terms — worth the pitch."); }
-      if (c.timeline === "flexible") { sc += 8; rs.push("No rush — room for a terms conversation."); }
-      if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
-      if (!c.loan) miss.push(M("“Do you still owe anything on it?”", "Seller finance wants free-and-clear (or close to it)."));
-      if (!c.terms) miss.push(M("“What kind of terms would make you excited about seller financing?”", "Their answer tells you if the door is open."));
-    }
-    out.push({ id: "sf", label: "Seller finance", tab: "sf", sc, rs, warn, miss,
-      pitch: ["“Sometimes becoming the bank creates a better overall solution.”", "“What kind of terms would make you excited about seller financing?”"] });
-  }
-
-  // ---- HYBRID ----
-  {
-    let sc = 0; const rs = [], warn = [], miss = [];
-    if (c.loan !== "yes") {
-      warn.push("No loan — that's straight Seller Finance, not a hybrid.");
-    } else if (bal <= 0 || ask <= 0) {
-      // Before, a missing balance fell through to "real equity" and scored 40 on an assumption.
-      sc = 10;
-      warn.push("Cannot tell if there is equity for the seller to carry until you have both their number and the loan balance.");
-      if (bal <= 0) miss.push(M("Get the loan balance — the equity above it is what the seller carries.", "Ask − balance = the carried piece."));
-    } else if (eqPct <= 0.15) {
-      sc = 10; warn.push(`Only ${usd(Math.max(0, equity))} above the ${usd(bal)} loan, so there is almost nothing for the seller to carry. Plain Sub-To is cleaner.`);
-    } else {
-      sc = 40; rs.push(`A ${usd(bal)} loan to take over and ${usd(equity)} of equity above it for the seller to carry as a note.`);
-      if (gap != null && gap > 0) { sc += 15; rs.push("Bridges their price without more cash out of pocket."); }
-      if (c.terms === "yes" || c.terms === "maybe") { sc += 10; rs.push("They're open to payments over time on the equity."); }
-      if (pc) {
-        if (pc.verdict === "fail") {
-          sc -= 55;
-          warn.push(`The loan payment alone is ${pcPct} of market rent, and the seller's note payment comes on top of that. It fails the same hold test Sub-To fails.`);
-        } else if (pc.verdict === "thin") {
-          sc -= 20;
-          warn.push(`The loan payment alone is ${pcPct} of market rent. Add the note payment and it is likely negative, so only a 0% note or a long term keeps it alive.`);
-        } else {
-          sc += 10; rs.push(`The loan payment is ${pcPct} of market rent, which leaves room for a note payment.`);
-        }
-        if (pc.missingTI) warn.push("Taxes and insurance are not in that payment and have not been added, so the real ratio is worse than shown.");
-        if (pc.missingHOA) warn.push("There is an HOA but the dues have not been entered, so the real ratio is worse than shown.");
-      } else if (num(c.payment) <= 0) {
-        miss.push(M("“What's your current payment?”", "Hybrid inherits that payment, plus a note payment on top."));
-      } else if (!deal.rent) {
-        miss.push(M("Pull the market rent in the Property stage.", "The payment plus the note has to fit under the rent."));
-      }
-      if (!pc) {
-        hyGate = num(c.payment) <= 0 ? "their monthly payment" : "the market rent";
-        if (sc >= FIT_FLOOR) gatedBy.push({ label: "Hybrid", need: hyGate });
-        sc = Math.min(sc, FIT_FLOOR - 1);
-        warn.push(num(c.payment) <= 0
-          ? "Cannot call Hybrid a fit until you have their monthly payment. It inherits that payment with a note payment on top."
-          : "Cannot call Hybrid a fit until the market rent is in.");
-      }
-      if (underwaterMsg) { sc -= 35; warn.push(underwaterMsg); }
-    }
-    out.push({ id: "hybrid", label: "Hybrid (Sub-To + carry)", tab: "hybrid", sc, rs, warn, miss, gate: hyGate,
-      pitch: ["Take over the existing payments, and the seller carries the equity above the balance as a note — their price, your structure."] });
-  }
-
-  // ---- NOVATION ----
-  {
-    let sc = 15; const rs = [], warn = [], miss = [];
-    if (cond === "light") { sc += 22; rs.push(`Light condition${condNote} — it can sell retail without a full rehab.`); }
-    else if (cond === "moderate") { sc += 8; rs.push(`Moderate condition${condNote} — retail is possible with cosmetic touch-ups.`); }
-    else if (cond === "heavy") { sc -= 18; warn.push(`Heavy rehab${condNote} kills the retail buyer — novation is a stretch here.`); }
-    if (c.timeline === "flexible") { sc += 15; rs.push("They can wait out a retail sale (figure 60–90 days on market)."); }
-    else if (c.timeline === "asap") { sc -= 12; warn.push("A retail timeline won't fit their urgency."); }
-    if (gap != null && gap > 0 && arv > 0 && ask <= arv * 0.9 - deal.repairs) { sc += 12; rs.push("Their number fits under a retail sale with room for the spread."); }
-    if (c.occupancy === "tenant") { sc -= 10; warn.push("Tenant in place makes retail showings hard."); }
-    if (c.occupancy === "vacant") { sc += 6; rs.push("Vacant — easy access for showings and photos."); }
-    if (!cond) miss.push(M("“What can you tell me about the current condition?”", "Condition decides if a retail buyer will touch it."));
-    if (!c.timeline) miss.push(M("“How soon are you hoping to close?”", "Novation needs a seller who can wait."));
-    out.push({ id: "nov", label: "Novation", tab: "nov", sc, rs, warn, miss,
-      pitch: ["“We prepare and sell it retail on your behalf — you get closer to the retail number, we handle the work and the buyers, and you get paid at closing.”"] });
-  }
-
-  if (condMismatch) {
-    const msg = `Condition says ${c.condition} but ${usd(deal.repairs)} of repairs reads as ${condMismatch}. The offer is built on the dollars — fix whichever is wrong.`;
-    for (const o of out) if (["cash", "subto", "nov"].includes(o.id)) o.warn.push(msg);
-  }
-  // The $10K creative cap. Warnings only, so the scores stay what they were.
-  {
-    const needAt = num(c.needCash);
-    if (needAt > CREATIVE_DOWN_MAX) {
-      const msg = `They need ${usd(needAt)} at closing. We never put more than ${usd(CREATIVE_DOWN_MAX)} down on a creative offer, so the other ${usd(needAt - CREATIVE_DOWN_MAX)} has to be paid over time, or this is not a creative deal.`;
-      for (const o of out) if (["subto", "hybrid", "sf"].includes(o.id)) o.warn.push(msg);
-    }
-    if (c.loan === "yes" && bal > 0 && ask > 0 && ask - bal > CREATIVE_DOWN_MAX) {
-      const st = out.find((o) => o.id === "subto");
-      if (st) st.warn.push(`Their number is ${usd(ask - bal)} above the loan. A straight Sub-To hands that to them at closing, and we never put more than ${usd(CREATIVE_DOWN_MAX)} down. Carry the rest as a seller note (Hybrid) or get the price down.`);
-    }
-  }
-  for (const o of out) o.sc = Math.max(0, Math.min(100, Math.round(o.sc)));
-  out.sort((a, b) => b.sc - a.sc);
-  // Ranking always produces a first place, even when first place is terrible. Below this line the
-  // top score is not a recommendation, and the screen says so instead of badging it "Best fit".
-  const fits = out[0] && out[0].sc >= FIT_FLOOR;
-  const payoffShort = c.loan === "yes" && bal > 0 && maxCash > 0 && bal > maxCash ? bal - maxCash : null;
-  return { ranked: out, gap, equity, fits, spread, payoffShort, bal, gatedBy };
-}
-
-// ---- tiny self-contained inputs so the drawer has zero dependencies on App-scoped components ----
-const WChips = ({ value, onChange, opts, auto }) => (
-  <div className="mt-1.5 flex flex-wrap gap-1.5">
+const Chips = ({ value, onChange, opts }) => (
+  <div className="flex flex-wrap gap-1.5">
     {opts.map(([v, l]) => (
-      <button key={v} type="button" onClick={() => onChange(value === v ? "" : v)}
-        className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${value === v ? (auto ? "border-dashed border-emerald-500 bg-emerald-50 text-emerald-800" : "border-emerald-600 bg-emerald-600 text-white") : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-        {l}
-      </button>
+      <button key={String(v)} type="button" onClick={() => onChange(v)}
+        className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${value === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:border-slate-400"}`}>{l}</button>
     ))}
   </div>
 );
-const WField = ({ label, children }) => (
-  <div className="mt-3">
-    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">{label}</div>
-    {children}
-  </div>
-);
-const WText = ({ value, onChange, placeholder, money }) => (
-  <div className="relative mt-1.5">
-    {money && <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-600">$</span>}
-    <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} inputMode={money ? "numeric" : "text"}
-      className={`w-full rounded-md border border-slate-200 bg-white py-1.5 pr-2.5 font-mono text-xs text-slate-800 outline-none focus:border-emerald-400 ${money ? "pl-6" : "pl-2.5"}`} />
-  </div>
-);
-// Before any agreement goes out on a creative offer, every term has to be settled with the seller (per B,
-// Oct 16 2026). One row per term: green when we have it, amber with the exact question when we do not.
-// The boxes edit the same numbers the strategy tabs use, so the call and the tab never disagree.
-// Rule: present seller finance as price, down payment, monthly payment and balloon. Never say "zero interest".
-const TermsLockIn = ({ id, cs, upd, t }) => {
-  if (!t || !["subto", "hybrid", "sf"].includes(id)) return null;
-  const has = (v) => String(v ?? "").trim() !== "";
-  const price = num(cs.ask);
-  const rows = [];
-  const row = (label, ok, value, ask, input) => rows.push({ label, ok, value, ask, input });
-  let summary = null;
-  // Years start at a 30-year default. That only counts once the seller has actually agreed to it.
-  const yrsOk = (v, key) => num(v) > 0 && (String(v).trim() !== "30" || cs[key] === "yes");
-  const yrsInput = (v, set, key) => (<>
-    <WText value={v} onChange={(x) => { set(x); if (cs[key]) upd(key, ""); }} placeholder="30" />
-    {String(v).trim() === "30" && cs[key] !== "yes" && (
-      <button type="button" onClick={() => upd(key, "yes")} className="mt-1 rounded-md border border-emerald-300 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-emerald-700 hover:bg-emerald-50">They agreed to 30 years</button>
-    )}
-  </>);
-  row("Price", price > 0, price > 0 ? usd(price) : "", "“What price would work for you if we paid part of it over time?”",
-    <WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="price" />);
-  if (id === "sf") {
-    const down = num(t.sf.down), yrs = num(t.sf.years), bal = num(t.sf.balloon);
-    const loan = Math.max(0, price - down);
-    const monthly = pmt(loan, num(t.sf.rate), yrs);
-    const balloonLeft = bal > 0 && yrs > 0 ? balanceAt(loan, num(t.sf.rate), yrs, bal) : 0;
-    row("Down payment (cash at closing)", has(t.sf.down), has(t.sf.down) ? usd(down) : "", "“How much would you need at closing to make this work?”",
-      <><WText money value={t.sf.down} onChange={t.sf.setDown} placeholder="cash at closing" /><DownCapNote amount={t.sf.down} /></>);
-    row("Years of payments", yrsOk(t.sf.years, "yrsOkSf"), yrs > 0 ? `${yrs} years` : "", "“How many years would you be comfortable receiving payments?”",
-      yrsInput(t.sf.years, t.sf.setYears, "yrsOkSf"));
-    row("Lump sum (balloon)", true, bal > 0 ? `the rest in year ${bal}` : "none", "“Would you want the rest paid off in one lump sum at some point, say in 5 or 7 years?”",
-      <WText value={t.sf.balloon} onChange={t.sf.setBalloon} placeholder="0 = none" />);
-    row("Monthly payment to them", price > 0 && has(t.sf.down) && yrsOk(t.sf.years, "yrsOkSf"), price > 0 && yrs > 0 ? `${usd(monthly)} a month` : "", "Fills in once the price, down payment and years are set.", null);
-    if (price > 0 && has(t.sf.down) && yrsOk(t.sf.years, "yrsOkSf")) summary = `“So here is what that looks like: ${usd(price)} for the house. ${usd(down)} at closing, then ${usd(monthly)} a month for ${bal > 0 ? `${bal} years, and the remaining ${usd(balloonLeft)} paid in full at that point` : `${yrs} years`}. Does that work for you?”`;
-  } else if (id === "hybrid") {
-    const down = num(t.hy.down), bal = num(cs.balance), yrs = num(t.hy.years);
-    const note = Math.max(0, price - bal - down);
-    const notePay = pmt(note, num(t.hy.rate), yrs);
-    row("Down payment (cash at closing)", has(t.hy.down), has(t.hy.down) ? usd(down) : "", "“How much would you need at closing to make this work?”",
-      <><WText money value={t.hy.down} onChange={t.hy.setDown} placeholder="cash at closing" /><DownCapNote amount={t.hy.down} /></>);
-    row("Loan we take over", bal > 0 && num(cs.payment) > 0, bal > 0 ? `${usd(bal)} balance${num(cs.payment) > 0 ? `, ${usd(num(cs.payment))} a month` : ""}` : "", "“Roughly what do you still owe, and what is the monthly payment?” (Property stage)", null);
-    row("Years they carry the rest", yrsOk(t.hy.years, "yrsOkHy"), yrs > 0 ? `${yrs} years` : "", "“How many years would you be comfortable receiving payments on the rest?”",
-      yrsInput(t.hy.years, t.hy.setYears, "yrsOkHy"));
-    row("Monthly payment to them", note > 0 && yrsOk(t.hy.years, "yrsOkHy") && has(t.hy.down), note > 0 && yrs > 0 ? `${usd(notePay)} a month on the ${usd(note)} they carry` : (price > 0 && bal > 0 && note <= 0 ? "nothing left for them to carry" : ""), "Fills in once the price, loan, down payment and years are set.", null);
-    if (price > 0 && bal > 0 && has(t.hy.down) && yrsOk(t.hy.years, "yrsOkHy")) summary = `“So here is what that looks like: ${usd(price)} for the house. ${usd(down)} at closing, we take over the ${num(cs.payment) > 0 ? usd(num(cs.payment)) + " " : ""}monthly payment on your loan, and ${note > 0 ? `you receive ${usd(notePay)} a month for ${yrs} years on the remaining ${usd(note)}` : "that covers the rest"}. Does that work for you?”`;
-  } else {
-    const cash = num(t.st.cash), bal = num(cs.balance), arrears = num(t.st.arrears);
-    row("Cash to them at closing", has(t.st.cash), has(t.st.cash) ? usd(cash) : "", "“How much would you need at closing to make this work?”",
-      <><WText money value={t.st.cash} onChange={t.st.setCash} placeholder="cash at closing" /><DownCapNote amount={t.st.cash} what="to the seller at closing" /></>);
-    row("Loan we take over", bal > 0 && num(cs.payment) > 0, bal > 0 ? `${usd(bal)} balance${num(cs.payment) > 0 ? `, ${usd(num(cs.payment))} a month` : ""}` : "", "“Roughly what do you still owe, and what is the monthly payment?” (Property stage)", null);
-    if (cs.behind === "yes") row("Amount behind", num(t.st.arrears) > 0, num(t.st.arrears) > 0 ? usd(arrears) : "", "“About how much are you behind, in dollars?”",
-      <WText money value={t.st.arrears} onChange={t.st.setArrears} placeholder="arrears" />);
-    if (price > 0 && has(t.st.cash) && bal > 0) summary = `“So here is what that looks like: ${usd(price)} for the house. ${usd(cash)} at closing, and we take over your ${num(cs.payment) > 0 ? usd(num(cs.payment)) + " " : ""}monthly payment${arrears > 0 ? ` and bring the ${usd(arrears)} that is behind current` : ""}. Does that work for you?”`;
-  }
-  const missing = rows.filter((r) => !r.ok).length;
-  return (
-    <div className={`mt-2 rounded-lg border-2 ${missing ? "border-amber-400 bg-amber-50/60" : "border-emerald-400 bg-white"} p-2.5`}>
-      <div className="flex items-baseline justify-between gap-2">
-        <div className={`text-[11px] font-extrabold uppercase tracking-wide ${missing ? "text-amber-900" : "text-emerald-800"}`}>Lock in the terms before the agreement</div>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${missing ? "bg-amber-200 text-amber-900" : "bg-emerald-100 text-emerald-800"}`}>{missing ? `${missing} to get` : "All set"}</span>
-      </div>
-      <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">A creative offer is only an offer once the seller has agreed to every number below. Get each one on this call, then read the whole thing back to them before the agreement goes out.</div>
-      {rows.map((r, i) => (
-        <div key={i} className="mt-2 border-t border-slate-200 pt-1.5">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-800">
-              {r.ok ? <CheckCircle2 className="h-3 w-3 text-emerald-600" /> : <AlertTriangle className="h-3 w-3 text-amber-600" />}{r.label}
-            </span>
-            {r.value && <span className="font-mono text-[11px] font-bold text-slate-800">{r.value}</span>}
-          </div>
-          {!r.ok && <div className="mt-0.5 text-[11px] leading-snug text-amber-900">{/^“/.test(r.ask) ? <>Ask: {r.ask}</> : r.ask}</div>}
-          {r.input}
-        </div>
-      ))}
-      {summary ? (<>
-        <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-emerald-700">Read it back</div>
-        <Line>{summary}</Line>
-        {id === "sf" && <Hint>Present it as price, down payment, monthly payment and balloon. Do not bring up interest at all.</Hint>}
-      </>) : (
-        <div className="mt-2 text-[10.5px] text-amber-900">The read-back script shows up here once every number above is in.</div>
-      )}
-    </div>
-  );
-};
-
-const WArea = ({ value, onChange, placeholder }) => (
-  <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={3}
-    className="mt-1.5 w-full resize-y rounded-md border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs leading-relaxed text-slate-800 outline-none focus:border-emerald-400" />
-);
-const Line = ({ children }) => (
-  <div className="mt-2 rounded-lg border-l-4 border-emerald-500 bg-emerald-50/60 px-3 py-2 text-[12px] leading-snug text-slate-700">{children}</div>
-);
-const Hint = ({ children }) => (
-  <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
-    <Lightbulb className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
+const Check = ({ checked, onChange, children }) => (
+  <label className="flex cursor-pointer items-start gap-2 text-[12.5px] text-slate-700">
+    <input type="checkbox" className="mt-0.5 h-4 w-4 accent-emerald-600" checked={!!checked} onChange={(e) => onChange(e.target.checked)} />
     <span>{children}</span>
+  </label>
+);
+const Card = ({ n, title, sub, children, right }) => (
+  <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <div className="mb-3 flex items-start justify-between gap-3">
+      <div>
+        <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-800">
+          {n && <span className="flex h-6 w-6 items-center justify-center rounded-full text-[12px] text-white" style={{ background: BRAND }}>{n}</span>}
+          {title}
+        </h2>
+        {sub && <p className="mt-1 text-[12.5px] leading-snug text-slate-600">{sub}</p>}
+      </div>
+      {right}
+    </div>
+    {children}
+  </section>
+);
+const Stat = ({ label, value, sub, tone = "default", big }) => {
+  const color = tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-rose-600" : tone === "warn" ? "text-amber-600" : "text-slate-900";
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+      <div className="text-[10.5px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
+      <div className={`font-mono ${big ? "text-2xl" : "text-lg"} font-bold tabular-nums ${color}`}>{value}</div>
+      {sub && <div className="text-[11px] leading-snug text-slate-600">{sub}</div>}
+    </div>
+  );
+};
+const Row = ({ label, value, strong, muted }) => (
+  <div className={`flex items-center justify-between gap-3 py-1 text-[13px] ${strong ? "border-t border-slate-200 pt-1.5 font-bold text-slate-900" : muted ? "text-slate-500" : "text-slate-700"}`}>
+    <span>{label}</span><span className="font-mono tabular-nums">{value}</span>
   </div>
 );
 
-// Builds a self-contained HTML report of the whole call — every captured input, the live deal
-// numbers, and the strategy ranking at the moment of download. Opens anywhere, prints to PDF clean.
-// Composes the call as flowing CRM-note prose ("Seller is..." style) from whatever was captured.
-// Empty fields are skipped entirely — the narrative never prints placeholders.
-const buildCallNarrative = (cs, deal, strat) => {
-  const money = (x) => usd(num(x));
-  const L = { light: "light", moderate: "moderate", heavy: "heavy", vacant: "vacant", owner: "owner occupied", tenant: "tenant occupied", asap: "ASAP (two weeks or less)", soon: "within 30-60 days", flexible: "flexible on timing", distress: "property distress", hardship: "financial hardship", urgency: "urgency" };
-  const p = [];
-  const s1 = [];
-  const fu = cs.callType === "followup";
-  s1.push(`${fu ? "Follow-up call" : "Offer call"}${cs.sellerName.trim() ? ` with ${cs.sellerName.trim()}` : ""}${deal.address ? ` regarding ${deal.address}` : ""}${fu ? (cs.lastTalked.trim() ? `, last talked ${cs.lastTalked.trim()}` : "") : (cs.bookedBy.trim() ? `, booked by ${cs.bookedBy.trim()}` : "")}.`);
-  if (fu && cs.lastNotes.trim()) s1.push(`Where it left off last time: ${cs.lastNotes.trim().replace(/[.\s]+$/, "")}.`);
-  if (cs.motivation) s1.push(`Seller's main driver is ${L[cs.motivation] || cs.motivation}.`);
-  if (cs.motivNotes.trim()) s1.push(`In their words: "${cs.motivNotes.trim()}".`);
-  for (const k of motivationChecks(cs, deal)) s1.push(`Worth a second look: ${k.msg}`);
-  p.push(s1.join(" "));
-  const s2 = [];
-  if (cs.loan === "yes" && cs.stmt) s2.push(`Mortgage statement: ${STMT_LABEL[cs.stmt].toLowerCase()}.`);
-  if (cs.signed === "yes") {
-    const acc = [cs.accessHow ? ACCESS_LABEL[cs.accessHow] : null, cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean);
-    s2.push(`Agreement approved. Access: ${acc.length ? acc.join(". ") : "not captured yet"}.`);
-  } else if (cs.signed === "no") s2.push("Agreement not approved yet.");
-  if (cs.occupancy === "tenant" && num(cs.tenantRent) > 0) s2.push(`Tenant in place paying ${usd(num(cs.tenantRent))}/mo${String(cs.leaseEnds || "").trim() ? `, lease ends ${String(cs.leaseEnds).trim()}` : ""}.`);
-  if (cs.condition) s2.push(`Property is in ${L[cs.condition]} condition${cs.conditionAuto === "yes" ? " (going by the repair number)" : ""}${cs.occupancy ? ` and ${L[cs.occupancy]}` : ""}.`);
-  else if (cs.occupancy) s2.push(`Property is ${L[cs.occupancy]}.`);
-  if (isLowRate(cs.rate)) s2.push(`Loan is at ${rateNum(cs.rate)}%, well under market. If this is not locked up or creative was declined, it goes to the head of acquisitions rather than being marked dead.`);
-  {
-    const items = readItems(cs.condItems);
-    const said = COND_ITEMS.filter(([k]) => items[k]).map(([k, label]) => `${label.toLowerCase()}: ${items[k]}`);
-    if (said.length) s2.push(`Condition notes from the walkthrough - ${said.join("; ")}.`);
-  }
-  if (cs.hoa === "yes") s2.push(`There is an HOA${num(cs.hoaAmt) > 0 ? ` at ${money(cs.hoaAmt)} a month` : ""}.`);
-  if (cs.hoa === "no") s2.push("No HOA.");
-  if (cs.loan === "no") s2.push("Owned free and clear - no loan on the property.");
-  if (cs.loan === "yes") {
-    const bits = [];
-    if (num(cs.balance) > 0) bits.push(`owes approximately ${money(cs.balance)}`);
-    if (num(cs.payment) > 0) bits.push(`monthly payment around ${money(cs.payment)}`);
-    if (cs.rate.trim()) bits.push(`rate ${cs.rate.trim()}`);
-    s2.push(`There is a loan on the property${bits.length ? ` - seller ${bits.join(", ")}` : ""}.`);
-    if (cs.behind === "yes") s2.push("Seller is behind on payments.");
-    if (cs.behind === "no") s2.push("Payments are current.");
-  }
-  if (s2.length) p.push(s2.join(" "));
-  const s3 = [];
-  if (cs.timeline) s3.push(`Timeline is ${L[cs.timeline]}.`);
-  if (cs.others.trim()) s3.push(`Other decision makers: ${cs.others.trim()}.`);
-  const nd = readCashNeed(cs, deal && deal.maxCash);
-  if (nd) {
-    const why = cs.needCashNotes.trim() ? ` (${cs.needCashNotes.trim()})` : "";
-    if (nd.status === "over") s3.push(`Seller said they need ${money(nd.need)} in their pocket at closing${why}, but their number of ${money(nd.ask)} only leaves ${money(Math.max(0, nd.equity))}${nd.payoff > 0 ? ` after the ${money(nd.payoff)} loan payoff` : ""}. This needs to be rechecked with the seller.`);
-    else if (nd.status === "no-balance") s3.push(`Seller needs ${money(nd.need)} in their pocket at closing after the loan is paid off${why}. Loan balance not captured yet.`);
-    else if (nd.status === "no-ask") s3.push(`Seller needs ${money(nd.need)} in their pocket at closing${why}.`);
-    else s3.push(`Seller needs ${money(nd.need)} in their pocket at closing${why}. Their number leaves ${money(nd.equity)}${nd.payoff > 0 ? " after the loan payoff" : ""}, so ${nd.termsRoom > 0 ? `${money(nd.termsRoom)} could be paid over time` : "all of their equity has to come at closing"}.`);
-  }
-  if (num(cs.ask) > 0) s3.push(`Seller's number is ${money(cs.ask)}${cs.priceBasis.trim() ? `, based on: "${cs.priceBasis.trim()}"` : ""}.`);
-  if (cs.terms === "yes") s3.push("Seller is open to payments over time.");
-  if (cs.terms === "maybe") s3.push("Seller may be open to payments over time.");
-  if (cs.terms === "no") s3.push("Seller wants cash - not open to payments over time.");
-  if (s3.length) p.push(s3.join(" "));
-  const s4 = [];
-  if (deal.arv > 0 || deal.maxCash > 0) {
-    const bits = [];
-    if (deal.arv > 0) bits.push(`ARV ${usd(deal.arv)}${deal.arvSource ? ` (${deal.arvSource})` : ""}`);
-    if (deal.repairs > 0) bits.push(deal.repairsDefault ? `repairs at the ${usd(deal.repairs)} default (condition not confirmed)` : `estimated repairs ${usd(deal.repairs)}`);
-    if (deal.maxCash > 0) bits.push(`MAO ${usd(deal.maxCash)}`, `opening offer ${usd(Math.round(deal.maxCash * ANCHOR_PCT))}`);
-    if (deal.asIs) bits.push(`As-Is formula max buy ${usd(deal.asIs.maxBuy)} with an opening offer of ${usd(deal.asIs.offer)}`);
-    s4.push(`Deal Desk numbers at the time of the report: ${bits.join(", ")}.`);
-  }
-  if (strat.gap != null) s4.push(strat.gap > 0 ? `Seller's number is ${usd(strat.gap)} above max cash.` : "Seller's number is at or under max cash.");
-  const top = strat.ranked[0];
-  const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
-  if (ww) {
-    const wr = strat.ranked.find((x) => x.id === ww.id);
-      const sc = wr ? ` It scored ${wr.sc} of 100${wr.sc < FIT_FLOOR ? `, under the ${FIT_FLOOR} fit line` : ""}${wr.warn.length ? `, with ${wr.warn.length} warning${wr.warn.length > 1 ? "s" : ""}: ${wr.warn.map((x) => x.replace(/[.\s]+$/, "")).join(". ")}` : ", no warnings"}.` : "";
-    s4.push(`Went with ${ww.label}.${sc}${ww.deck ? ` The ${ww.deck} buyer deck is attached to this lead.` : ""}`);
-  }
-  const pickIds = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
-  const picks = strat.ranked.filter((r) => pickIds.includes(r.id));
-  if (top && !strat.fits && strat.gatedBy.length) {
-    s4.push(`${picks.length ? `Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. ` : ""}Not graded yet: ${strat.gatedBy.map((g) => `${g.label} needs ${g.need}`).join(", ")}.`);
-  } else if (top && !strat.fits && num(cs.ask) > 0) {
-    s4.push(`${picks.length ? `Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. ` : ""}No strategy fits at the seller's number (best score ${top.sc} of 100).`);
-    if (strat.spread != null && strat.spread < 0) s4.push(`Their number plus repairs is ${usd(-strat.spread)} over the ARV.`);
-  }
-  if (top && strat.fits) {
-    if (picks.length) s4.push(`Pitched on this call: ${picks.map((p) => p.label).join(" and ")}. Deal Desk's best fit was ${top.label} (score ${top.sc}).`);
-    else s4.push(`Best-fit strategy: ${top.label} (score ${top.sc}).`);
-    if (top.rs.length) s4.push(`Why: ${top.rs.slice(0, 2).join(" ")}`);
-    if (top.miss.length) s4.push(`Still to get: ${top.miss[0].q}`);
-  }
-  if (s4.length) p.push(s4.join(" "));
-  return p.filter(Boolean).join("\n\n").trim() || "No call details captured yet.";
-};
-
-const buildCallReport = (cs, deal, strat) => {
-  const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
-  const lbl = { light: "Light rehab", moderate: "Moderate rehab", heavy: "Heavy rehab", vacant: "Vacant", owner: "Owner occupied", tenant: "Tenant occupied", yes: "Yes", no: "No", maybe: "Maybe", asap: "ASAP (2 weeks or less)", soon: "30-60 days", flexible: "Flexible", distress: "Property distress", hardship: "Financial hardship", urgency: "Urgency" };
-  const v = (x, money) => (x === "" || x == null ? "&mdash;" : money ? esc(usd(num(x))) : esc(lbl[x] || x));
-  const row = (k, val) => `<tr><td>${k}</td><td>${val}</td></tr>`;
-  const pillars = PILLARS.map((p) => `<span class="pill ${p.done(cs) ? "on" : ""}">${p.label}</span>`).join("");
-  const narrative = buildCallNarrative(cs, deal, strat);
-  const stratRows = strat.ranked.map((o, i) => `
-    <div class="strat ${i === 0 && strat.fits ? "best" : ""}">
-      <div class="strathead"><b>${i + 1}. ${esc(o.label)}</b><span>${i === 0 && strat.fits ? "BEST FIT &middot; " : ""}score ${o.sc}</span></div>
-      ${o.rs.map((r) => `<div class="why">&#10003; ${esc(r)}</div>`).join("")}
-      ${o.warn.map((w) => `<div class="warn">&#9888; ${esc(w)}</div>`).join("")}
-      ${o.miss.map((m) => `<div class="miss">Still to ask: ${esc(m.q)}</div>`).join("")}
-    </div>`).join("");
-  return `<!doctype html><html><head><meta charset="utf-8"><title>YLHB Offer Call Report</title><style>
-    body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1e293b;max-width:760px;margin:24px auto;padding:0 16px;font-size:13px;line-height:1.45}
-    h1{font-size:18px;margin:0;color:#065f46}.sub{color:#64748b;font-size:11px;margin-top:2px}
-    h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#94a3b8;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin:22px 0 8px}
-    table{width:100%;border-collapse:collapse}td{padding:4px 6px;border-bottom:1px solid #f1f5f9;vertical-align:top}td:first-child{width:220px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-    .pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;background:#f1f5f9;color:#94a3b8;margin-right:6px}.pill.on{background:#d1fae5;color:#047857}
-    .pitched{margin-bottom:8px;border-radius:8px;background:#ecfdf5;border:1px solid #a7f3d0;padding:8px 12px;color:#065f46}
-    .strat{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-top:8px}.strat.best{border-color:#059669;background:#ecfdf5}
-    .strathead{display:flex;justify-content:space-between;font-size:13px}.strathead span{color:#64748b;font-size:11px}
-    .why{color:#334155;margin-top:3px}.warn{color:#b45309;margin-top:3px}.miss{color:#64748b;font-style:italic;margin-top:3px}
-    .foot{margin-top:26px;padding-top:10px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:10px}
-    .crmbox{position:relative;border:1px solid #a7f3d0;background:#f0fdf4;border-radius:10px;padding:12px 14px;white-space:pre-wrap}
-    .bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #e2e8f0}
-    .pdfbtn{border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer}
-    .pdfbtn:hover{background:#047857}
-    .barhint{color:#94a3b8;font-size:11px}
-    .howto{margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;background:#f8fafc;font-size:12px}
-    .howto b{color:#334155}.howto ol{margin:6px 0 0;padding-left:18px}.howto li{margin-bottom:4px;color:#475569}
-    .howto .note{margin-top:6px;color:#94a3b8;font-size:10.5px}
-    .copybtn{float:right;margin:0 0 8px 12px;border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer}
-    @media print{.copybtn{display:none}.howto{display:none}.bar{display:none}}
-    @media print{body{margin:0}}
-  </style></head><body>
-    <div class="bar">
-      <button class="pdfbtn" onclick="window.print()">Save as PDF</button>
-      <span class="barhint">Opens your print box &mdash; set Destination to &ldquo;Save as PDF&rdquo;, then Save. <b>Then upload that PDF to the seller&rsquo;s contact in Closer Control, under Documents.</b></span>
-    </div>
-    <h1>YLHB &mdash; Offer Call Report</h1>
-    <div class="sub">${esc(deal.address || "No address entered")} &middot; ${new Date().toLocaleString()}</div>
-    <div style="margin-top:10px">${pillars}</div>
-    <h2>Call summary &mdash; copy &amp; paste into the CRM</h2>
-    <div class="crmbox">
-      <button class="copybtn" onclick="navigator.clipboard.writeText(document.getElementById('crm-sum').innerText).then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='Copy summary'},1500)}).catch(()=>{alert('Select the text and copy it manually.')})">Copy summary</button>
-      <div id="crm-sum">${esc(narrative)}</div>
-    </div>
-    <div class="howto">
-      <b>Filing this in Closer Control</b>
-      <ol>
-        <li><b>Paste the summary.</b> Hit Copy summary above, open the seller's contact in Closer Control, and paste it into the conversation or notes. This is the part teammates actually read, so do it even if you skip the rest.</li>
-        <li><b>Save this page as a PDF.</b> Click the green Save as PDF button at the top of this page, then set Destination to Save as PDF and click Save. It is already named with the property address.</li>
-        <li><b>Attach it to the contact.</b> In that contact's record, open the Documents panel, choose Add, and upload the PDF you just saved.</li>
-        <li><b>Then follow the SOP:</b> submit to the TC same day, title open within one business day, and notify Dispositions.</li>
-      </ol>
-      <div class="note">Closer Control moves buttons around from time to time, so if a label does not match, look for the upload or attach control inside the contact's Documents area.</div>
-    </div>
-    <h2>Call basics</h2><table>
-      ${row("Seller", v(cs.sellerName))}${cs.callType === "followup" ? `${row("Call type", "Follow-up, nobody booked it")}${row("Last talked", v(cs.lastTalked))}${row("Where it left off", v(cs.lastNotes))}${row("Last spoke with", v(cs.bookedBy))}` : row("Booked by (lead manager)", v(cs.bookedBy))}
-      ${row("Main motivator", v(cs.motivation))}${row("Motivation notes", v(cs.motivNotes))}${(() => { const mc = motivationChecks(cs, deal); return mc.length ? row("Motivation check", `<span style="color:#b45309">${mc.map((k) => esc(k.msg)).join("<br>")}</span>`) : ""; })()}
-    </table>
-    <h2>Property</h2><table>
-      ${row("Condition", v(cs.condition) + (cs.condition && cs.conditionAuto === "yes" ? " (set from the repair number)" : ""))}
-      ${(() => {
-        const items = readItems(cs.condItems);
-        const keys = COND_ITEMS.filter(([k]) => items[k] !== undefined);
-        if (!keys.length) return row("Walkthrough checklist", "&mdash;");
-        return keys.map(([k, label]) => row(label, items[k] ? esc(items[k]) : "noted, no detail")).join("");
-      })()}${cs.signed ? row("Agreement", cs.signed === "yes" ? "Approved" : "<span style=\"color:#b45309\">Not approved yet</span>") : ""}${cs.signed === "yes" ? row("Access", cs.accessHow ? esc([ACCESS_LABEL[cs.accessHow], cs.accessCode, cs.accessTimes, cs.accessNotes].map((x) => String(x || "").trim()).filter(Boolean).join(" · ")) : "<span style=\"color:#b45309\">No access instructions yet</span>") : ""}${cs.loan === "yes" ? row("Mortgage statement", cs.stmt ? (cs.stmt === "received" ? esc(STMT_LABEL[cs.stmt]) : `<span style="color:#b45309">${esc(STMT_LABEL[cs.stmt])}</span>`) : "<span style=\"color:#b45309\">Not asked yet</span>") : ""}${row("Occupancy", v(cs.occupancy))}${cs.occupancy === "tenant" && num(cs.tenantRent) > 0 ? row("Tenant pays now", `${esc(usd(num(cs.tenantRent)))}/mo${String(cs.leaseEnds || "").trim() ? ` &middot; lease ends ${esc(String(cs.leaseEnds).trim())}` : ""}`) : ""}
-      ${isLowRate(cs.rate) ? row("Escalation", `<b style="color:#047857">${esc(String(rateNum(cs.rate)))}% loan &mdash; send to the head of acquisitions if not locked up or if creative was declined</b>`) : ""}
-      ${row("HOA", cs.hoa === "yes" ? `Yes${num(cs.hoaAmt) > 0 ? ` &mdash; ${esc(usd(num(cs.hoaAmt)))}/mo` : ""}` : v(cs.hoa))}
-      ${row("Loan on the property", v(cs.loan))}${cs.loan === "yes" ? row("Approx. balance", v(cs.balance, true)) + row("Monthly payment", v(cs.payment, true)) + row("Rate", v(cs.rate)) + row("Behind on payments", v(cs.behind)) : ""}
-    </table>
-    <h2>Timeline &amp; price</h2><table>
-      ${row("Timeline", v(cs.timeline))}${row("Other decision makers", v(cs.others))}
-      ${row("Their number", v(cs.ask, true))}
-      ${row("Cash needed at closing", v(cs.needCash, true))}
-      ${row("What the cash is for", v(cs.needCashNotes))}${(() => { const nd = readCashNeed(cs, deal && deal.maxCash); if (!nd || nd.status === "no-ask") return ""; const t = nd.status === "over" ? `<span style="color:#b91c1c">Does not add up: their number leaves ${usd(Math.max(0, nd.equity))}${nd.payoff > 0 ? " after the payoff" : ""}, less than the ${usd(nd.need)} they need. Recheck with the seller.</span>` : nd.status === "no-balance" ? `<span style="color:#b45309">Loan balance missing, cannot check</span>` : `Their number leaves ${usd(nd.equity)}${nd.payoff > 0 ? " after the payoff" : ""}. ${nd.termsRoom > 0 ? `${usd(nd.termsRoom)} could be paid over time.` : "All of it is needed at closing."}${nd.cashNet != null ? ` Max cash offer nets them ${usd(Math.max(0, nd.cashNet))}.` : ""}`; return row("Need vs their number", t); })()}${row("How they got that number", v(cs.priceBasis))}
-      ${row("Open to payments over time", v(cs.terms))}
-    </table>
-    <h2>Deal numbers at download</h2><table>
-      ${row("ARV (After Repair Value)", deal.arv > 0 ? esc(usd(deal.arv)) : "&mdash;")}
-      ${row("ARV source", deal.arvSource ? esc(deal.arvSource) : "<span style=\"color:#b45309\">not tagged</span>")}
-      ${row("Repairs", deal.repairs > 0 ? esc(usd(deal.repairs)) + (deal.repairsDefault ? ` <span style="color:#b45309">default placeholder, condition not confirmed</span>` : "") : "&mdash;")}
-      ${row("MAO (Max Allowable Offer)", deal.maxCash > 0 ? esc(usd(deal.maxCash)) : "&mdash;")}
-      ${row("Opening offer", deal.maxCash > 0 ? esc(usd(Math.round(deal.maxCash * ANCHOR_PCT))) + ` <span style="color:#475569">(${Math.round(ANCHOR_PCT * 100)}% of the MAO)</span>` : "&mdash;")}
-      ${deal.asIs ? row("As-Is formula", esc(`Average online value ${usd(deal.asIs.avg)} (${deal.asIs.count} source${deal.asIs.count === 1 ? "" : "s"}), max buy ${usd(deal.asIs.maxBuy)}, opening offer ${usd(deal.asIs.offer)}`)) : ""}
-      ${row("Their number vs max cash", strat.gap != null ? (strat.gap > 0 ? esc(usd(strat.gap)) + " over the max" : esc(usd(Math.abs(strat.gap))) + " under the max") : "&mdash;")}
-    </table>
-    <h2>Strategy ranking</h2>
-    ${(() => { const ww = WENT_WITH.find((x) => x.id === cs.wentWith); if (!ww) return ""; const wr = strat.ranked.find((x) => x.id === ww.id); return `<div class="pitched">Went with: <b>${esc(ww.label)}</b>${wr ? ` &middot; scored ${wr.sc} of 100${wr.warn.length ? ` &middot; ${wr.warn.length} warning${wr.warn.length > 1 ? "s" : ""}` : ""}` : ""}${ww.deck ? ` &middot; buyer deck: ${esc(ww.deck)}` : ""}</div>`; })()}
-    ${(() => {
-      const ps = strat.ranked.filter((r) => (cs.chosen || "").split(",").filter(Boolean).includes(r.id));
-      return ps.length ? `<div class="pitched">Pitched on this call: <b>${esc(ps.map((p) => p.label).join(" and "))}</b></div>` : "";
-    })()}
-    ${stratRows}
-    <div class="foot">Internal working document generated by the YLHB Deal Desk. Figures are estimates for analysis only &mdash; not an appraisal, not an offer, and no outcome is promised or guaranteed.</div>
-  </body></html>`;
-};
-
-// ---- Offer Call autosave -------------------------------------------------
-// Calls are saved in THIS BROWSER, keyed by the subject address, so a rep who refreshes,
-// closes the tab, or comes back tomorrow picks up exactly where they left off. This is not
-// team-shared storage: the CRM stays the single source of truth for what the whole team sees.
-// Where an ARV came from. Tagged on every deal so the call report shows whether the number was
-// comped or estimated — the difference between a real offer and a guess with a dollar sign on it.
-const ARV_SOURCES = [
-  ["privy", "Privy comps"],
-  ["ps-comps", "PropStream comps"],
-  ["ps-estimate", "PropStream estimate"],
-  ["mls", "MLS / agent"],
-  ["appraisal", "Appraisal"],
-  ["deal-desk", "Deal Desk comps (RentCast)"],
-];
-const ARV_SOURCE_LABEL = Object.fromEntries(ARV_SOURCES);
-
-const CALL_STORE_PREFIX = "ylhb.call.v1:";
-const callStoreKey = (addr) => CALL_STORE_PREFIX + String(addr || "").trim().toLowerCase().replace(/\s+/g, " ");
-// Only save once the address looks real (an autocomplete pick always has "City, ST"), so
-// half-typed addresses do not litter storage with junk records.
-const addressSavable = (addr) => String(addr || "").includes(",") && String(addr).trim().length > 8;
-const readSavedCall = (addr) => {
-  try {
-    const raw = window.localStorage.getItem(callStoreKey(addr));
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-};
-// ---- Team sync -----------------------------------------------------------
-// The shared layer: calls also go to /api/calls so the next person on this address sees them.
-// Identity is two things kept in this browser — the rep's name (stamped on saves so a handoff
-// shows WHO captured it) and the team passcode (gates the endpoint, since the app is public).
-const SYNC_ID_KEY = "ylhb.sync.identity.v1";
-const readSyncId = () => {
-  try { return JSON.parse(window.localStorage.getItem(SYNC_ID_KEY) || "null") || { name: "", code: "" }; }
-  catch { return { name: "", code: "" }; }
-};
-const writeSyncId = (v) => { try { window.localStorage.setItem(SYNC_ID_KEY, JSON.stringify(v)); } catch {} };
-
-const fmtSavedAt = (iso) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-  const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-};
-
-// The walkthrough checklist. Roof and HVAC lead on purpose: they are the two biggest repair
-// numbers on a house, and their age is also the lever we use later to go back for more room.
-const COND_ITEMS = [
-  ["roof", "Roof"],
-  ["hvac", "HVAC"],
-  ["water", "Water heater"],
-  ["windows", "Windows"],
-  ["electrical", "Electrical"],
-  ["plumbing", "Plumbing"],
-  ["foundation", "Foundation"],
-  ["kitchen", "Kitchen"],
-  ["baths", "Bathrooms"],
-  ["floors", "Flooring"],
-  ["paint", "Paint"],
-  ["exterior", "Siding / exterior"],
-];
-const readItems = (raw) => { try { const v = JSON.parse(raw || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
-
-const CALL_STAGES = ["Prep", "Open", "Motivation", "Property", "Timeline", "Price", "Numbers", "Strategy", "Close"];
-
-// The need-vs-number panel on the Price stage. Red when the numbers cannot both be true, amber when a
-// missing input keeps it from being checked, green only when there is real room to work with.
-const MotivChecks = ({ checks, title = "These do not line up. Ask again." }) => {
-  if (!checks || !checks.length) return null;
-  return (
-    <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[12px] font-bold text-amber-900"><AlertTriangle className="h-3.5 w-3.5 text-amber-500" />{title}</div>
-      {checks.map((k, i) => (
-        <div key={i} className="mt-1.5 text-[11px] leading-snug text-slate-800">
-          {k.msg}
-          <div className="mt-0.5 font-medium text-emerald-800">Ask: {k.ask}</div>
-        </div>
-      ))}
-      <div className="mt-1.5 text-[10.5px] leading-snug text-slate-600">This does not change any strategy score. It flags answers worth one more question.</div>
-    </div>
-  );
-};
-
-// What the rent estimate was priced for, and a one-tap re-pull when beds, baths or sq ft changed since.
-// Re-pulls are a button, never automatic: each one is a RentCast credit, and a rep tapping +1 bed,
-// +1 bath, -1 bath would otherwise burn three.
-const fmtBasis = (b) => {
-  if (!b) return "";
-  const parts = [];
-  if (b.beds != null && b.baths != null) parts.push(`${num(b.beds)} bd / ${num(b.baths)} ba`);
-  else if (b.beds != null) parts.push(`${num(b.beds)} bd`);
-  if (num(b.sqft) > 0) parts.push(`${Math.round(num(b.sqft)).toLocaleString()} sq ft`);
-  return parts.join(", ");
-};
-// One prompt for the rent and the comps when beds, baths or sq ft changed since they were pulled.
-// A button, not automatic: comps are about 2 RentCast credits and rent 1, and a rep fixing a mis-tap
-// (+1, -1) should not pay for every tap.
-const RepullNote = ({ info }) => {
-  if (!info || info.loading || !(info.compStale || info.rentStale)) return null;
-  const now = fmtBasis(info.want);
-  const what = info.compStale && info.rentStale ? "rent and comps" : info.compStale ? "comps" : "rent";
-  const credits = (info.compStale ? 2 : 0) + (info.rentStale ? 1 : 0);
-  const wasLine = (label, b) => {
-    const t = b ? fmtBasis(b) : "";
-    return t ? <div>The {label} are for <b>{t}</b>.</div> : <div>The {label} were pulled before the bed and bath changes.</div>;
+// ---------- passcode gate ----------
+function Gate({ onUnlock }) {
+  const [code, setCode] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true); setMsg("");
+    try {
+      const r = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.trim() }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) { store.set(PASS_KEY, code.trim()); onUnlock(); }
+      else setMsg(j.error || "That passcode did not work. Check the course for the current one.");
+    } catch { setMsg("Could not reach the server. Check your connection and try again."); }
+    setBusy(false);
   };
   return (
-    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
-      {info.compStale && wasLine("sold comps", info.compBasis && info.compBasis.beds != null ? info.compBasis : null)}
-      {info.rentStale && wasLine("rent comps", info.rentBasis)}
-      <div>The house is now <b>{now || "different"}</b>. Re-pull so the {info.compStale ? "ARV" : "rent"}{info.compStale && info.rentStale ? " and rent" : ""} come{info.compStale && info.rentStale ? "" : "s"} from matching {info.compStale && info.rentStale ? "sales and rentals" : info.compStale ? "sales" : "rentals"}.</div>
-      <button type="button" onClick={info.onRepull}
-        className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2 py-1.5 text-[11.5px] font-bold text-white hover:bg-emerald-700">
-        <RefreshCw className="h-3 w-3" /> Re-pull {what} for {now || "the updated house"}
-      </button>
-      <div className="mt-0.5 text-center text-[10px] text-amber-800">Uses about {credits} RentCast credit{credits === 1 ? "" : "s"}.</div>
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+        <img src="/academy-logo.png" alt="Hobknob Co-Living Academy" className="mx-auto h-16 w-auto" />
+        <h1 className="mt-4 text-lg font-bold text-slate-900">Co-Living Deal Analyzer</h1>
+        <p className="mt-1 text-[13px] text-slate-600">For Hobknob Co-Living Academy students. Enter the passcode from your course.</p>
+        <div className="relative mt-4">
+          <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input className={`${inputCls} pl-9`} type="password" autoComplete="off" autoCapitalize="off" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Passcode" />
+        </div>
+        {msg && <div className="mt-2 text-[12px] text-rose-600">{msg}</div>}
+        <button disabled={busy || !code.trim()} className="mt-4 w-full rounded-lg px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50" style={{ background: BRAND }}>{busy ? "Checking..." : "Open the analyzer"}</button>
+      </form>
     </div>
   );
-};
+}
 
-const RentBasisNote = ({ info, compact = false }) => {
-  if (!info || info.loading || !info.has) return null;
-  if (info.stale && info.change) return <RepullNote info={info.change} />;
-  const was = info.basis ? fmtBasis(info.basis) : "";
-  const now = fmtBasis(info.want);
-  if (info.stale) return (
-    <div className="mt-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] leading-snug text-amber-900">
-      {was ? <>The rent estimate is for <b>{was}</b>, but the house is now <b>{now}</b>.</> : <>The rent estimate was pulled before the bed and bath changes, so it does not include them.</>}
-      <button type="button" onClick={info.onRepull}
-        className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-2 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700">
-        <RefreshCw className="h-3 w-3" /> Re-pull rent for {now || "the updated house"}
-      </button>
-      <div className="mt-0.5 text-center text-[10px] text-amber-800">Uses 1 RentCast credit.</div>
-    </div>
-  );
-  if (compact) return null;
-  return (
-    <div className="mt-0.5 text-[10.5px] leading-snug text-slate-600">
-      {was ? <>RentCast estimate for {was}.</> : <>RentCast estimate for the county record's beds and baths.</>}
-      {info.overridden ? " You typed your own rent, so the estimate is a reference only." : " Type to override."}
-    </div>
-  );
-};
-
-// Market rent card, laid out like RentCast's own: the estimate, $/sq ft and $/bedroom, and the low to
-// high range. A typed rent shows as a marker on the range so the team can see where their number sits.
-// ---------- Rental comp map ----------
-// Primary: a real Google map (Maps JavaScript API, same GOOGLE_MAPS_KEY the photos use, served by
-// /api/config). Gray styling, Map/Satellite toggle, fullscreen, slate numbered pins, cyan subject pin,
-// laid out like RentCast's. Dynamic Maps is an Essentials SKU with 10,000 free loads a month.
-// Fallback: if the key is missing or the Maps JavaScript API is not enabled on it, the same pins on
-// the free OpenStreetMap map, grayed to match. Nothing breaks either way.
-const pinSvg = (fill) => `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="40" viewBox="0 0 30 40"><path d="M15 39C15 39 28 24.5 28 14.5A13 13 0 0 0 2 14.5C2 24.5 15 39 15 39Z" fill="${fill}" stroke="#ffffff" stroke-width="1.5"/></svg>`)}`;
-let gmapsPromise = null;
-const loadGoogleMaps = () => {
-  if (window.google && window.google.maps) return Promise.resolve(window.google.maps);
-  if (gmapsPromise) return gmapsPromise;
-  gmapsPromise = fetch("/api/config").then((r) => (r.ok ? r.json() : {})).catch(() => ({})).then((cfg) => new Promise((resolve, reject) => {
-    if (!cfg || !cfg.mapsKey) { reject(new Error("no-key")); return; }
-    // Google calls this when the key is rejected (API not enabled, referrer blocked, billing off).
-    window.gm_authFailure = () => { window.__gmapsAuthFailed = true; window.dispatchEvent(new Event("gmaps-auth-failed")); };
-    const cb = "__ylhbGmapsReady";
-    window[cb] = () => resolve(window.google.maps);
-    const sc = document.createElement("script");
-    sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(cfg.mapsKey)}&callback=${cb}&loading=async`;
-    sc.async = true;
-    sc.onerror = () => reject(new Error("script"));
-    document.head.appendChild(sc);
-  }));
-  gmapsPromise.catch(() => { gmapsPromise = null; });
-  return gmapsPromise;
-};
-const GRAY_STYLE = [
-  { elementType: "geometry", stylers: [{ color: "#f1f2f4" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#5f6670" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#f8f9fa" }] },
-  { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
-  { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#e3e5e8" }] },
-  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#cfd3d8" }] },
-  { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#e2e5e8" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#d6dbe0" }] },
-  { featureType: "poi", elementType: "labels.icon", stylers: [{ saturation: -100 }, { lightness: 20 }] },
-  { featureType: "transit", stylers: [{ saturation: -100 }] },
-];
-const RENT_PIN = "#6b7f99", SUBJECT_PIN = "#06b6d4";
-
-// Google comp map shared by the rent card and the ARV section. colorOf/htmlOf style each pin and its
-// hover card. With onToggle (ARV), clicking a pin includes/excludes that sale; without it (rent), a
-// click just opens the card for phones. The map only re-zooms to fit when the set of pins changes,
-// so a rep who zoomed in is not thrown back out every time something else on the page updates.
-const GoogleCompMap = ({ subject, pins, onFail, colorOf, htmlOf, onToggle }) => {
-  const boxRef = useRef(null);
-  const st = useRef({ map: null, markers: [], info: null, fitKey: "" });
-  const toggleRef = useRef(onToggle);
-  toggleRef.current = onToggle;
-  const [ok, setOk] = useState(false);
+// ---------- main ----------
+export default function App() {
+  const [unlocked, setUnlocked] = useState(null); // null = checking a saved passcode
   useEffect(() => {
-    let dead = false;
-    const fail = () => { if (!dead) onFail(); };
-    if (window.__gmapsAuthFailed) { fail(); return; }
-    window.addEventListener("gmaps-auth-failed", fail);
-    loadGoogleMaps().then((gm) => {
-      if (dead || !boxRef.current) return;
-      st.current.map = new gm.Map(boxRef.current, {
-        center: { lat: 38.2527, lng: -85.7585 }, zoom: 13, styles: GRAY_STYLE,
-        // Map | Satellite like RentCast's. Satellite carries Google's own "Labels" toggle.
-        mapTypeControl: true, mapTypeControlOptions: { mapTypeIds: ["roadmap", "satellite"], position: gm.ControlPosition.TOP_LEFT },
-        fullscreenControl: true, streetViewControl: false, gestureHandling: "cooperative",
-        // Visible + / − buttons. Newer Google builds hide zoom inside a "camera" pop-out by default.
-        zoomControl: true, zoomControlOptions: { position: gm.ControlPosition.RIGHT_BOTTOM }, cameraControl: false,
-        // Google's own landmark pop-ups (parks, restaurants) just get in the way of the comp pins.
-        clickableIcons: false,
-      });
-      // No close-button header (it pushed the card into a scroll box), and a tap on open map closes it.
-      st.current.info = new gm.InfoWindow({ disableAutoPan: true, headerDisabled: true, maxWidth: 320 });
-      st.current.map.addListener("click", () => { st.current.info.close(); st.current.pinned = null; });
-      setOk(true);
-    }).catch(fail);
-    return () => { dead = true; window.removeEventListener("gmaps-auth-failed", fail); };
+    const saved = store.get(PASS_KEY, "");
+    if (!saved) { setUnlocked(false); return; }
+    fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: saved }) })
+      .then((r) => r.json().then((j) => ({ ok: r.ok && j.ok })).catch(() => ({ ok: false })))
+      .then(({ ok }) => { if (!ok) store.del(PASS_KEY); setUnlocked(ok); })
+      .catch(() => setUnlocked(true)); // offline with a passcode that worked before: let them keep working
   }, []);
-  useEffect(() => {
-    const gm = window.google && window.google.maps;
-    const map = st.current.map;
-    if (!ok || !gm || !map) return;
-    const info = st.current.info;
-    if (info) info.close();
-    st.current.pinned = null;
-    // The card stays up while the mouse travels from the pin onto the card, and while it is on the card,
-    // so a rep can read it (and copy the address). It closes a moment after the mouse leaves both.
-    const later = () => { clearTimeout(st.current.closeT); st.current.closeT = setTimeout(() => { if (!st.current.pinned) info.close(); }, 350); };
-    const keep = () => clearTimeout(st.current.closeT);
-    st.current.markers.forEach((m) => m.setMap(null));
-    st.current.markers = [];
-    const bounds = new gm.LatLngBounds();
-    const add = (pos, fill, label, z, html, p) => {
-      const m = new gm.Marker({
-        position: pos, map, zIndex: z,
-        icon: { url: pinSvg(fill), scaledSize: new gm.Size(30, 40), anchor: new gm.Point(15, 39), labelOrigin: new gm.Point(15, 15) },
-        label: label ? { text: label, color: "#ffffff", fontSize: "11px", fontWeight: "700" } : undefined,
-      });
-      if (html && info) {
-        const el = document.createElement("div");
-        el.className = "ylhb-card";
-        el.innerHTML = html;
-        el.addEventListener("mouseenter", keep);
-        el.addEventListener("mouseleave", later);
-        const open = () => { keep(); info.setContent(el); info.open({ anchor: m, map, shouldFocus: false }); };
-        m.addListener("mouseover", () => { if (!st.current.pinned || st.current.pinned === m) open(); });
-        m.addListener("mouseout", later);
-        // Rent map: a click pins the card open (phones have no hover) until the map is tapped. ARV map:
-        // a click still includes or excludes the sale.
-        m.addListener("click", () => {
-          if (p && toggleRef.current) { toggleRef.current(p.i); return; }
-          st.current.pinned = st.current.pinned === m ? null : m;
-          open();
-        });
-      }
-      st.current.markers.push(m); bounds.extend(pos);
-    };
-    pins.forEach((p) => add({ lat: p.lat, lng: p.lng }, colorOf ? colorOf(p) : RENT_PIN, String(p.n), 1, htmlOf ? htmlOf(p) : null, p));
-    if (subject) add({ lat: subject.lat, lng: subject.lng }, SUBJECT_PIN, "", 1000, null, null);
-    const key = [subject ? `${subject.lat},${subject.lng}` : "", ...pins.map((p) => `${p.lat},${p.lng}`)].join("|");
-    if (!bounds.isEmpty() && key !== st.current.fitKey) { st.current.fitKey = key; map.fitBounds(bounds, 36); }
-  }, [ok, subject, pins, colorOf, htmlOf]);
-  return <div ref={boxRef} className="ylhb-gmap h-full min-h-[320px] w-full" />;
-};
+  if (unlocked === null) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Loading...</div>;
+  if (!unlocked) return <Gate onUnlock={() => setUnlocked(true)} />;
+  return <Analyzer onLock={() => { store.del(PASS_KEY); setUnlocked(false); }} />;
+}
 
-// Same pins on the free OpenStreetMap map, for when Google is not available.
-const fallbackPinColor = () => RENT_PIN;
-const rentPinTip = (p) => `#${p.n} · ${usd(p.price)}/mo · ${p.label}`;
-const rentPinHtml = (p) => rentCompHtml(p.comp || {}, p.n);
-const soldPinHtml = (p) => soldCompHtml(p.comp || {}, p.n);
-const AutoCompMap = ({ subject, pins, colorOf, htmlOf, onToggle, tip }) => {
-  const [google, setGoogle] = useState(true);
-  if (google) return <GoogleCompMap subject={subject} pins={pins} colorOf={colorOf} htmlOf={htmlOf} onToggle={onToggle} onFail={() => setGoogle(false)} />;
-  return (
-    <div className="rent-map-fallback h-full">
-      <CompMap subject={subject} pins={pins} pinColor={colorOf} pinTip={tip} pinHtml={htmlOf} onToggle={onToggle} teardrop tall />
-    </div>
-  );
-};
-const RentCompMap = ({ subject, pins }) => (
-  <AutoCompMap subject={subject} pins={pins} colorOf={fallbackPinColor} htmlOf={rentPinHtml} tip={rentPinTip} />
-);
-// ARV pins: green = in the ARV, amber = flagged out, gray = out for other reasons.
-const soldPinColor = (p) => (p.included ? "#059669" : p.flagged ? "#d97706" : "#94a3b8");
-const RentCard = ({ est, low, high, info, typed, hasAddress, comps = [], subject, change, onRent, tenantRent = 0 }) => {
-  const [showList, setShowList] = useState(false);
-  const mapped = useMemo(() => (comps || []).map((c, i) => ({
-    i, n: i + 1, lat: c.lat, lng: c.lng, price: c.rent, comp: c,
-    label: [c.beds != null && c.baths != null ? `${c.beds} bd / ${c.baths} ba` : null, c.sqft ? `${Math.round(c.sqft).toLocaleString()} sf` : null, c.distance != null ? `${c.distance} mi` : null].filter(Boolean).join(" · "),
-  })).filter((p) => p.lat != null && p.lng != null), [comps]);
-  if (!hasAddress) return null;
-  const b = (info && info.basis) || (info && info.want) || {};
-  const sq = num(b.sqft), beds = num(b.beds);
-  const perSq = (v) => (sq > 0 && v > 0 ? `$${(v / sq).toFixed(2)}` : null);
-  // The rent the deal runs on: what the rep set (slider or typed), else RentCast's estimate.
-  const shown = typed > 0 ? typed : tenantRent > 0 ? tenantRent : est;
-  const perBed = beds > 0 && shown > 0 ? `$${(shown / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
-  const hasRange = low > 0 && high > low;
-  const pos = (v) => Math.min(100, Math.max(0, ((v - low) / (high - low)) * 100));
-  const hasMap = est > 0 && mapped.length > 0;
+function Analyzer({ onLock }) {
+  const [d, setD] = useState(() => ({ ...newDeal(), ...store.get(DRAFT_KEY, {}) }));
+  const [deals, setDeals] = useState(() => store.get(DEALS_KEY, []));
+  const [showSaved, setShowSaved] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
+  const [showFurnish, setShowFurnish] = useState(false);
+  const [showCapex, setShowCapex] = useState(false);
+  const [showFive, setShowFive] = useState(true);
+  const [fillRooms, setFillRooms] = useState(""); // the "same rent for every room" box remembers what is typed
+  useEffect(() => { store.set(DRAFT_KEY, d); }, [d]);
 
-  // Left: the estimate card, laid out like RentCast's.
-  const summary = (
-    <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex justify-center">
-        <span className="rounded-full bg-cyan-50 px-4 py-1.5 text-[13px] font-semibold text-cyan-600">Estimated Monthly Rent</span>
-      </div>
-      {est > 0 ? (<>
-        <div className={`mt-3 text-center text-5xl font-bold tracking-tight ${typed > 0 ? "text-amber-600" : tenantRent > 0 ? "text-emerald-700" : "text-slate-900"}`}>{usd(shown)}</div>
-        {!(typed > 0) && tenantRent > 0 && (
-          <div className="mt-1 text-center text-[12px] text-slate-700">
-            What the tenant pays now · RentCast market rent {usd(est)}
-            {est > tenantRent ? <b className="text-emerald-700"> · +{usd(est - tenantRent)}/mo upside</b> : null}
-          </div>
-        )}
-        {typed > 0 && (
-          <div className="mt-1 text-center text-[12px] text-slate-700">
-            Set by you · RentCast says {usd(est)}
-            {onRent && <> · <button type="button" onClick={() => onRent("")} className="font-semibold text-emerald-700 hover:underline">reset</button></>}
-          </div>
-        )}
-        {(perSq(shown) || perBed) && (
-          <div className="mt-3 flex items-stretch justify-center gap-5 text-center">
-            {perSq(shown) && <div><div className="text-[15px] font-bold text-slate-800">{perSq(shown)}</div><div className="text-[12px] text-slate-700">per sq.ft.</div></div>}
-            {perSq(shown) && perBed && <div className="w-px bg-slate-200" />}
-            {perBed && <div><div className="text-[15px] font-bold text-slate-800">{perBed}</div><div className="text-[12px] text-slate-700">per bedroom</div></div>}
-          </div>
-        )}
-        {hasRange ? (
-          <div className="mt-5">
-            <div className="flex justify-between text-[12.5px] text-slate-600"><span>Low Estimate</span><span>High Estimate</span></div>
-            <div className="relative mt-1.5 h-3.5 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500">
-              {/* RentCast's own estimate stays marked, so a rep can always see where they moved from. */}
-              {est >= low && est <= high && <div className="absolute top-1/2 h-5 w-1 -translate-y-1/2 rounded bg-slate-900/60" style={{ left: `calc(${pos(est)}% - 2px)` }} title={`RentCast ${usd(est)}`} />}
-              {/* Drag the handle to set the rent. It only moves inside RentCast's low-to-high range; a
-                  number outside it has to be typed, and gets the "outside the range" warning. */}
-              {onRent && (
-                <input type="range" className="rent-range absolute -top-1.5 left-0 h-6 w-full cursor-pointer" aria-label="Set the monthly rent"
-                  min={low} max={high} step={5} value={Math.min(high, Math.max(low, shown))}
-                  onChange={(e) => { const v = Number(e.target.value); onRent(Math.abs(v - est) < 5 ? "" : String(v)); }} />
-              )}
-            </div>
-            {onRent && <div className="mt-1 text-center text-[11px] text-slate-600">Drag the handle to set the rent the deal runs on.</div>}
-            <div className="mt-2 flex justify-between">
-              <div><div className="text-[15px] font-bold text-slate-800">{usd(low)}</div>{perSq(low) && <div className="text-[12px] text-slate-700">{perSq(low)} /sq.ft.</div>}</div>
-              <div className="text-right"><div className="text-[15px] font-bold text-slate-800">{usd(high)}</div>{perSq(high) && <div className="text-[12px] text-slate-700">{perSq(high)} /sq.ft.</div>}</div>
-            </div>
-            {typed > 0 && (typed < low || typed > high) && (
-              <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Your typed rent of {usd(typed)} is {typed > high ? "above" : "below"} RentCast's whole range. Make sure you have a comp that supports it.</div>
-            )}
-          </div>
-        ) : (
-          <div className="mt-3 text-center text-[11px] text-slate-700">Re-pull the rent to see RentCast's low and high range.</div>
-        )}
-        <div className="mt-auto pt-3 text-center text-[11px] leading-snug text-slate-700">
-          {info && info.basis ? <>For {fmtBasis(info.basis)}</> : <>For the county record's beds and baths</>}
-          {info && info.basis && info.basis.comps ? <> · {info.basis.comps} comps {info.basis.search || ""}</> : null}
-        </div>
-        {/* Same combined prompt as the bed/bath controls, so there is only ever one kind of re-pull button. */}
-        {change && change.rentStale ? <RepullNote info={change} /> : <RentBasisNote info={info} compact />}
-      </>) : (
-        <div className="mt-3 text-center">
-          <div className="text-[12px] text-slate-600">No rent pulled for this house yet.</div>
-          {info && (
-            <button type="button" onClick={info.onRepull} disabled={info.loading}
-              className="mt-2 rounded-full bg-emerald-600 px-4 py-2 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
-              {info.loading ? "Pulling…" : "Get market rent (1 RentCast credit)"}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  const set = (k, v) => setD((p) => ({ ...p, [k]: v }));
+  const setIn = (group, k, v) => setD((p) => ({ ...p, [group]: { ...(p[group] || {}), [k]: v } }));
+  const type = d.dealType, model = d.model;
+  const showRooms = model === "coliving" || model === "hybrid";
+  const showUnits = model === "private" || model === "hybrid";
 
-  return (
-    <div className="mt-4">
-      {/* Card on the left, comp map on the right; stacked on a phone. */}
-      <div className={hasMap ? "grid gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" : ""}>
-        {summary}
-        {hasMap && (
-          <div className="relative min-h-[320px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <RentCompMap subject={subject} pins={mapped} />
-          </div>
-        )}
-      </div>
-      {hasMap && (
-        <>
-          <div className="mt-1.5 flex items-center justify-between px-1 text-[11px] text-slate-700">
-            <span><span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold" style={{ color: RENT_PIN }}>●</span> rental comps RentCast priced it from</span>
-            <button type="button" onClick={() => setShowList((v) => !v)} className="font-semibold text-emerald-700 hover:underline">{showList ? "Hide list" : `Show all ${comps.length}`}</button>
-          </div>
-          {showList && (
-            <div className="mt-2 max-h-72 overflow-auto rounded-xl border border-slate-200 bg-white">
-              {comps.map((c, i) => (
-                <div key={i} className="flex items-start justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] last:border-0">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold text-slate-800"><span className="mr-1 inline-block w-6 text-slate-700">#{i + 1}</span>{c.address}</div>
-                    <div className="pl-7 text-slate-700">
-                      {[c.beds != null && c.baths != null ? `${c.beds} bd / ${c.baths} ba` : null, c.sqft ? `${Math.round(c.sqft).toLocaleString()} sf` : null, c.distance != null ? `${c.distance} mi away` : null, c.daysOld != null ? `seen ${c.daysOld}d ago` : null, c.match != null ? `${c.match}% match` : null].filter(Boolean).join(" · ")}
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="font-mono font-bold text-slate-900">{c.rent ? usd(c.rent) : "—"}</div>
-                    {c.rent && c.sqft ? <div className="text-[10px] text-slate-700">${(c.rent / c.sqft).toFixed(2)}/sf</div> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-};
+  const resize = (key, countKey, n, max) => setD((p) => {
+    const c = Math.max(0, Math.min(max, Math.round(num(n))));
+    const list = [...(p[key] || [])];
+    while (list.length < c) list.push({ rent: list.length ? list[list.length - 1].rent : "", owner: false });
+    return { ...p, [countKey]: c, [key]: list.slice(0, c) };
+  });
+  const setRent = (key, i, v) => setD((p) => ({ ...p, [key]: p[key].map((r, j) => (j === i ? { ...r, rent: v } : r)) }));
+  const setOwner = (key, i) => setD((p) => ({
+    ...p,
+    rooms: p.rooms.map((r, j) => ({ ...r, owner: key === "rooms" && j === i ? !r.owner : false })),
+    units: p.units.map((u, j) => ({ ...u, owner: key === "units" && j === i ? !u.owner : false })),
+  }));
+  const fillAll = (key, v) => setD((p) => ({ ...p, [key]: p[key].map((r) => ({ ...r, rent: v })) }));
 
-// Sub-To and Hybrid both take over the seller's loan, so the real numbers have to come off the lender's
-// paper, not the seller's memory. Shown as a step in the pitch and again at Close until it is received.
-const STMT_OPTS = [["requested", "Requested"], ["received", "Received"], ["declined", "Seller declined"]];
-const STMT_LABEL = { requested: "Requested, not received yet", received: "Received", declined: "Seller declined to share it" };
-const MortgageStatementStep = ({ cs, upd, compact = false }) => (
-  <div className={`mt-2.5 rounded-lg border-2 ${cs.stmt === "received" ? "border-emerald-400 bg-white" : "border-amber-400 bg-amber-50"} px-3 py-2`}>
-    <div className="flex items-center gap-1.5 text-[12px] font-bold text-slate-900">
-      <FileDown className="h-3.5 w-3.5 text-amber-600" /> Ask for the mortgage statement
-    </div>
-    {!compact && <Line>“So we get your numbers exactly right, could you snap a photo of your most recent mortgage statement and text or email it to me?”</Line>}
-    {!compact && (
-      <div className="mt-1 text-[11px] leading-snug text-slate-700">
-        It confirms the lender, the loan number, the exact balance and payment, whether taxes and insurance are escrowed, and whether they are current. A Sub-To or Hybrid offer never goes final on what the seller remembers.
-      </div>
-    )}
-    <div className="mt-1.5 flex flex-wrap gap-1.5">
-      {STMT_OPTS.map(([v, l]) => (
-        <button key={v} type="button" onClick={() => upd("stmt", cs.stmt === v ? "" : v)}
-          className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${cs.stmt === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}>{l}</button>
-      ))}
-    </div>
-    {cs.stmt === "declined" && (
-      <div className="mt-1.5 text-[11px] leading-snug text-amber-800">
-        Say: “No problem. We can't finalize the numbers without it, so whenever you're comfortable, I'll be right here.” Note it, and flag it to the head of acquisitions before any agreement goes out.
-      </div>
-    )}
-  </div>
-);
-
-// After the agreement is signed: how the team gets in for photos, walkthroughs and contractors.
-const ACCESS_OPTS = [["seller", "Seller lets us in"], ["lockbox", "Lockbox"], ["key", "Key left out"], ["tenant", "Through the tenant"], ["other", "Other"]];
-const ACCESS_LABEL = Object.fromEntries(ACCESS_OPTS);
-const AccessStep = ({ cs, upd }) => (
-  <div className="mt-2 rounded-lg border-2 border-emerald-500 bg-emerald-50/50 px-3 py-2">
-    <div className="text-[12px] font-bold text-slate-900">Get access instructions</div>
-    <Line>“So we can get photos and contractors in over the next few days, what's the best way for us to get into the house?”</Line>
-    <WField label="How we get in">
-      <WChips value={cs.accessHow} onChange={(v) => upd("accessHow", v)} opts={ACCESS_OPTS} />
-    </WField>
-    {(cs.accessHow === "lockbox" || cs.accessHow === "key" || cs.accessHow === "other") && (
-      <WField label={cs.accessHow === "lockbox" ? "Lockbox location and code" : cs.accessHow === "key" ? "Where the key is" : "How it works"}>
-        <WText value={cs.accessCode} onChange={(v) => upd("accessCode", v)} placeholder={cs.accessHow === "lockbox" ? "on the back door, code 4821" : cs.accessHow === "key" ? "under the planter by the side door" : "describe it"} />
-      </WField>
-    )}
-    <WField label="Best days and times, and who to call first">
-      <WText value={cs.accessTimes} onChange={(v) => upd("accessTimes", v)} placeholder="weekdays after 3, text Linda first at 502-555-0100" />
-    </WField>
-    <Hint>Then ask: “Is there an alarm, a gate code, or any pets we should know about?” and “Is anyone living there we should coordinate with?”</Hint>
-    <WField label="Alarm, gate, pets, anything else">
-      <WText value={cs.accessNotes} onChange={(v) => upd("accessNotes", v)} placeholder="dog in the back yard, alarm code 1234, gate sticks" />
-    </WField>
-    {cs.occupancy === "tenant" && (
-      <div className="mt-1.5 text-[11px] leading-snug text-amber-800">A tenant lives there. Set visits up through the seller and give the tenant advance notice. Never show up unannounced.</div>
-    )}
-    {!cs.accessHow && <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Do not end the call without this. Dispositions and contractors cannot start until we know how to get in.</div>}
-  </div>
-);
-
-const NeedCheck = ({ nd }) => {
-  if (!nd) return null;
-  const box = (tone, children) => (
-    <div className={`mt-1.5 rounded-md border px-2.5 py-1.5 text-[11px] leading-snug ${tone === "red" ? "border-rose-300 bg-rose-50 text-rose-800" : tone === "amber" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>{children}</div>
-  );
-  if (nd.status === "no-ask") return box("amber", <>Get their number first so this can be checked against it.</>);
-  if (nd.status === "no-balance") return box("amber", <>This is what they need in their pocket <b>after</b> the loan is paid off, but the loan balance is blank. Go back to Property and get the rough balance, or this cannot be checked.</>);
-  if (nd.status === "over") return box("red", <>
-    <b>These numbers cannot both be true.</b> Their number is {usd(nd.ask)}{nd.payoff > 0 ? <>, and paying off the {usd(nd.payoff)} loan leaves {usd(Math.max(0, nd.equity))}</> : null}. The most they can walk away with at their own price is <b>{usd(Math.max(0, nd.equity))}</b>, and they said they need <b>{usd(nd.need)}</b>.
-    <div className="mt-1">Read it back: “Just so I have this right, after everything is paid off you need {usd(nd.need)} in your pocket?” Usually they gave you the full price, or forgot about the loan. Fix whichever number is wrong before you talk about any structure.</div>
-    {nd.loanUnasked && <div className="mt-1">The loan question on Property has not been answered, so this reads as free and clear.</div>}
-  </>);
-  // ok
-  const cashLine = nd.cashNet == null ? null
-    : nd.cashNet >= nd.need
-      ? <>Cash can solve this one. Your max cash offer of {usd(nd.maxCash)} nets them {usd(nd.cashNet)}{nd.payoff > 0 ? " after the payoff" : ""}, which covers the {usd(nd.need)}. {nd.anchorNet >= nd.need ? <>Even your anchor at {usd(nd.anchor)} covers it, so open there.</> : <>Your anchor at {usd(nd.anchor)} nets them {usd(Math.max(0, nd.anchorNet))}, {usd(nd.need - nd.anchorNet)} short, so you have room to move up from the anchor.</>}</>
-      : <>Cash alone will not get there. Your max cash offer of {usd(nd.maxCash)} {nd.cashNet > 0 ? <>nets them only {usd(nd.cashNet)}{nd.payoff > 0 ? " after the payoff" : ""}</> : <>does not even cover the loan payoff</>}, {usd(nd.need - Math.max(0, nd.cashNet))} short of what they need. Still pitch cash first to anchor, then solve the need with terms.</>;
-  return box("green", <>
-    <div>
-      {nd.payoff > 0
-        ? <>Their number of {usd(nd.ask)} is {usd(nd.payoff)} to pay off the loan plus <b>{usd(nd.equity)}</b> of equity.</>
-        : <>Their number is {usd(nd.ask)}{nd.loanUnasked ? " (loan question not answered yet, reading it as free and clear)" : " with no loan"}.</>}{" "}
-      {nd.termsRoom > 0
-        ? <>They need <b>{usd(nd.need)}</b> of that at closing, so <b>{usd(nd.termsRoom)}</b> can come to them over time. That is the room a creative structure works with.</>
-        : <>They need all of it, <b>{usd(nd.need)}</b>, at closing. There is no room for terms, so this is a cash price negotiation.</>}
-    </div>
-    {cashLine && <div className="mt-1 border-t border-emerald-200 pt-1">{cashLine}</div>}
-  </>);
-};
-
-// The Numbers stage, rebuilt around one question: where is their number against our max? Each band
-// gets only the moves that fit it. A seller asking 2.5x the max does not need a roof-and-HVAC hold,
-// and a seller already under the anchor does not need to be negotiated down.
-// Can a cash price even pay off their loan? Shown wherever the rep is about to say a cash number.
-const PayoffAlert = ({ cs, maxCash }) => {
-  const bal = num(cs.balance), max = Math.round(num(maxCash));
-  if (cs.loan !== "yes" || bal <= 0 || max <= 0) return null;
-  const anchor = Math.round(max * ANCHOR_PCT);
-  if (bal > max) return (
-    <div className="mt-2 flex items-start gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] leading-snug text-rose-900">
-      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-rose-600" />
-      <span>
-        <b>Cash cannot pay off their loan.</b> They owe about {usd(bal)}, and the most you can pay is {usd(max)}. At any cash price you can offer, they are {usd(bal - max)} short of the payoff, so they would have to bring that to closing or get their lender to approve a short sale. Say the cash number to anchor, but expect a no, and understand it is the math, not a bad negotiation.
-      </span>
-    </div>
-  );
-  if (bal > anchor) return (
-    <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
-      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
-      <span>They owe about {usd(bal)}, more than your {usd(anchor)} anchor. A number below their payoff is one they cannot accept, so open at or just above {usd(bal)}. That leaves {usd(max - bal)} between the payoff and your max.</span>
-    </div>
-  );
-  return (
-    <div className="mt-2 text-[10.5px] leading-snug text-slate-700">Your anchor clears their {usd(bal)} loan payoff, leaving them {usd(anchor - bal)} at the anchor and up to {usd(max - bal)} at your max.</div>
-  );
-};
-
-const NumbersPlan = (props) => (<>
-  {props.deal.maxCash > 0 && num(props.cs.ask) > 0 && <PayoffAlert cs={props.cs} maxCash={props.deal.maxCash} />}
-  <NumbersPlanBody {...props} />
-</>);
-
-const NumbersPlanBody = ({ cs, upd, deal, gap }) => {
-  const ask = num(cs.ask), max = deal.maxCash > 0 ? Math.round(deal.maxCash) : 0;
-  const anchor = max > 0 ? Math.round(max * ANCHOR_PCT) : 0;
-  const band = priceBand(ask, max);
-  const say = anchorWords(anchor);
-  const overPct = max > 0 && ask > max ? Math.round(((ask - max) / max) * 100) : 0;
-  const head = (tone, title, body) => (
-    <div className={`mt-2 rounded-lg border-l-4 px-3 py-2 ${tone === "green" ? "border-emerald-600 bg-emerald-50" : tone === "amber" ? "border-amber-500 bg-amber-50" : tone === "red" ? "border-rose-600 bg-rose-50" : "border-slate-900 bg-slate-100"}`}>
-      <div className={`text-[12px] font-bold ${tone === "green" ? "text-emerald-900" : tone === "amber" ? "text-amber-900" : tone === "red" ? "text-rose-900" : "text-slate-900"}`}>{title}</div>
-      <div className="mt-0.5 text-[11px] leading-snug text-slate-700">{body}</div>
-    </div>
-  );
-  const valueFrame = <Line>Value framing: “What Zillow doesn't know is the actual condition of the property.” · “We buy houses as-is. No repairs, no commissions, no inspections, and no showings.” · “We can close quickly and make this process simple.”</Line>;
-  const anchorLine = anchor > 0 && (
-    <>
-      {/* The anchor, as B teaches it (Oct 16 2026): two separate beats with a pause after each. The first
-          is meant to get a no. The second turns that no into their real number. */}
-      <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
-        <b>Only after trust, authority and rapport.</b> If you have not built those yet, go back to their why and the house before you say a number. An anchor said too early sounds like a lowball, and it costs you the call.
-      </div>
-      <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">Step 1 · say the opening offer</div>
-      <Line>“In a perfect world, we would be in the {say}.”</Line>
-      <Hint>Then pause and let them respond. Do not explain it, soften it or fill the silence. This number is supposed to get a no, so a no means it worked.</Hint>
-      <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">Step 2 · once they say no</div>
-      <Line>“How close to that could you be?”</Line>
-      <Hint>Then pause again and let them answer. Whatever they say next is their real number. Your opening offer is {usd(anchor)}, and every move after this goes up toward the seller, never past {usd(max)}.</Hint>
-      <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-900">
-        <Lightbulb className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-600" />
-        <span><b>Why open low:</b> {ANCHOR_WHY}</span>
-      </div>
-    </>
-  );
-  const hold = (
-    <details className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2" open={band === "close"}>
-      <summary className="cursor-pointer text-[11.5px] font-bold text-slate-800">Stuck on price? Use the roof and the HVAC.</summary>
-      <div className="mt-1 text-[11px] leading-snug text-slate-600">This is what the checklist answers were for. Put them on a brief hold, come back, and use the condition of the big-ticket items as the reason for a better number.</div>
-      <Line>“Do you mind holding for just a minute? Let me see what I can do.”</Line>
-      <Line>Come back with: “I went back and looked at this again. You said the roof was ____ and the HVAC was ____. Based on that, let me see if I can get this approved at a better number for you.”</Line>
-      <Hint>Only works if you actually logged those answers in the Property stage. Never invent condition details you were not told.</Hint>
-    </details>
-  );
-  const takeaway = <Line>Takeaway close if they hold firm: “If that's truly what you need to accomplish your goal, then honestly listing it with an agent might make more sense.”</Line>;
-  const terms = (label) => (
-    <WField label={label}>
-      <WChips value={cs.terms} onChange={(v) => upd("terms", v)} opts={[["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]]} />
-    </WField>
-  );
-
-  if (band === "no-max") return (<>
-    {head("slate", "No max offer yet", <>This needs an ARV and a repair number before it can coach the price. Run Auto-comp or type an ARV up top, and set a condition or repair number on the Property stage.</>)}
-    {valueFrame}
-    <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
-    {terms("Open to payments over time? (sets up creative)")}
-  </>);
-
-  if (band === "no-ask") return (<>
-    {head("slate", "Get their number first", <>Your max cash offer is {usd(max)}. Everything on this screen depends on how far their number is from it, so do not say yours until you have theirs.</>)}
-    {valueFrame}
-    <Line>The main question: “If we could close quickly, buy it as-is, and make this super simple for you, what would you need to walk away with?”</Line>
-    <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="their asking price" /></WField>
-  </>);
-
-  if (band === "under-anchor") return (<>
-    {head("green", "Their number is under your anchor. Lock it up.", <>They are asking {usd(ask)}. Your anchor is {usd(anchor)} and your max is {usd(max)}. Do not counter lower and do not offer more than they asked. Agree to their number and move to paperwork.</>)}
-    <Line>“So if we can do {usd(ask)}, buy it as-is, and close on your timeline, is that something you would want to move forward with?”</Line>
-    <Hint>A number this far under the max is worth one sanity check. Make sure the repairs were captured and that nothing like a lien, a second loan or an estate issue is hiding behind the low price.</Hint>
-  </>);
-
-  if (band === "in-range") return (<>
-    {head("green", "Cash works. Their number is between your anchor and your max.", <>They are asking {usd(ask)}. Open at your anchor of {usd(anchor)}, and let them pull you up toward their number. You can pay up to {usd(max)}, but there is no reason to go past {usd(ask)}.</>)}
-    {valueFrame}
-    {anchorLine}
-    {hold}
-  </>);
-
-  if (band === "close") return (<>
-    {head("amber", "Within reach of cash.", <>They are asking {usd(ask)}, which is {usd(ask - max)} ({overPct}%) over your max of {usd(max)}. That is close enough to negotiate. Anchor low, then use the roof and HVAC to earn the move down. If they will not come to your max, ask about terms before you let them go.</>)}
-    {valueFrame}
-    {anchorLine}
-    {hold}
-    {takeaway}
-    {terms("If they will not come to your max: open to payments over time?")}
-  </>);
-
-  // far
-  const need = num(cs.needCash);
-  return (<>
-    {head("red", "Cash will not close this gap.", <>They are asking {usd(ask)}, which is {usd(ask - max)} ({overPct}%) over your max of {usd(max)}. No hold or roof story moves a seller that far. Still say the cash number, because it anchors everything after it, then move to terms.</>)}
-    {valueFrame}
-    {anchorLine}
-    <Line>Pivot to terms: “I understand that number is important to you. If I could get you closer to it, would you be open to receiving part of it over time instead of all at closing?”</Line>
-    {terms("Open to payments over time?")}
-    {need > 0 && <Hint>They told you they need {usd(need)} at closing. That, not their asking price, is what a creative offer has to solve.</Hint>}
-    {cs.terms === "no" && <>{takeaway}<Hint>All cash at their number and no terms means there is no deal today. Be polite, log it, and set a follow-up. Sellers who test the market often call back.</Hint></>}
-  </>);
-};
-
-// The amber triangle on a strategy card used to be a bare icon. Hover (or tap, on a phone) now opens
-// the actual warnings behind it. Tapping the triangle does not also select the card underneath.
-const WarnTip = ({ label, warns }) => {
-  const [show, setShow] = useState(false);
-  return (
-    <span className="relative inline-flex"
-      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}
-      onClick={(e) => { e.stopPropagation(); setShow((v) => !v); }}
-      aria-label={`${label} warnings`} role="note">
-      <AlertTriangle className="h-3.5 w-3.5 cursor-help text-amber-500" />
-      {show && (
-        <span className="absolute left-0 top-full z-40 block w-72 pt-1.5" role="tooltip">
-          <span className="block rounded-lg border border-amber-300 bg-white p-2.5 text-left shadow-xl">
-            <span className="block text-[11.5px] font-bold text-amber-900">Watch out on {label}</span>
-            {warns.map((w, k) => (
-              <span key={k} className="mt-1 flex items-start gap-1.5 text-[11px] font-normal leading-snug text-slate-700">
-                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}
-              </span>
-            ))}
-          </span>
-        </span>
-      )}
-    </span>
-  );
-};
-
-const OfferCall = ({ open, onClose, cs, upd, deal, onTab, onCondition, reset, save, onDeck }) => {
-  const [stage, setStage] = useState(0);
-  const [syncOpen, setSyncOpen] = useState(false);
-  const [showCode, setShowCode] = useState(false);
-  const [idDraft, setIdDraft] = useState(() => ({ ...save.syncId }));
-  useEffect(() => { setIdDraft({ ...save.syncId }); }, [save.syncId]);
-  if (!open) return null;
-  const strat = scoreStrategies(cs, deal);
-  const downloadReport = () => {
-    const html = buildCallReport(cs, deal, strat);
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `offer-call-${(deal.address || "report").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "report"}-${new Date().toISOString().slice(0, 10)}.html`;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+  // The deal as the math sees it: only the rentals the chosen model uses, and furnishing counts that
+  // fall back to the property facts when left blank.
+  const rentableAuto = (showRooms ? d.roomCount : 0) + (showUnits ? d.unitCount : 0);
+  const furnAuto = {
+    bedrooms: rentableAuto, bathrooms: num(d.bathsAfter) || num(d.baths),
+    kitchens: model === "coliving" ? 1 : model === "private" ? d.unitCount : d.unitCount + 1,
+    laundry: model === "coliving" ? 1 : model === "private" ? d.unitCount : d.unitCount + 1,
+    living: model === "coliving" ? 1 : model === "private" ? d.unitCount : d.unitCount + 1,
+    dining: model === "coliving" ? 1 : 0, sqft: num(d.sqft),
   };
-  const name = cs.sellerName.trim();
-  const nm = (name.split(/\s+/)[0] || "").trim() || "John"; // script greetings use the first name only, even when the full name is captured
-  const canPrev = stage > 0, canNext = stage < CALL_STAGES.length - 1;
+  const furnEff = Object.fromEntries(Object.keys(furnAuto).map((k) => [k, String(d.furnish[k] ?? "").trim() !== "" ? num(d.furnish[k]) : furnAuto[k]]));
+  const deal = useMemo(() => ({
+    ...d,
+    rooms: showRooms ? d.rooms : [], units: showUnits ? d.units : [],
+    furnish: { ...furnEff, hire: d.furnish.hire },
+    // A Sub-To payment includes taxes and insurance only when the student says it does.
+    stEscrowed: d.stEscrowed !== false,
+  }), [d, showRooms, showUnits, JSON.stringify(furnEff)]);
+  const a = useMemo(() => analyze(deal), [deal]);
+  const wit = useMemo(() => whatItTakes(deal, type === "hack" ? null : num(d.targetCoc) || 15), [deal, type, d.targetCoc]);
+  const witBreakeven = useMemo(() => (type === "hack" ? null : whatItTakes(deal, null)), [deal, type]);
+
+  // ---------- saved deals ----------
+  const saveDeal = () => {
+    const name = d.name.trim() || d.address.trim() || `Deal ${deals.length + 1}`;
+    const rec = { id: d.id || `d${Date.now()}`, name, savedAt: new Date().toISOString(), d: { ...d, name } };
+    const next = [rec, ...deals.filter((x) => x.id !== rec.id)];
+    setDeals(next); store.set(DEALS_KEY, next); setD((p) => ({ ...p, id: rec.id, name }));
+    setSavedMsg(`Saved "${name}"`); setTimeout(() => setSavedMsg(""), 2500);
+  };
+  const openDeal = (rec) => { setD({ ...newDeal(), ...rec.d, id: rec.id }); setFillRooms(""); setShowSaved(false); window.scrollTo?.(0, 0); };
+  const deleteDeal = (id) => { const next = deals.filter((x) => x.id !== id); setDeals(next); store.set(DEALS_KEY, next); };
+  const startNew = () => { setD(newDeal()); setFillRooms(""); window.scrollTo?.(0, 0); };
+
+  const tone = a.verdict.tone;
+  const vStyle = tone === "strong" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : tone === "solid" ? "border-sky-300 bg-sky-50 text-sky-900"
+    : tone === "thin" ? "border-amber-300 bg-amber-50 text-amber-900" : tone === "pass" ? "border-rose-300 bg-rose-50 text-rose-900" : "border-slate-200 bg-slate-50 text-slate-700";
+  const VIcon = tone === "strong" || tone === "solid" ? CheckCircle2 : tone === "thin" ? AlertTriangle : tone === "pass" ? XCircle : Info;
+
   return (
-    <div className="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-slate-200 bg-white shadow-2xl sm:w-[470px]">
-      {/* header */}
-      <div className="border-b border-slate-100 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Phone className="h-4 w-4 text-emerald-600" /> Offer Call</div>
-          <div className="flex items-center gap-1.5">
-            <button type="button" onClick={() => { if (window.confirm("Clear this call and start fresh?")) { reset(); setStage(0); } }} className="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-50">New call</button>
-            <button type="button" onClick={onClose} title="Minimize — your call info stays put" className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"><Minus className="h-4 w-4" /></button>
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      {/* Header */}
+      <header className="z-20 border-b border-slate-200 bg-white/95 backdrop-blur lg:sticky lg:top-0">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <img src="/academy-logo.png" alt="Hobknob Co-Living Academy" className="h-8 w-auto sm:h-10" />
+            <span className="hidden border-l border-slate-200 pl-3 text-sm font-bold text-slate-800 sm:inline">Co-Living Deal Analyzer</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {savedMsg && <span className="text-[12px] font-semibold text-emerald-700">{savedMsg}</span>}
+            <button onClick={saveDeal} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-white" style={{ background: BRAND }}><Save className="h-3.5 w-3.5" />Save<span className="hidden sm:inline"> deal</span></button>
+            <button onClick={() => setShowSaved((s) => !s)} aria-label="My deals" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"><FolderOpen className="h-3.5 w-3.5" /><span className="hidden sm:inline">My deals </span>({deals.length})</button>
+            <button onClick={startNew} aria-label="New deal" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"><FilePlus2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">New</span></button>
+            <button onClick={() => downloadReport(d, a, wit)} aria-label="Download report" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"><Download className="h-3.5 w-3.5" /><span className="hidden sm:inline">Report</span></button>
           </div>
         </div>
-        {/* The drawer covers the address field, so the call has to say which house it is about. */}
-        <div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-slate-100 px-2.5 py-1.5">
-          <MapPin className="mt-px h-3.5 w-3.5 shrink-0 text-slate-600" />
-          <div className="min-w-0">
-            <div className="text-[11.5px] font-bold leading-snug text-slate-800">
-              {deal.address ? deal.address : <span className="font-semibold text-amber-700">No address set. Close this and pick one up top before you dial.</span>}
-            </div>
-            {deal.address && (deal.arv > 0 || deal.maxCash > 0) && (
-              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
-                {deal.arv > 0 ? <>ARV {usd(deal.arv)}</> : null}
-                {deal.arv > 0 && deal.maxCash > 0 ? " · " : ""}
-                {deal.maxCash > 0 ? <>max allowable cash offer <b className="text-slate-700">{usd(deal.maxCash)}</b> · opening offer <b className="text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</b></> : null}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* four pillars */}
-        <div className="mt-2 flex items-center gap-1.5">
-          {PILLARS.map((p) => (
-            <span key={p.id} className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${p.done(cs) ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-              {p.done(cs) ? <CheckCircle2 className="h-3 w-3" /> : <MinusCircle className="h-3 w-3" />}{p.label}
-            </span>
-          ))}
-        </div>
-        {/* stage pips */}
-        <div className="mt-2 flex flex-wrap gap-1">
-          {CALL_STAGES.map((t, i) => (
-            <button key={t} type="button" onClick={() => setStage(i)}
-              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${i === stage ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{t}</button>
-          ))}
-        </div>
-        <div className="mt-1.5 text-[10px] leading-snug text-slate-600">
-          {!save.savable
-            ? "Pick the subject address up top and this call saves itself."
-            : save.sync.status === "synced" && save.sync.by
-              ? <>Shared with the team. Last saved by <b className="text-slate-700">{save.sync.by}</b>{save.sync.at ? <> at <b className="text-slate-700">{fmtSavedAt(save.sync.at)}</b></> : null}.</>
-              : save.sync.status === "saving"
-                ? "Saving to the team…"
-                : save.sync.status === "synced"
-                  ? <>Shared with the team{save.sync.at ? <> · saved <b className="text-slate-700">{fmtSavedAt(save.sync.at)}</b></> : ""}.</>
-                  : save.sync.status === "denied"
-                    ? <span className="text-amber-600">Team passcode was rejected. Saving to this browser only until it is fixed.</span>
-                    : save.sync.status === "error"
-                      ? <span className="text-amber-600">Cannot reach the team store right now. Your work is safe in this browser.</span>
-                      : save.loadedAt
-                        ? <>Picked up your saved call from <b className="text-slate-700">{fmtSavedAt(save.loadedAt)}</b>.</>
-                        : save.savedAt
-                          ? <>Saved <b className="text-slate-700">{fmtSavedAt(save.savedAt)}</b> to this address.</>
-                          : "Saves itself to this address as you type."}
-          {" "}
-          <button type="button" onClick={() => setSyncOpen((v) => !v)} className="font-semibold text-emerald-600 hover:underline">
-            {save.syncId.code ? "sync settings" : "turn on team sync"}
-          </button>
-        </div>
-        {syncOpen && (
-          <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Team sync</div>
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-              Your name gets stamped on every call you save, so whoever opens this address next knows who captured it. The passcode is the same one for the whole team — get it from B.
-            </div>
-            <input value={idDraft.name} onChange={(e) => setIdDraft({ ...idDraft, name: e.target.value })} placeholder="Your name"
-              className="mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-400" />
-            <div className="relative mt-1.5">
-              <input value={idDraft.code} onChange={(e) => setIdDraft({ ...idDraft, code: e.target.value })} placeholder="Team passcode"
-                type={showCode ? "text" : "password"} autoCapitalize="off" autoCorrect="off" spellCheck={false}
-                className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 pr-14 text-xs text-slate-800 outline-none focus:border-emerald-400" />
-              <button type="button" onClick={() => setShowCode((v) => !v)}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600 hover:bg-slate-100 hover:text-slate-600">
-                {showCode ? "hide" : "show"}
-              </button>
-            </div>
-            {/* A pasted passcode often drags a trailing space along, which fails silently. Flag it. */}
-            {idDraft.code !== idDraft.code.trim() && (
-              <div className="mt-1 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
-                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
-                There is a space at the start or end of that passcode. It will be trimmed when you save.
-              </div>
-            )}
-            <div className="mt-2 flex gap-1.5">
-              <button type="button" onClick={() => { save.setIdentity({ name: idDraft.name.trim(), code: idDraft.code.trim() }); setSyncOpen(false); }}
-                className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700">Save</button>
-              <button type="button" onClick={() => setSyncOpen(false)}
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100">Cancel</button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* body */}
-      <div className="flex-1 overflow-y-auto p-3 pb-4">
-        {/* Loud, unmissable warning when this call is NOT reaching the team. Silent isolation is the
-            real risk here: a rep works all week and nobody else ever sees a single call. */}
-        {save.savable && (save.sync.status === "denied" || save.sync.status === "error" || save.sync.status === "off") && (
-          <div className="mb-3 rounded-xl border-2 border-red-400 bg-red-50 p-3">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-              <div>
-                <div className="text-[12px] font-bold text-red-800">
-                  {save.sync.status === "denied" ? "Wrong team passcode — your team cannot see this call." : save.sync.status === "off" ? "Team sync is not set up — your team cannot see this call." : "Cannot reach the team right now — your team cannot see this call."}
-                </div>
-                <div className="mt-0.5 text-[11px] leading-snug text-red-700">
-                  Your work is safe in this browser and nothing is lost. But it is not being shared, so the next person on this address will see an empty call.
-                  {save.sync.status === "denied" ? " Fix the passcode below and it will sync from here on." : save.sync.status === "off" ? " Turn it on below." : " It will keep retrying as you type."}
-                </div>
-                {save.sync.status !== "error" && (
-                  <button type="button" onClick={() => setSyncOpen(true)}
-                    className="mt-2 rounded-md bg-red-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-red-700">
-                    {save.sync.status === "denied" ? "Fix passcode" : "Set up team sync"}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-        {stage === 0 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Before you dial (SOP Step 1)</div>
-          <div className="mt-2 text-[12px] leading-relaxed text-slate-600">Review the CRM notes, lead source, motivation summary, timeline, ballpark price, repair notes, photos, comps, the Zillow estimate, and ownership on PropStream. Walk in informed.</div>
-          <Hint>Type the address up top and hit <b>Auto-comp</b> before you dial — have the ARV and max cash on screen while they talk.</Hint>
-          <WField label="Seller name"><WText value={cs.sellerName} onChange={(v) => upd("sellerName", v)} placeholder="John Smith" /></WField>
-          {(deal.ownerType === "Organization" || deal.heldFor) && (
-            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-600">
-              {deal.ownerType === "Organization" && (
-                <div className="font-semibold text-amber-700">Owned by an entity, not a person. Find out who actually has authority to approve the agreement before you pitch anything.</div>
-              )}
-              {deal.heldFor && <div className={deal.ownerType === "Organization" ? "mt-0.5" : ""}>Owned for <b className="text-slate-800">{deal.heldFor}</b>.</div>}
-            </div>
-          )}
-          {deal.ownerNames && deal.ownerNames.length > 0 && (
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
-              Owner of record: <span className="text-slate-600">{deal.ownerNames.join(", ")}</span> — prefilled as a starting point. Confirm who you're actually talking to.
-            </div>
-          )}
-          <WField label="What kind of call is this?">
-            <WChips value={cs.callType} onChange={(v) => upd("callType", v)} opts={[["booked", "Booked appointment"], ["followup", "Follow-up, nobody booked it"]]} />
-          </WField>
-          {cs.callType === "followup" ? (<>
-            <div className="mt-1 rounded-lg border-l-4 border-sky-500 bg-sky-50 px-3 py-2 text-[11px] leading-snug text-slate-700">
-              <b className="text-sky-900">They are not expecting you.</b> Read the last call report and the CRM notes before you dial. Know their name, their number from last time and what was holding it up, so you pick up where it left off instead of starting over.
-            </div>
-            <WField label="When did we last talk?"><WText value={cs.lastTalked} onChange={(v) => upd("lastTalked", v)} placeholder="Oct 2" /></WField>
-            <WField label="Where it left off"><WArea value={cs.lastNotes} onChange={(v) => upd("lastNotes", v)} placeholder="wanted $150K, needed to talk to her brother, said call back after the 15th" /></WField>
-            <WField label="Who talked to them last? (optional)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Lead Gen Department" /></WField>
-          </>) : (
-            <WField label="Who booked the call (lead manager)"><WText value={cs.bookedBy} onChange={(v) => upd("bookedBy", v)} placeholder="Lead Gen Department" /></WField>
-          )}
-          <WField label="Your wholesale / assignment fee">
-            <WText money value={deal.feeField.typed} onChange={deal.feeField.set} placeholder={deal.feeField.auto > 0 ? String(deal.feeField.auto) : "set by the ARV"} />
-          </WField>
-          <FeeScaleNote f={deal.feeField} />
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
-            You get paid first. Your fee comes out of the deal before the seller's offer, so the number you quote already pays you.
-          </div>
-          <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] italic leading-snug text-slate-700">“People do not care how much you know, until they know how much you care.”</div>
-          {deal.online && (
-            <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-white p-2.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Online as-is values</div>
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">Quick number</span>
-              </div>
-              <div className="mt-0.5 text-[10.5px] leading-snug text-slate-600"><b className="text-slate-800">Short on time, or just need a quick number? Use this.</b> Look up what each site says the house is worth today and type it in. The As-Is formula turns it into an opening offer and a max, with no comps or repair estimate needed. It also fills the Novation tab. Leave a site blank if it has no estimate. When you have more time, the comps and repair number give the more accurate offer.</div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {[["aiZillow", "Zillow", "zillow"], ["aiRealtor", "Realtor.com", "realtor.com"], ["aiRedfin", "Redfin", "redfin"]].map(([k, lbl, site]) => (
-                  <div key={k}>
-                    <div className="mb-0.5 text-[10px] text-slate-600">{lbl}</div>
-                    <WText money value={deal.online.vals[k]} onChange={(v) => deal.online.set[k](v)} placeholder="0" />
-                    {deal.address && (
-                      <a href={gsearch(`${deal.address} ${site}`)} target="_blank" rel="noopener noreferrer"
-                        className="mt-1 inline-flex items-center gap-1 text-[10.5px] font-semibold text-emerald-700 hover:underline">
-                        <Search className="h-3 w-3" /> Look it up <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    )}
-                  </div>
-                ))}
-              </div>
-              {deal.asIs && (
-                <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] leading-snug text-emerald-900">
-                  <b>Quick number:</b> open at <b>{usd(deal.asIs.offer)}</b> and go no higher than <b>{usd(deal.asIs.maxBuy)}</b>. From the As-Is formula on {usd(deal.asIs.avg)} average value.
-                </div>
-              )}
-            </div>
-          )}
-        </div>)}
-
-        {stage === 1 && cs.callType === "followup" && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening · follow-up call</div>
-          <Line>“Hey, is this {nm}?” … “Hey {nm}, this is ____ with Your Local Home Buyer. We spoke {cs.lastTalked.trim() ? `on ${cs.lastTalked.trim()}` : "a little while back"} about your property on ____. I wanted to follow up and see where things are with it. Did I catch you at an okay time?”</Line>
-          <Hint>Ask for permission first. They did not plan this call, so a yes to “okay time” earns you the next five minutes. If it is a bad time, do not push.</Hint>
-          <Line>Bad time: “No problem at all. When is a better time for me to give you a quick call back?”</Line>
-          <Line>They do not remember: “No worries. You had reached out about getting an offer on the house on ____. Are you still open to an offer, or has anything changed?”</Line>
-          {cs.lastNotes.trim() && (
-            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-snug text-slate-700">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Where it left off</div>
-              <div className="mt-0.5">{cs.lastNotes.trim()}</div>
-            </div>
-          )}
-          <Line>Pick up the thread: “Last time we talked, you mentioned ____. How did that go?”</Line>
-          <Hint>Fill the blank from where it left off. Do not rerun the whole first call. Confirm what is still true, find out what changed, and spend your time on whatever was holding it up last time.</Hint>
-        </div>)}
-
-        {stage === 1 && cs.callType !== "followup" && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Opening</div>
-          <Line>“Hey, is this {nm}?” … “Hey {nm}, how are you? My name is ____, and {cs.bookedBy.trim() ? `my partner ${cs.bookedBy.trim()}` : "our Lead Gen Department"} scheduled a call for us today because you were looking for an offer on your property on ____. Is that right?”</Line>
-          <Line>Or simply: “Hi {nm}, my name is ____ and {cs.bookedBy.trim() ? `I'm partners with ${cs.bookedBy.trim()}` : "I'm following up from our Lead Gen Department"}. How are you doing today?”</Line>
-          <Hint>Acknowledge their surroundings and mirror their energy. Slow it down — comfort first, authority second, numbers later.</Hint>
-        </div>)}
-
-        {stage === 2 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Rapport &amp; motivation</div>
-          {cs.callType === "followup" ? (<>
-            <Line>“Last time we talked, you mentioned ____. Is that still the situation, or has anything changed since then?”</Line>
-            {cs.motivNotes.trim() && <div className="mt-1 rounded-md bg-slate-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-slate-700"><b>Last time:</b> {cs.motivNotes.trim()}</div>}
-            <Hint>Their reason may have gotten stronger or gone away. Either way, it changes the offer, so update the motivator and the notes below to match today, not last time.</Hint>
-          </>) : <Line>“Catch me up to speed — what's going on with the house?”</Line>}
-          <Line>“What has you thinking about getting an offer?”</Line>
-          <Line>“How were you hoping we could help?”</Line>
-          <Hint>Don't interrogate — keep it natural. Probe with “What's that been like?” · “How long has that been going on?” · “What happens next once you take an offer?”</Hint>
-          <WField label="Main motivator">
-            <WChips value={cs.motivation} onChange={(v) => upd("motivation", v)} opts={[["distress", "Property distress"], ["hardship", "Financial hardship"], ["urgency", "Urgency"]]} />
-          </WField>
-          <MotivChecks checks={motivationChecks(cs, deal)} />
-          {/* Pick-one guidance. Reps hear three problems at once and freeze, so this names what each
-              bucket actually sounds like and tells them to pick the one driving the decision. */}
-          <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2.5 text-[11px] leading-snug text-slate-600">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">What these mean</div>
-            <div className="mt-1.5"><b className="text-slate-800">Property distress</b> is the house itself being the problem. Repairs they cannot afford or manage, a bad tenant, code issues, a place they inherited and cannot keep up.</div>
-            <div className="mt-1.5"><b className="text-slate-800">Financial hardship</b> is money pressure pushing the sale. Behind on payments, medical bills, divorce, job loss, taxes owed, a payment they can no longer carry.</div>
-            <div className="mt-1.5"><b className="text-slate-800">Urgency</b> is a clock. A job transfer, a closing date on another house, a move, an estate that has to settle, or a life change that will not wait.</div>
-            <div className="mt-2 text-[11px] leading-snug text-slate-700">Most sellers have more than one. Pick the one that is actually driving the decision, and put the story in their own words below. That story is what you repeat back later when you ask for the agreement.</div>
-          </div>
-          <WField label="Notes — their why, in their words"><WArea value={cs.motivNotes} onChange={(v) => upd("motivNotes", v)} placeholder="tired landlord, moving to FL for grandkids…" /></WField>
-        </div>)}
-
-        {stage === 3 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Property discovery</div>
-          {/* Beds and baths the record got wrong. Same controls as the calculator, so a rep who
-              walks a legit 4th bedroom can add it without leaving the call. */}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Beds and baths the record missed</div>
-            <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
-              County says {deal.recBeds != null ? `${deal.recBeds} bed` : "—"}{deal.recBaths != null ? ` / ${deal.recBaths} bath` : ""}. If they walked you through more than that, add it here, then re-pull so the ARV and rent come from houses with that room count.
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Extra beds</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <button type="button" onClick={() => deal.setAdjBeds(Math.max(-5, deal.adjBeds - 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
-                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBeds > 0 ? `+${deal.adjBeds}` : deal.adjBeds}</span>
-                  <button type="button" onClick={() => deal.setAdjBeds(Math.min(5, deal.adjBeds + 1))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Extra baths</div>
-                <div className="mt-1 flex items-center gap-1.5">
-                  <button type="button" onClick={() => deal.setAdjBaths(Math.max(-5, deal.adjBaths - 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">−</button>
-                  <span className="w-8 text-center font-mono text-sm font-bold text-slate-800">{deal.adjBaths > 0 ? `+${deal.adjBaths}` : deal.adjBaths}</span>
-                  <button type="button" onClick={() => deal.setAdjBaths(Math.min(5, deal.adjBaths + 0.5))} className="h-7 w-7 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50">+</button>
-                </div>
-              </div>
-            </div>
-            <RepullNote info={deal.changeInfo} />
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-              If the extra room also means extra square footage, fix the sq ft up top before re-pulling.
-            </div>
-          </div>
-
-          <Line>“What have you done to the property since you bought it?” · “What can you tell me about the current condition?”</Line>
-          <Hint>You are after the overall rehab level and their perception, not a formal inspection. Work the list below conversationally and write down what they say.</Hint>
-
-          {/* Checklist: tap an item to log it, then type what the seller said. Roof and HVAC first
-              because they carry the biggest dollars and set up the later ask for more room. */}
-          {(() => {
-            const items = readItems(cs.condItems);
-            const setItem = (k, v) => {
-              const next = { ...items };
-              if (v === null) delete next[k]; else next[k] = v;
-              upd("condItems", Object.keys(next).length ? JSON.stringify(next) : "");
-            };
-            const logged = Object.keys(items).length;
-            return (
-              <div className="mt-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Walkthrough checklist</div>
-                  <div className="text-[10px] font-semibold text-slate-600">{logged} of {COND_ITEMS.length} logged</div>
-                </div>
-                <div className="mt-1.5 space-y-1">
-                  {COND_ITEMS.map(([k, label]) => {
-                    const on = items[k] !== undefined;
+        {showSaved && (
+          <div className="border-t border-slate-200 bg-white">
+            <div className="mx-auto max-w-7xl px-4 py-3">
+              {deals.length === 0 ? <div className="text-[13px] text-slate-600">No saved deals yet. Fill one in and tap Save deal. Deals save in this browser only.</div> : (
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {deals.map((rec) => {
+                    const r = analyze({ ...rec.d, rooms: ["coliving", "hybrid"].includes(rec.d.model) ? rec.d.rooms : [], units: ["private", "hybrid"].includes(rec.d.model) ? rec.d.units : [] });
                     return (
-                      <div key={k} className={`rounded-lg border ${on ? "border-emerald-300 bg-emerald-50/50" : "border-slate-200 bg-white"}`}>
-                        <button type="button" onClick={() => setItem(k, on ? null : "")}
-                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
-                          <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${on ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 text-transparent"}`}>✓</span>
-                          <span className={`text-[11.5px] font-semibold ${on ? "text-emerald-900" : "text-slate-600"}`}>{label}</span>
-                          {on && items[k] ? <span className="ml-auto truncate text-[10.5px] text-slate-700">{items[k]}</span> : null}
+                      <div key={rec.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                        <button onClick={() => openDeal(rec)} className="min-w-0 text-left">
+                          <div className="truncate text-[13px] font-semibold text-slate-900">{rec.name}</div>
+                          <div className="text-[11px] text-slate-600">{DEAL_TYPES[rec.d.dealType]} · {fmt$(r.cashFlow)}/mo · saved {new Date(rec.savedAt).toLocaleDateString()}</div>
                         </button>
-                        {on && (
-                          <div className="px-2.5 pb-2">
-                            <input value={items[k]} onChange={(e) => setItem(k, e.target.value)}
-                              placeholder={k === "roof" ? "e.g. replaced 4 years ago" : k === "hvac" ? "e.g. original, 2001" : "what did they say?"}
-                              className="w-full rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] text-slate-800 outline-none focus:border-emerald-400" />
-                          </div>
-                        )}
+                        <button onClick={() => deleteDeal(rec.id)} className="text-slate-400 hover:text-rose-600" aria-label="Delete deal"><Trash2 className="h-4 w-4" /></button>
                       </div>
                     );
                   })}
                 </div>
-                <div className="mt-1.5 text-[10.5px] leading-snug text-slate-600">
-                  Log the age of anything they volunteer. An old roof or original HVAC is both a real repair number and the reason you can go back for more room later.
-                </div>
-              </div>
-            );
-          })()}
-          <WField label="Condition (drives repairs in the calculator)">
-            <WChips value={cs.condition} auto={cs.conditionAuto === "yes"} onChange={(v) => {
-              // Tapping a chip the repair number picked means "the seller confirmed it", not "clear it".
-              if (v === "" && cs.conditionAuto === "yes") { upd("conditionAuto", ""); return; }
-              upd("condition", v); upd("conditionAuto", ""); onCondition(v);
-              // A typed number that disagrees with the chip just tapped gives way to that chip's
-              // estimate, so the two can never contradict each other. Needs sq ft, or there would be
-              // no estimate to fall back to and repairs would go blank.
-              const typedCond = impliedCondition(num(deal.repairOverride), deal.sqft);
-              if (v && typedCond && typedCond !== v) deal.setRepairOverride("");
-            }} opts={[["light", "Light"], ["moderate", "Moderate"], ["heavy", "Heavy"]]} />
-          </WField>
-          {cs.conditionAuto === "yes" && cs.condition && num(deal.repairOverride) > 0 && num(deal.sqft) > 0 && (
-            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-700">
-              Matched to your {usd(num(deal.repairOverride))}, about ${Math.round(num(deal.repairOverride) / num(deal.sqft))}/sf on {num(deal.sqft).toLocaleString()} sq ft. Tap it once the seller confirms, or tap a different condition to swap in that estimate instead.
-            </div>
-          )}
-          {num(deal.repairOverride) > 0 && !(num(deal.sqft) > 0) && (
-            <div className="-mt-0.5 text-[10.5px] leading-snug text-slate-700">Condition cannot match your repair number until the square footage is known. Run Auto-comp or enter sq ft.</div>
-          )}
-          <WField label="Estimated repairs">
-            <WText money value={deal.repairOverride} onChange={deal.setRepairOverride} placeholder={deal.repairsDefault ? "type a number" : deal.repairs > 0 ? String(Math.round(deal.repairs)) : "type a number"} />
-          </WField>
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
-            {num(deal.repairOverride) > 0
-              ? <>Using your number: <span className="font-semibold text-slate-600">{usd(num(deal.repairOverride))}</span>. Clear the box to go back to the condition estimate. This drives the MAO.</>
-              : deal.repairsDefault
-                ? <>Using the <span className="font-semibold text-amber-700">{usd(deal.repairs)} default</span> {deal.repairsNeedSqft ? "because there is no sq ft to price the condition with yet. Run Auto-comp or enter the sq ft, or type a real number." : "until you pick a condition above or type a real number."} The MAO is running on it, so confirm the condition before you quote a price.</>
-              : deal.repairs > 0
-                ? <>From the condition chip above: <span className="font-semibold text-slate-600">{usd(deal.repairs)}</span>{deal.repairPsf > 0 ? ` (${usd(deal.repairPsf)}/sf)` : ""}. Type a real number here if you have a contractor bid — it overrides the estimate.</>
-                : <>Pick a condition above, or type a real repair number if you have one.</>}
-          </div>
-          {cs.condition && !deal.repairsDefault && impliedCondition(deal.repairs, deal.sqft) && impliedCondition(deal.repairs, deal.sqft) !== cs.condition && (
-            <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-800">
-              <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
-              <span>
-                These disagree. You tapped <b>{cs.condition}</b>, but {usd(deal.repairs)} on {num(deal.sqft).toLocaleString()} sq ft is about ${Math.round(num(deal.repairs) / num(deal.sqft))}/sf, which is a <b>{impliedCondition(deal.repairs, deal.sqft)}</b> rehab. Your offer is being built on the {usd(deal.repairs)}, so fix whichever one is wrong.
-              </span>
-            </div>
-          )}
-          {!cs.condition && !deal.repairsDefault && impliedCondition(deal.repairs, deal.sqft) && (
-            <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-slate-700">
-              <Info className="mt-px h-3 w-3 shrink-0 text-slate-600" />
-              <span>
-                {usd(deal.repairs)} on {num(deal.sqft).toLocaleString()} sq ft works out to about ${Math.round(num(deal.repairs) / num(deal.sqft))}/sf, which reads as a <b className="text-slate-700">{impliedCondition(deal.repairs, deal.sqft)} rehab</b>. The strategy scoring is using that until you tap a chip. Confirm it with the seller.
-              </span>
-            </div>
-          )}
-          {/* The chain a rep is actually changing when they touch repairs. Kept to one line so the
-              stage stays readable, but it makes condition feel connected to the offer. */}
-          {deal.arv > 0 && !deal.repairsKnown && (
-            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
-              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
-              <span><b>No max offer yet.</b> Tap a condition above or type a repair number. Quoting a price before you know the repairs is how you end up stuck with one.</span>
-            </div>
-          )}
-          {deal.arv > 0 && deal.repairsKnown && (
-            <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">What this does to your offer</div>
-              <div className="mt-1 flex items-center justify-between gap-2">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">ARV</div>
-                <div className="font-mono text-sm font-bold text-slate-800">{usd(deal.arv)}</div>
-              </div>
-              <div className="text-slate-300">−</div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Repairs</div>
-                <div className="font-mono text-sm font-bold text-slate-800">{deal.repairs > 0 ? usd(deal.repairs) : "—"}</div>
-              </div>
-              <div className="text-slate-300">=</div>
-              <div className="text-right">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Max offer</div>
-                <div className="font-mono text-sm font-bold text-emerald-700">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div>
-              </div>
-              </div>
-              <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-                Repairs come straight off what you can pay, so every item on the checklist above is worth real money. Open at <b className="text-emerald-700">{deal.maxCash > 0 ? usd(Math.round(deal.maxCash * ANCHOR_PCT)) : "—"}</b>, never go past the max.
-              </div>
-            </div>
-          )}
-          <Line>“Is anyone living in the house right now?”</Line>
-          <Hint>If yes, follow with “Is that you, or do you have a tenant in there?” If it's a tenant, ask when the lease ends and what they pay each month.</Hint>
-          <WField label="Occupancy">
-            <WChips value={cs.occupancy} onChange={(v) => upd("occupancy", v)} opts={[["vacant", "Vacant"], ["owner", "Owner occupied"], ["tenant", "Tenant"]]} />
-          </WField>
-          {cs.occupancy === "tenant" && (
-            <div className="mt-1 grid grid-cols-2 gap-2">
-              <WField label="What the tenant pays now (monthly)">
-                <WText money value={cs.tenantRent} onChange={(v) => upd("tenantRent", v)} placeholder="1250" />
-              </WField>
-              <WField label="When does the lease end?">
-                <WText value={cs.leaseEnds} onChange={(v) => upd("leaseEnds", v)} placeholder="May 2027, or month to month" />
-              </WField>
-              <div className="col-span-2 text-[11px] leading-snug text-slate-700">
-                The tenant's rent becomes the rent the deal runs on, since that is what a buyer collects on day one. RentCast's market rent stays on the buyer deck as the upside once the lease turns over.
-              </div>
-            </div>
-          )}
-          <Line>“Do you still owe anything on it?”</Line>
-          <Line>“At closing, will we need to pay off any loan?”</Line>
-          <Hint>Ask either one, exactly that casually. If yes, follow with “What's your current payment?” — the payment and balance quietly decide Sub-To vs Hybrid vs Seller Finance.</Hint>
-          <WField label="Loan on the property?">
-            <WChips value={cs.loan} onChange={(v) => upd("loan", v)} opts={[["yes", "Yes"], ["no", "Free & clear"]]} />
-          </WField>
-          {cs.loan === "yes" && (<>
-            <div className="grid grid-cols-2 gap-2">
-              <WField label="Approx. balance"><WText money value={cs.balance} onChange={(v) => upd("balance", v)} placeholder="148000" /></WField>
-              <WField label="Monthly payment"><WText money value={cs.payment} onChange={(v) => upd("payment", v)} placeholder="1150" /></WField>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <WField label="Rate (if they know) — use decimals, like 3.875"><WText value={cs.rate} onChange={(v) => upd("rate", v)} placeholder="3.875" /></WField>
-              <WField label="Years left on the loan (if they know)"><WText value={deal.loanYrs && deal.loanYrs.value !== "30" ? deal.loanYrs.value : ""} onChange={(v) => deal.loanYrs && deal.loanYrs.set(v)} placeholder="22" /></WField>
-            </div>
-            {isLowRate(cs.rate) && (
-              <div className="mt-2 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3">
-                <div className="flex items-start gap-2">
-                  <Zap className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                  <div>
-                    <div className="text-[12px] font-bold text-emerald-900">{rateNum(cs.rate)}% loan. Do not let this one go.</div>
-                    <div className="mt-0.5 text-[11px] leading-snug text-emerald-800">
-                      A rate this far under market is worth real money on its own, and it cannot be replaced once this seller sells to someone else. Work the creative offer hard on this call.
-                    </div>
-                    <div className="mt-1.5 text-[11px] font-semibold leading-snug text-emerald-900">
-                      Required after this call: if it is not locked up, or the seller is flat out declining creative financing, send it to the head of acquisitions. Do not mark it dead yourself.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              <WField label="Behind on payments?"><WChips value={cs.behind} onChange={(v) => upd("behind", v)} opts={[["yes", "Yes"], ["no", "Current"]]} /></WField>
-            </div>
-            <WField label="Does that payment include taxes and insurance?">
-              <WChips value={cs.escrowed} onChange={(v) => upd("escrowed", v)} opts={[["yes", "Yes, escrowed"], ["no", "No, P&I only"]]} />
-            </WField>
-            {cs.escrowed === "no" && (
-              <WField label="Monthly taxes + insurance">
-                <WText money value={cs.tiMonthly} onChange={(v) => upd("tiMonthly", v)} placeholder="350" />
-              </WField>
-            )}
-            <Hint>Ask it plainly: “Is that payment just principal and interest, or does it include your taxes and insurance?” Most sellers quote the escrowed number, but the ones who do not will make this deal look better than it is.</Hint>
-
-            <WField label="Is there an HOA?">
-              <WChips value={cs.hoa} onChange={(v) => upd("hoa", v)} opts={[["yes", "Yes"], ["no", "No"]]} />
-            </WField>
-            {typeof deal.hoaKnown === "boolean" && (
-              <div className="mt-1 text-[10.5px] leading-snug text-slate-600">
-                The property record says {deal.hoaKnown ? "there is an HOA" : "there is no HOA"}. Confirm it with the seller, since records lag.
-              </div>
-            )}
-            {cs.hoa === "yes" && (
-              <>
-                <WField label="HOA dues (monthly)">
-                  <WText money value={cs.hoaAmt} onChange={(v) => upd("hoaAmt", v)} placeholder="250" />
-                </WField>
-                <Hint>Dues come out of the same rent the payment does, so they go straight into the test below. Also ask whether the HOA allows rentals, whether there is a cap or a waitlist, and whether any special assessment is coming. A no-rental HOA kills a Sub-To hold no matter how good the payment looks.</Hint>
-              </>
-            )}
-
-            {/* The hold test */}
-            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Payment vs market rent</div>
-                {!deal.rent && (
-                  <button type="button" onClick={deal.onGetRent} disabled={deal.rentLoading}
-                    className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50">
-                    {deal.rentLoading ? "Pulling…" : "Get market rent"}
-                  </button>
-                )}
-              </div>
-              {(() => {
-                const pc = pitiCheck(cs, deal.rent);
-                if (!deal.rent) return <div className="mt-1 text-[10.5px] leading-snug text-slate-700">Pull the market rent to test whether this payment can carry the house.</div>;
-                if (!pc) return <div className="mt-1 text-[10.5px] leading-snug text-slate-700">Market rent {usd(deal.rent)}/mo. Add their payment above to run the test.<RentBasisNote info={deal.rentInfo} /></div>;
-                const pct = Math.round(pc.ratio * 100);
-                const tone = pc.verdict === "good" ? "text-emerald-700" : pc.verdict === "thin" ? "text-amber-700" : "text-red-700";
-                return (
-                  <div className="mt-1">
-                    <div className="text-[12px] font-bold text-slate-800">
-                      {usd(Math.round(pc.piti))} payment vs {usd(pc.rent)} rent = <span className={tone}>{pct}%</span>
-                    </div>
-                    {pc.hoa > 0 && <div className="mt-0.5 text-[10.5px] text-slate-700">Includes {usd(pc.hoa)}/mo HOA dues.</div>}
-                    <div className={`mt-0.5 text-[11px] font-semibold leading-snug ${tone}`}>
-                      {pc.verdict === "good"
-                        ? "Under 65%. This one can carry itself as a rental."
-                        : pc.verdict === "thin"
-                          ? `Between 65% and 75%. Break-even as a standard rental. Needs ${usd(pc.targetPiti)} or less to have real room, so it only works if your exit beats market rent.`
-                          : `Over 75%. Not a Sub-To hold. The payment would need to be around ${usd(pc.targetPiti)} or less.`}
-                    </div>
-                    {pc.missingTI && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">Taxes and insurance are not in that payment yet, so the real number is worse than this.</div>}
-                    {pc.missingHOA && <div className="mt-1 text-[10.5px] leading-snug text-amber-700">There is an HOA but the dues are not entered yet, so the real number is worse than this.</div>}
-                    {pc.unknownEscrow && <div className="mt-1 text-[10.5px] leading-snug text-slate-700">Confirm whether taxes and insurance are in that payment, or this ratio may be understated.</div>}
-                  </div>
-                );
-              })()}
-            </div>
-          </>)}
-        </div>)}
-
-        {stage === 4 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Timeline</div>
-          <Line>“How soon are you hoping to close?”</Line>
-          <Line>“Is there anyone else involved in the decision?”</Line>
-          <Line>“In a perfect world, what would this situation look like for you?”</Line>
-          <WField label="Timeline">
-            <WChips value={cs.timeline} onChange={(v) => upd("timeline", v)} opts={[["asap", "ASAP (≤ 2 wks)"], ["soon", "30–60 days"], ["flexible", "Flexible"]]} />
-          </WField>
-          <WField label="Other decision makers"><WArea value={cs.others} onChange={(v) => upd("others", v)} placeholder="spouse, sibling on title…" /></WField>
-        </div>)}
-
-        {stage === 5 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Price discovery</div>
-          {cs.callType === "followup" && num(cs.ask) > 0 ? (<>
-            <Line>“Last time you mentioned you were hoping to get around {usd(num(cs.ask))}. Is that still where you are at?”</Line>
-            <Hint>If the number moved, update Their number below. A lower number on a follow-up is common once they have tested the market, so let them say it first.</Hint>
-          </>) : <Line>“Do you already have an idea of what you were hoping to get for the property?”</Line>}
-          <Hint>Let THEM say a number first. If they resist: “I totally understand that. But if you did know, what do you think that number would be?” Still stuck: “How much do you still owe?” → “And after paying that off, how much would you want left over?”</Hint>
-          <WField label="Their number"><WText money value={cs.ask} onChange={(v) => upd("ask", v)} placeholder="215000" /></WField>
-          <WField label="“How did you come up with that number?” (optional)"><WArea value={cs.priceBasis} onChange={(v) => upd("priceBasis", v)} placeholder="Zillow, neighbor sold for…, appraisal…" /></WField>
-
-          {/* Their asking price is a wish. The cash they truly need at closing is the real number,
-              and it is almost always far smaller. Every dollar found here is a dollar we keep. */}
-          <div className="mt-3 rounded-lg border-l-4 border-slate-900 bg-slate-100 px-3 py-2">
-            <div className="text-[11.5px] font-bold text-slate-900">Now find the smallest number they can actually live with.</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-600">
-              What they are asking and what they need are two different numbers. Work down this ladder until they give you the second one. Do not negotiate against their asking price, negotiate against their need.
-            </div>
-          </div>
-          <Line>1. “After the loan is paid off and everything is settled, what do you actually need in your pocket to move on?”</Line>
-          <Line>2. “What are you doing with the money?” This is the one that matters. Movers and a deposit is a different number than a lawyer's retainer or a roof on the next place.</Line>
-          <Line>3. “If I covered the back payments and all of the closing costs, how close does that get you?”</Line>
-          <Line>4. “Does all of it have to come at closing, or could part of it come to you over the next few months?”</Line>
-          <Line>5. “What is the piece you absolutely have to have on closing day?” That answer is the real number.</Line>
-          <Hint>Say the question and then stop. Silence is what gets you the honest answer here. Most sellers name something well under their asking price, and on a creative deal that number is what you have to solve for, not the price.</Hint>
-          <div className="grid grid-cols-2 gap-2">
-            <WField label="Cash they need at closing"><WText money value={cs.needCash} onChange={(v) => upd("needCash", v)} placeholder="8000" /></WField>
-            <WField label="What is it for?"><WText value={cs.needCashNotes} onChange={(v) => upd("needCashNotes", v)} placeholder="movers + deposit" /></WField>
-          </div>
-          <NeedCheck nd={readCashNeed(cs, deal.maxCash)} />
-          {num(cs.needCash) > CREATIVE_DOWN_MAX && (
-            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] leading-snug text-rose-900">
-              <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-rose-600" />
-              <span><b>Over our creative max.</b> They need {usd(num(cs.needCash))} at closing, and we never put more than {usd(CREATIVE_DOWN_MAX)} down on a creative offer. Find out if part of it can come over time, or this one is cash only.</span>
-            </div>
-          )}
-          <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-600">Rebuttals — tap to open</div>
-          {REBUTTALS.map((r, i) => (
-            <details key={i} className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
-              <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">{r.t}</summary>
-              <div className="mt-1.5 text-[11px] leading-snug text-slate-600">{r.a}</div>
-            </details>
-          ))}
-        </div>)}
-
-        {stage === 6 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Run the numbers</div>
-          <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-600">ARV</div><div className="font-mono text-sm font-bold text-slate-800">{deal.arv > 0 ? usd(deal.arv) : "—"}</div></div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2"><div className="text-[9px] font-bold uppercase tracking-wide text-slate-600">Max cash</div><div className="font-mono text-sm font-bold text-slate-800">{deal.maxCash > 0 ? usd(deal.maxCash) : "—"}</div></div>
-            {/* "Gap" meant nothing to a new VA. Say which direction and against what. */}
-            <div className={`rounded-lg border p-2 ${strat.gap == null ? "border-slate-200 bg-slate-50/60" : strat.gap > deal.maxCash * CLOSE_BAND_PCT ? "border-rose-300 bg-rose-50" : strat.gap > 0 ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}><div className="text-[9px] font-bold uppercase tracking-wide text-slate-600">{strat.gap == null ? "Ask vs max" : strat.gap > 0 ? "Ask over max by" : "Ask under max by"}</div><div className="font-mono text-sm font-bold text-slate-800">{strat.gap != null ? usd(Math.abs(strat.gap)) : "—"}</div></div>
-          </div>
-          <NumbersPlan cs={cs} upd={upd} deal={deal} gap={strat.gap} />
-          {/* No shortcuts past Strategy. Every rep walks through it so they see what fits, what does not, and why. */}
-          <div className="mt-3 text-[11px] leading-snug text-slate-600">Tap <b className="text-slate-800">Next</b> to see which strategies work, which do not, and why.</div>
-        </div>)}
-
-        {stage === 7 && (() => {
-          // Rebuilt for a live call: pick one, read one thing, everything else stays folded.
-          // Reps often pitch two: the cash number to anchor, then a creative option for sellers who
-          // want more. Selection is a set, stored as a comma string so team sync and saving are unchanged.
-          const ids = cs.chosen ? cs.chosen.split(",").filter(Boolean) : [];
-          const toggle = (id) => upd("chosen", (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]).join(","));
-          // Order matters more than score here. A two-option close leads with the cash number so it
-          // anchors low, then offers the creative option as the way to get closer to what they want.
-          // Pitching the creative one first gives away the anchor.
-          const chosenList = strat.ranked.filter((r) => ids.includes(r.id))
-            .sort((a, b) => (a.id === "cash" ? -1 : b.id === "cash" ? 1 : 0));
-          // Nothing fits: the default script is the cash anchor, never the least-bad creative option.
-          const fallback = strat.fits ? strat.ranked[0] : (strat.ranked.find((r) => r.id === "cash") || null);
-          const showList = chosenList.length ? chosenList : (fallback ? [fallback] : []);
-          const active = showList[0] || null;
-          const multi = showList.length > 1;
-          const secondFor = (id) => ({
-            nov: "“The short version is we prepare it and put it in front of retail buyers on your behalf, so the offer you end up with is closer to full value, and we get paid out of what we add rather than out of your pocket.”",
-            sf: "“The short version is you get the number you want, and instead of one lump sum today, it comes to you over time on terms we agree on together.”",
-            hybrid: "“The short version is you get the number you want. Part of it comes at closing, and the rest comes to you over time instead of all at once.”",
-            subto: "“The short version is you get the number you want, and instead of waiting on a bank, we take over what is already in place and handle it from here.”",
-          }[id] || "");
-          const overAsk = strat.gap != null && strat.gap > 0;
-          return (<div>
-            <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Strategy</div>
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-700">Tap the one you are pitching, or tap two to present options. Scored by fit, but you decide.</div>
-            {/* Styled like a road warning sign so it cannot be skimmed past: yellow band, black type, triangle. */}
-            <div className="mt-2 overflow-hidden rounded-lg border-2 border-amber-500 bg-amber-50 px-3 pb-2">
-              <div className="-mx-3 mb-2 flex items-center gap-2 bg-amber-400 px-3 py-2" role="alert">
-                <AlertTriangle className="h-5 w-5 shrink-0 text-slate-900" strokeWidth={2.5} />
-                <span className="text-[13px] font-extrabold uppercase tracking-wide text-slate-900">Always pitch cash first</span>
-              </div>
-              <div className="text-[11.5px] leading-snug text-slate-800">
-                Even when cash is not the play, say the cash number out loud before anything else. It anchors the conversation low, and everything after it sounds like you moving toward them. Lead with a creative offer and you have given away the anchor for nothing.
-              </div>
-              {deal.maxCash > 0 && (
-                <div className="mt-2 border-t border-amber-300 pt-2">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-700">Opening offer · say this first</div>
-                  <div className="mt-0.5 font-mono text-2xl font-bold tabular-nums text-emerald-700">{usd(Math.round(deal.maxCash * ANCHOR_PCT))}</div>
-                  <div className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-slate-700">Max allowable cash offer</div>
-                  <div className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(deal.maxCash)}</div>
-                  <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
-                    Say the opening offer, not the ceiling. That leaves {usd(deal.maxCash - Math.round(deal.maxCash * ANCHOR_PCT))} of room to move toward them and still keep your {usd(num(deal.wholesaleFee))} fee. Never go above the ceiling. {ANCHOR_WHY}
-                    {strat.gap != null && strat.gap > 0 ? <> They want <b className="text-slate-700">{usd(strat.gap)}</b> more than this.</> : strat.gap != null ? <> Their number is already under it.</> : null}
-                  </div>
-                  <PayoffAlert cs={cs} maxCash={deal.maxCash} />
-                </div>
               )}
             </div>
-
-            <MotivChecks checks={motivationChecks(cs, deal)} title="Before you pitch: the motivator does not match" />
-            {!strat.fits && strat.gatedBy.length > 0 && (
-              <div className="mt-2 rounded-lg border-l-4 border-amber-500 bg-amber-50 px-3 py-2">
-                <div className="text-[12px] font-bold text-amber-900">Not enough to call a fit yet.</div>
-                <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
-                  {strat.gatedBy.map((g, k) => <span key={k}>{k > 0 ? " " : ""}{g.label} could be the play, but it cannot be graded without {g.need}.</span>)}
-                  {" "}Get {[...new Set(strat.gatedBy.map((g) => g.need))].join(" and ")}, and the score will update on its own.
-                </div>
-              </div>
-            )}
-            {!strat.fits && strat.gatedBy.length === 0 && strat.ranked.length > 0 && num(cs.ask) > 0 && (
-              <div className="mt-2 rounded-lg border-l-4 border-rose-600 bg-rose-50 px-3 py-2">
-                <div className="text-[12px] font-bold text-rose-900">Nothing fits at their number.</div>
-                <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
-                  The best score here is {strat.ranked[0].sc} out of 100, below the {FIT_FLOOR} it takes to call something a fit. Hover the warning triangles to see what kills each one.
-                  {strat.payoffShort != null ? <> They owe {usd(strat.bal)}, which is {usd(strat.payoffShort)} more than your max cash offer, so cash cannot pay off the loan.</> : null}
-                  {strat.spread != null && strat.spread < 0 ? <> Their number plus repairs is {usd(-strat.spread)} more than the house is worth fixed up, so every creative option starts underwater.</> : null}
-                  {" "}Say your cash anchor anyway, per the rule. Unless something changes (their number, the repairs, or the loan), this is a follow-up, not a deal today.
-                </div>
-              </div>
-            )}
-
-            {/* 1. PICK — compact, the whole board at a glance */}
-            <div className="mt-2 space-y-1.5">
-              {strat.ranked.map((o, i) => {
-                const on = showList.some((x) => x.id === o.id);
-                return (
-                  <button key={o.id} type="button" onClick={() => toggle(o.id)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition ${
-                      on ? "border-emerald-600 bg-emerald-50 ring-1 ring-emerald-600" : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}>
-                    <span className="flex items-center gap-1.5">
-                      <span className={`text-[12px] font-bold ${on ? "text-emerald-900" : "text-slate-700"}`}>{o.label}</span>
-                      {i === 0 && strat.fits && <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">Best fit</span>}
-                      {o.warn.length > 0 && <WarnTip label={o.label} warns={o.warn} />}
-                    </span>
-                    <span className={`font-mono text-[11px] font-bold ${on ? "text-emerald-700" : "text-slate-600"}`}>{o.sc}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* 2. SAY — the only prose on screen by default */}
-            {active && (
-              <div className="mt-3 rounded-xl border-2 border-emerald-500 bg-emerald-50/50 p-3">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">
-                  What to say — {showList.map((x) => x.label).join(" then ")}
-                </div>
-                {multi && (
-                  <div className="mt-1 text-[11px] leading-snug text-slate-600">
-                    Two options, in this order. Say the {showList[0].label.toLowerCase()} number first and stop talking. Let them react. Then offer the second as what you can do <i>if</i> the first does not work for them. Never present them as equal choices, and never lead with the second one.
-                  </div>
-                )}
-                {overAsk && (
-                  <Line>“It sounds like you like everything about what we discussed other than the price… probably 9 out of 10 homeowners we talk with feel the same way. So what we did was develop a way to offer sellers more money and still have it make sense for us, our Partnership Program. If I could get you closer to your number, would you like to go over the details, or should we just part ways now?”</Line>
-                )}
-                {showList.map((o, k) => (
-                  <div key={o.id} className={k > 0 ? "mt-3 border-t border-emerald-200 pt-2.5" : "mt-1"}>
-                    {multi && <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700">{k === 0 ? "First" : "Then"} — {o.label}</div>}
-                    {overAsk && secondFor(o.id) && <Line>{secondFor(o.id)}</Line>}
-                    {o.pitch.map((p, j) => <Line key={j}>{p}</Line>)}
-                    <TermsLockIn id={o.id} cs={cs} upd={upd} t={deal.terms} />
-                    {(o.id === "subto" || o.id === "hybrid") && <MortgageStatementStep cs={cs} upd={upd} />}
-                    <button type="button" onClick={() => onTab(o.tab)}
-                      className="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[12px] font-bold text-white hover:bg-emerald-700">
-                      Run the {o.label} numbers
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* 3. EVERYTHING ELSE — folded until asked for */}
-            {showList.map((o) => (o.rs.length > 0 || o.warn.length > 0 || o.miss.length > 0) && (
-              <details key={o.id} className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">Why {o.label} scores {o.sc}</summary>
-                {o.rs.map((r, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-slate-600"><CheckCircle2 className="mt-px h-3 w-3 shrink-0 text-emerald-500" />{r}</div>)}
-                {o.warn.map((w, k) => <div key={k} className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-amber-700"><AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{w}</div>)}
-                {o.miss.map((m, k) => <div key={k} className="mt-1.5 text-[11px] leading-snug text-slate-600"><span className="font-semibold">Still to ask: {m.q}</span> <span className="text-slate-600">{m.why}</span></div>)}
-              </details>
-            ))}
-
-            {overAsk && (
-              <details className="mt-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-amber-800">Careful with the word partnership</summary>
-                <div className="mt-1.5 text-[11px] leading-snug text-amber-800">
-                  It is the name of our program, not a description of what the seller becomes. No ownership stake, no share of the profit, no say in what we do with the house. If they ask “so am I a partner in this?”, say: “It is just what we call the program. You are accepting our offer on the house, and the agreement spells out exactly what you get and when.”
-                </div>
-              </details>
-            )}
-
-            {(cs.loan === "yes" || cs.terms === "yes" || cs.terms === "maybe") && (
-              <details className="mt-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">Negotiating terms — the real number, what to trade, pushback</summary>
-
-                <div className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-600">Find the real number</div>
-                <Line>“After the loan is paid off and everything is settled, what do you need in your pocket to move on?”</Line>
-                <Line>“What are you doing with the money?” Their answer is the real minimum.</Line>
-                <Line>“If I covered the back payments and all the closing costs, how close does that get you?”</Line>
-
-                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">What you can trade</div>
-                <div className="mt-1 space-y-1 text-[11px] leading-snug text-slate-600">
-                  <div><b className="text-slate-800">Price for terms.</b> Closer to their number in exchange for a lower rate, longer term, or later balloon.</div>
-                  <div><b className="text-slate-800">Time for cash.</b> If they will wait on part of it, the cash at closing drops.</div>
-                  <div><b className="text-slate-800">Certainty for flexibility.</b> A firm close date is worth real money to someone under pressure.</div>
-                  <div><b className="text-slate-800">Never trade the rate.</b> On a Sub-To the existing low rate is the asset.</div>
-                </div>
-
-                <div className="mt-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Their pushback</div>
-                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Why leave the loan in my name?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“What your lender cares about is that the payment gets made on time. We take that over and it gets paid. What changes for you is that you are no longer responsible for the house, the repairs, the tenants, or that payment leaving your account.”</div></details>
-                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“What if you stop paying?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“That is exactly why we put protections in writing. This closes at a title company, the payments are documented, and you get proof of every one.” Do not improvise promises. Anything beyond the agreement goes to the head of acquisitions.</div></details>
-                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“Can the bank call the loan?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">Answer honestly: most mortgages have a due on sale clause, so yes, a lender has that right. As long as the payment is current it is uncommon, and if it happened we would refinance or sell to pay it off. Never tell a seller it cannot happen.</div></details>
-                <details className="mt-1 rounded border border-slate-200 px-2.5 py-1.5"><summary className="cursor-pointer text-[11px] font-semibold text-slate-700">“So do I still own part of it?”</summary><div className="mt-1 text-[11px] leading-snug text-slate-600">“No. Partnership is just what we call the program. You are accepting our offer on the house, and the agreement says exactly what you get and when.” Do not soften this one.</div></details>
-
-                <div className="mt-2.5 rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
-                  <b>Never on a call:</b> guarantees of any kind, promising the loan will not be called, legal or tax advice, terms outside an approved agreement, or letting “partnership” imply ownership.
-                </div>
-              </details>
-            )}
-          </div>);
-        })()}
-
-        {stage === 8 && (<div>
-          <div className="text-xs font-bold uppercase tracking-widest text-slate-600">Close it out</div>
-          {isLowRate(cs.rate) && (
-            <div className="mb-3 rounded-xl border-2 border-emerald-500 bg-emerald-50 p-3">
-              <div className="flex items-start gap-2">
-                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                <div>
-                  <div className="text-[12px] font-bold text-emerald-900">{rateNum(cs.rate)}% loan on this one.</div>
-                  <div className="mt-0.5 text-[11px] leading-snug text-emerald-800">
-                    If they did not approve the agreement, or the seller turned down creative financing, this goes to the head of acquisitions today. Send the report and say what they pushed back on. It does not get marked dead on this call.
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-          {(() => {
-            // Sub-To / Hybrid in play (picked, pitched, or best fit) and the statement is not in hand yet.
-            const ids = [cs.wentWith, ...(cs.chosen || "").split(",")].filter(Boolean);
-            if (!ids.length && strat.fits && strat.ranked[0]) ids.push(strat.ranked[0].id);   // nothing picked: the best fit
-            const inPlay = ids.includes("subto") || ids.includes("hybrid");
-            return inPlay && cs.stmt !== "received" ? (
-              <div className="mb-3">
-                <MortgageStatementStep cs={cs} upd={upd} compact />
-                <div className="mt-1 text-[11px] leading-snug text-slate-700">Before this goes to the TC, the mortgage statement has to be in hand.</div>
-              </div>
-            ) : null;
-          })()}
-          <Line>Commitment close: “If we can make the numbers work, are you ready to move forward today?”</Line>
-          <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
-            <b>Never send agreements without walking through them live on the phone.</b> Verify seller info → send the agreement → review it line-by-line together → have them approve it while you're still on the call.
           </div>
-          <Line>“The next step is to go over the agreement together, so you can approve it while we're on the phone.”</Line>
-          <Hint>Say “approve the agreement,” never “sign the contract.” Signing a contract feels final and legal. Approving an agreement feels like a yes they are in control of.</Hint>
-          <Line>Stress test (after they approve it): “When someone asks you why you decided to take our offer, what are you going to tell them?” — you want THEIR reason, not your pitch back. Coach if needed: “Would you say it helps you get closer to ___? It saves you time, energy, and money?”</Line>
-          <WField label="Did they approve the agreement?">
-            <WChips value={cs.signed} onChange={(v) => upd("signed", v)} opts={[["yes", "Approved"], ["no", "Not yet"]]} />
-          </WField>
-          {cs.signed === "yes" && (<>
-            <Line>Next steps: “Within the next few days we'll likely need access for photos, walkthroughs, or contractors.”</Line>
-            <AccessStep cs={cs} upd={upd} />
-          </>)}
-          {cs.signed === "no" && <Hint>Not approved yet. Access comes after they approve the agreement, so set the follow-up and log what is holding it up.</Hint>}
-          <Line>End in rapport: “It was great getting to know you.” · “Congratulations on getting this process started.” · “So what's the next chapter for you after this?”</Line>
-          <Hint>Compliance (SOP): no guarantees, no legal advice, approved agreements only. Then: submit to the TC same day, title open within 1 business day, notify Dispositions.</Hint>
-          <button type="button" onClick={downloadReport}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
-            <FileDown className="h-4 w-4" /> Download call report
-          </button>
-          <div className="mt-1.5 text-center text-[12px] font-medium leading-snug text-slate-700">Everything captured on this call, plus a copy-and-paste summary for the CRM.</div>
+        )}
+      </header>
 
-          {/* Buyer deck for the strategy the deal ended up as. Opens that tab's deck form, so the deck is
-              built from the same numbers the tab shows. */}
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-700">Which strategy did you go with?</div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {WENT_WITH.map((o) => (
-                <button key={o.id} type="button" onClick={() => upd("wentWith", cs.wentWith === o.id ? "" : o.id)}
-                  className={`rounded-full border px-3 py-1 text-[11.5px] font-semibold ${cs.wentWith === o.id ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"}`}>
-                  {o.label}
+      {/* Phones: the results sit below the form, so keep the headline numbers in view while typing. */}
+      <a href="#results" className={`fixed inset-x-0 bottom-0 z-20 flex items-center justify-between gap-3 border-t-2 bg-white px-4 py-2.5 shadow-[0_-4px_12px_rgba(15,23,42,0.08)] lg:hidden ${tone === "pass" ? "border-rose-300" : tone === "thin" ? "border-amber-300" : tone === "none" ? "border-slate-200" : "border-emerald-400"}`}>
+        <span className="min-w-0">
+          <span className="block truncate text-[13px] font-extrabold text-slate-900">{a.verdict.label}</span>
+          <span className="block text-[11px] text-slate-600">Tap for the full results</span>
+        </span>
+        <span className="shrink-0 text-right font-mono tabular-nums">
+          <span className={`block text-base font-bold ${a.cashFlow > 0 ? "text-emerald-700" : a.rentedCount ? "text-rose-600" : "text-slate-900"}`}>{fmt$(a.cashFlow)}/mo</span>
+          <span className="block text-[11px] text-slate-600">{type === "arb" ? (a.paybackMonths ? `${Math.ceil(a.paybackMonths)} mo payback` : "--") : type === "hack" ? (a.hack.yourCost <= 0 ? "you live free" : `${fmt$(a.hack.yourCost)} to live there`) : `${pct(a.coc)} cash-on-cash`}</span>
+        </span>
+      </a>
+
+      <main className="mx-auto grid max-w-7xl gap-5 px-4 pb-24 pt-5 lg:grid-cols-[minmax(0,1fr)_380px] lg:pb-5">
+        <div className="space-y-5">
+          {/* 1. Deal type */}
+          <Card n="1" title="What kind of deal is it?" sub="Pick how you are getting control of the house, then how you will rent it.">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {[["buy", Home, "Buy & Convert", "Buy it with a loan, convert it, rent it by the room."],
+                ["arb", KeyRound, "Rental Arbitrage", "Lease it from a landlord and rent it out by the room."],
+                ["creative", Handshake, "Creative Buy", "Take over the seller's loan (Sub-To) or have them finance it."],
+                ["hack", BedDouble, "House Hack", "Live in one room, rent out the rest."]].map(([v, Icon, l, s]) => (
+                <button key={v} type="button" onClick={() => set("dealType", v)}
+                  className={`rounded-xl border-2 p-3 text-left transition ${type === v ? "border-emerald-600 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+                  <Icon className={`h-5 w-5 ${type === v ? "text-emerald-700" : "text-slate-500"}`} />
+                  <div className="mt-1 text-sm font-bold text-slate-900">{l}</div>
+                  <div className="text-[11.5px] leading-snug text-slate-600">{s}</div>
                 </button>
               ))}
             </div>
-            {(() => {
-              // How the strategy they went with actually scored, and what the engine warned about it,
-              // right before they send a deck to a buyer. Deliberately repeated from the Strategy stage.
-              const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
-              const r = ww && strat.ranked.find((x) => x.id === ww.id);
-              if (!r) return null;
-              const top = strat.ranked[0];
-              const gated = r.gate ? { need: r.gate } : null;
-              const tone = gated ? "amber" : r.sc < FIT_FLOOR ? "red" : r.warn.length ? "amber" : "green";
-              const box = { red: "border-rose-300 bg-rose-50", amber: "border-amber-300 bg-amber-50", green: "border-emerald-300 bg-emerald-50" }[tone];
-              const ink = { red: "text-rose-900", amber: "text-amber-900", green: "text-emerald-900" }[tone];
-              const icon = { red: "text-rose-600", amber: "text-amber-500", green: "text-emerald-600" }[tone];
-              return (
-                <div className={`mt-2.5 rounded-lg border px-3 py-2 ${box}`}>
-                  <div className={`flex items-center justify-between gap-2 text-[12px] font-bold ${ink}`}>
-                    <span className="flex items-center gap-1.5">
-                      {tone === "green" ? <CheckCircle2 className={`h-4 w-4 ${icon}`} /> : <AlertTriangle className={`h-4 w-4 ${icon}`} />}
-                      {r.label} scored {r.sc} out of 100
-                    </span>
-                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide">
-                      {gated ? "Not graded yet" : r.sc < FIT_FLOOR ? `Under the ${FIT_FLOOR} fit line` : strat.fits && top && top.id === r.id ? "Best fit" : "Fits"}
-                    </span>
-                  </div>
-                  {gated && <div className="mt-1 text-[11px] leading-snug text-slate-700">It cannot be graded without {gated.need}. Get it before sending anything to a buyer.</div>}
-                  {!gated && r.sc < FIT_FLOOR && <div className="mt-1 text-[11px] leading-snug text-slate-700">The numbers do not support this strategy as captured. Double-check them, and flag it to the head of acquisitions before a buyer sees this deck.</div>}
-                  {strat.fits && top && top.id !== r.id && <div className="mt-1 text-[11px] leading-snug text-slate-700">Deal Desk's best fit was {top.label} ({top.sc}).</div>}
-                  {r.warn.length > 0 ? (
-                    <div className="mt-1.5 space-y-1">
-                      {r.warn.map((wn, k) => (
-                        <div key={k} className="flex items-start gap-1.5 text-[11px] leading-snug text-slate-800">
-                          <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />{wn}
-                        </div>
-                      ))}
-                    </div>
-                  ) : <div className="mt-1 text-[11px] leading-snug text-slate-700">No warnings on this strategy.</div>}
-                  {r.miss.length > 0 && (
-                    <div className="mt-1.5 text-[11px] leading-snug text-slate-700">
-                      <b>Still unanswered:</b> {r.miss.slice(0, 3).map((m) => m.q).join(" · ")}{r.miss.length > 3 ? ` · and ${r.miss.length - 3} more` : ""}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-            {(() => {
-              const ww = WENT_WITH.find((x) => x.id === cs.wentWith);
-              if (!ww) return <div className="mt-2 text-[11px] leading-snug text-slate-600">Pick one and the matching buyer deck button shows up here.</div>;
-              if (ww.deck && !(deal.arv > 0)) return <div className="mt-2 text-[11px] leading-snug text-slate-600">The buyer deck is built from the ARV and repairs, and there is no ARV yet. Run Auto-comp or type an ARV, then this button appears.</div>;
-              if (!ww.deck) return <div className="mt-2 text-[11px] leading-snug text-slate-600">Novation does not have a buyer deck. The house goes to a retail buyer on the MLS, so there is nothing to upload beyond the call report.</div>;
-              return (<>
-                <button type="button" onClick={() => onDeck(ww.tab)}
-                  className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
-                  <FileDown className="h-4 w-4" /> Download buyer deck: {ww.deck}
-                </button>
-                <div className="mt-1.5 text-center text-[12px] font-medium leading-snug text-slate-700">Upload this deck to the CRM on the same lead as the call report.</div>
-              </>);
-            })()}
-          </div>
-        </div>)}
-      </div>
+            <div className="mt-4">
+              <Field label="How will you rent it?">
+                <Chips value={model} onChange={(v) => set("model", v)} opts={[["coliving", "Co-Living (by the room)"], ["private", "Private units"], ["hybrid", "Hybrid (rooms + units)"]]} />
+              </Field>
+              <p className="mt-1.5 text-[11.5px] text-slate-600">
+                {model === "coliving" ? "Every bedroom rents on its own, and everyone shares the kitchen and common areas." : model === "private" ? "Each unit is a furnished private apartment (a studio, a 1-bed, and so on) rented mid-term." : "Some of it rents by the room, some as private furnished units, like a duplex with one side co-living."}
+              </p>
+            </div>
+          </Card>
 
-      {/* footer nav */}
-      <div className="flex items-center justify-between border-t border-slate-100 p-2.5">
-        <button type="button" disabled={!canPrev} onClick={() => setStage((v) => Math.max(0, v - 1))}
-          className="flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 disabled:opacity-40 hover:bg-slate-50"><ChevronLeft className="h-3.5 w-3.5" /> Back</button>
-        <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-600">{CALL_STAGES[stage]}</div>
-        <button type="button" disabled={!canNext} onClick={() => setStage((v) => Math.min(CALL_STAGES.length - 1, v + 1))}
-          className="flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40 hover:bg-slate-700">Next <ChevronRight className="h-3.5 w-3.5" /></button>
-      </div>
-    </div>
-  );
-};
-
-export default function App() {
-  // property + ARV
-  const [address, setAddress] = useState("");
-  const [sqft, setSqft] = useState("");
-  const [manualSold, setManualSold] = useState([]);  // hand-entered recorded sales (merged into the sold panel; cleared on a fresh successful pull)
-  const [soldAdd, setSoldAdd] = useState(null);      // same, for the sold section
-  const [arvOverride, setArvOverride] = useState("");
-  const [marginalPsf, setMarginalPsf] = useState("");   // size-adjust rate ($ per sq ft of size difference); blank = auto (half the group's typical $/sf)
-  // --- rental ---
-  const [rentEst, setRentEst] = useState(null);      // RentCast rent estimate (auto)
-  const [rentSaved, setRentSaved] = useState(null);  // rent remembered from the last time this address was worked
-  const [rentBasis, setRentBasis] = useState(null);  // { beds, baths, sqft } the rent estimate was priced for
-  const [rentComps, setRentComps] = useState([]);    // the rental comps RentCast priced it from (map + list)
-  const [pullAt, setPullAt] = useState(null);        // when this address was last actually pulled from RentCast
-  const lastAddrRef = useRef("");                   // the address this screen was last showing
-  const pullAddrRef = useRef("");                   // which address the data on screen belongs to
-  const [rentLow, setRentLow] = useState(null);
-  const [rentHigh, setRentHigh] = useState(null);
-  const [rentOverride, setRentOverride] = useState(""); // manual rent (wins when set)
-  const [rentLoading, setRentLoading] = useState(false);
-  const [rentMsg, setRentMsg] = useState(null);
-  const [rentFetchedFor, setRentFetchedFor] = useState(""); // address we last pulled rent for (lazy-load guard)
-  const [tab, setTab] = useState("cash");
-  // A buyer deck asked for from the Offer Call. The matching tab's deck button opens its form once,
-  // then clears the request so switching tabs later does not pop it open again.
-  const [deckReq, setDeckReq] = useState({ tab: "", n: 0 });
-  const deckKey = (t) => (deckReq.tab === t ? deckReq.n : 0);
-  const deckDone = () => setDeckReq((p) => ({ tab: "", n: p.n }));
-  const [callOpen, setCallOpen] = useState(false); // Offer Call drawer (acquisitions script walkthrough)
-  const [callState, setCallState] = useState(INITIAL_CALL);
-  const [callTouched, setCallTouched] = useState(false); // true only once a rep edits the call or a saved one is restored
-  const [callSavedAt, setCallSavedAt] = useState(null);   // when this call was last written to browser storage
-  const [callLoadedAt, setCallLoadedAt] = useState(null); // set when a previously saved call was restored for this address
-  const callKeyRef = useRef("");                          // which address key the open call is attached to
-  const [syncId, setSyncId] = useState(readSyncId);       // { name, code } — this browser's rep identity
-  const [syncState, setSyncState] = useState({ status: "idle", by: null, at: null, msg: "" });
-  const syncTimer = useRef(null);
-  const saveKeyRef = useRef("");                          // address the last autosave pass saw                         // debounce so we do not POST on every keystroke
-  const [ownerNames, setOwnerNames] = useState(null); // owner of record from the subject pull — prefills the seller name and shows under the field
-  const [subjectInfo, setSubjectInfo] = useState(null);
-  // Subject property deep-dive (on-demand RentCast record lookup — 1 credit, once per address)
-  const [subjDetail, setSubjDetail] = useState(null);
-  const [subjDetailOpen, setSubjDetailOpen] = useState(false);
-  const [subjDetailLoading, setSubjDetailLoading] = useState(false);
-  const [subjTab, setSubjTab] = useState("Property");
-  async function openSubjDetail() {
-    if (subjDetailOpen) { setSubjDetailOpen(false); return; }
-    setSubjDetailOpen(true);
-    if (subjDetail || subjDetailLoading) return;
-    const a = address.trim();
-    if (!a) return;
-    setSubjDetailLoading(true);
-    try {
-      const r = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
-      const data = await r.json();
-      if (r.ok && data.sections) { setSubjDetail(data); setSubjTab(Object.keys(data.sections)[0] || "Property"); }
-      else setSubjDetail({ sections: {}, error: data.error || "No record found." });
-    } catch { setSubjDetail({ sections: {}, error: "Lookup failed." }); }
-    finally { setSubjDetailLoading(false); }
-  }
-  // Record corrections — beds/baths the county record missed (or overstated). Flat per-unit ARV adjustment.
-  const [adjBeds, setAdjBeds] = useState(0);
-  const [adjBaths, setAdjBaths] = useState(0);           // steps in halves: 0.5 = a half bath
-  const [compLoading, setCompLoading] = useState(false);
-  const [compMsg, setCompMsg] = useState(null); // {type:'ok'|'err', text}
-  const [compSearch, setCompSearch] = useState(COMP_SEARCH_DEFAULT);   // radius / sq ft band / months for the sold pull
-  const [soldData, setSoldData] = useState(null);      // actual recorded sold comps (RentCast /properties)
-  const [soldLoading, setSoldLoading] = useState(false);
-  const [soldMsg, setSoldMsg] = useState(null);
-  const [soldIncluded, setSoldIncluded] = useState({}); // manual "include" overrides for flagged sold comps, keyed by comp index (reset on each pull)
-  const [arvSource, setArvSource] = useState("");   // which method produced the typed ARV
-  const [compsOpen, setCompsOpen] = useState(false); // Deal Desk comp engine starts collapsed
-  const [mlsOnly, setMlsOnly] = useState(true); // show only MLS-verified sales (applies only when the MLS cross-check ran)
-  const [compDetail, setCompDetail] = useState(null); // { i } — which sold comp's detail pop-up is open (opened by clicking a card photo)
-
-  async function autoComp() {
-    const a = address.trim();
-    if (!a) { setCompMsg({ type: "err", text: "Type the subject address first." }); return; }
-    setCompLoading(true); setCompMsg(null);
-    try {
-      // 1) Subject record first (exact-address lookup, 1 credit): fills the sq ft, beds/baths and
-      //    coordinates, and pre-loads the Subject property details panel off the same response.
-      let hints = { sqft: num(sqft), propertyType: subjectInfo?.propertyType, lat: subjectInfo?.lat, lng: subjectInfo?.lng };
-      let rec = { beds: subjectInfo?.beds ?? null, baths: subjectInfo?.baths ?? null, propertyType: subjectInfo?.propertyType ?? null };
-      let subjNote = "";   // what went wrong with the property record, if anything
-      try {
-        const sr = await fetch(`/api/subject?address=${encodeURIComponent(a)}`);
-        const sd = await sr.json().catch(() => null);
-        if (sr.ok && sd) {
-          if (sd.sections) { setSubjDetail(sd); setSubjDetailOpen(true); } // auto-show the panel — no extra click
-          const raw = sd.raw || {};
-          if (raw.sqft) setSqft(String(raw.sqft));
-          setOwnerNames(raw.ownerNames || null);
-          // The record often knows whether there is an HOA. Answer it for them rather than making
-          // them ask, but never overwrite an answer a rep already gave.
-          if (typeof raw.hoa === "boolean") setCallState((prev) => (prev.hoa ? prev : { ...prev, hoa: raw.hoa ? "yes" : "no" }));
-          setCallState((prev) => (prev.sellerName.trim() ? prev : { ...prev, sellerName: ownerFullName(raw.ownerNames) })); // suggestion only — never overwrites what the rep typed
-          setSubjectInfo({ propertyType: raw.propertyType ?? null, architecture: raw.architecture ?? null, ownerType: raw.ownerType ?? null, heldFor: raw.heldFor ?? null, hoa: raw.hoa ?? null, beds: raw.beds ?? null, baths: raw.baths ?? null, yearBuilt: raw.yearBuilt ?? null, lat: raw.lat ?? null, lng: raw.lng ?? null, sqft: raw.sqft ?? null });
-          hints = { sqft: raw.sqft || num(sqft), propertyType: raw.propertyType, lat: raw.lat, lng: raw.lng };
-          rec = { beds: raw.beds ?? null, baths: raw.baths ?? null, propertyType: raw.propertyType ?? null };
-          if (!raw.sqft && !num(sqft)) subjNote = "RentCast's record for this house has no square footage. Look it up (Zillow, the PVA or the listing), type it in the Subject sq ft box, and the ARV fills in.";
-        } else {
-          subjNote = `The property record didn't load${sd && sd.error ? ` (${sd.error})` : ""}. Sq ft, beds and baths are blank, so type them in before trusting the ARV.`;
-        }
-      } catch { subjNote = "The property record didn't load. Sq ft, beds and baths are blank, so type them in before trusting the ARV."; }
-      // 2) Recorded sold comps + MLS cross-check (the server makes both RentCast calls in one go)
-      await pullSold({ ...hints, beds: rec.beds, baths: rec.baths });
-      setCompsOpen(true);
-      if (!arvSource && num(arvOverride) <= 0) setArvSource("deal-desk");
-      // 3) Market rent, so the payment-vs-rent test and the BRRRR panel are live without a second
-      //    click. Best-effort on purpose: a rent miss must never take down a good comp pull.
-      try {
-        await fetchRent(a, {
-          beds: rec.beds != null ? rec.beds + adjBeds : null,
-          baths: rec.baths != null ? rec.baths + adjBaths : null,
-          sqft: hints.sqft || null, propertyType: rec.propertyType,
-        });
-      } catch { /* keep going — rent can be pulled or typed later */ }
-      setPullAt(new Date().toISOString());
-      pullAddrRef.current = a.trim().toLowerCase();
-      setCompMsg(subjNote
-        ? { type: "err", text: `Pulled the sold comps and market rent. ${subjNote}`, needsSqft: true }
-        : { type: "ok", text: "Pulled the subject record, recorded sold comps, and market rent. The ARV is the median of the best solid sales — include/exclude comps below and it recalculates." });
-    } catch {
-      setCompMsg({ type: "err", text: "Couldn't reach the comp service. Is the proxy deployed?" });
-    } finally {
-      setCompLoading(false);
-    }
-  }
-
-  async function pullSold(fresh, opts = {}) {
-    const a = address.trim();
-    if (!a) { setSoldMsg({ type: "err", text: "Type the subject address first." }); return; }
-    setSoldLoading(true); setSoldMsg(null);
-    try {
-      const params = new URLSearchParams({ address: a });
-      const sf = Number(fresh?.sqft) > 0 ? Number(fresh.sqft) : num(sqft);
-      if (sf > 0) params.set("subjectSqft", String(sf));
-      const ptype = fresh?.propertyType || subjectInfo?.propertyType;
-      if (ptype) params.set("propertyType", ptype);
-      params.set("radius", String(compSearch.mi));
-      params.set("sqftBand", String(compSearch.sf));
-      params.set("saleDateRange", String(Math.round(compSearch.mo * 30.44)));
-      // The house as the team has it: county beds/baths plus corrections, so sales are matched on rooms.
-      const rb = fresh && fresh.beds !== undefined ? fresh.beds : subjectInfo?.beds;
-      const rba = fresh && fresh.baths !== undefined ? fresh.baths : subjectInfo?.baths;
-      if (rb != null) params.set("subjectBeds", String(rb + adjBeds));
-      if (rba != null) params.set("subjectBaths", String(rba + adjBaths));
-      const sLat = Number(fresh?.lat ?? subjectInfo?.lat), sLng = Number(fresh?.lng ?? subjectInfo?.lng);
-      if (Number.isFinite(sLat) && Number.isFinite(sLng)) { params.set("subjectLat", String(sLat)); params.set("subjectLng", String(sLng)); }
-      const r = await fetch(`${SOLD_API}?${params.toString()}`);
-      const data = await r.json();
-      if (!r.ok) { setSoldMsg({ type: "err", text: data.error || `Lookup failed (${r.status}).` }); setSoldData(null); setSoldIncluded({}); return; }
-      setSoldData(data);
-      setSoldIncluded({});
-      // Fresh property, fresh slate. A re-pull for the same house keeps the rep's hand-entered comps.
-      if (!opts.keepManual) setManualSold([]);
-      const n = data.count || 0;
-      setSoldMsg(n > 0
-        ? { type: "ok", text: `${n} recorded sale${n === 1 ? "" : "s"} found.` }
-        : { type: "err", text: "No recorded sales matched — widen the radius/date range, or the county may be light on recorded prices. You can enter your ARV directly in the picker below." });
-    } catch (e) {
-      setSoldMsg({ type: "err", text: "Couldn't reach the sold-comps service. Is the proxy deployed?" });
-    } finally {
-      setSoldLoading(false);
-    }
-  }
-
-  // Pull the rent estimate. Runs as part of Auto-comp, or from the Offer Call drawer. One RentCast credit.
-  async function fetchRent(addr, basis) {
-    const a = (addr || "").trim();
-    if (!a) { setRentMsg({ type: "err", text: "Enter an address up top first, then reopen this tab." }); return; }
-    setRentLoading(true);
-    setRentMsg(null);
-    try {
-      // Price the house as the team has it: record beds/baths plus any corrections, and the sq ft.
-      const q = new URLSearchParams({ address: a });
-      const b = basis || {};
-      if (b.beds != null) q.set("bedrooms", String(b.beds));
-      if (b.baths != null && b.baths > 0) q.set("bathrooms", String(b.baths));
-      if (b.sqft > 0) q.set("squareFootage", String(Math.round(b.sqft)));
-      if (b.propertyType) q.set("propertyType", b.propertyType);
-      const res = await fetch(`${RENT_API}?${q.toString()}`);
-      const data = await res.json();
-      if (!res.ok) { setRentMsg({ type: "err", text: data.error || "Rent lookup failed." }); return; }
-      setRentEst(data.rent || null);
-      setRentBasis(data.rent ? {
-        beds: data.basis && data.basis.beds != null ? Number(data.basis.beds) : (b.beds ?? null),
-        baths: data.basis && data.basis.baths != null ? Number(data.basis.baths) : (b.baths ?? null),
-        sqft: data.basis && data.basis.sqft ? Number(data.basis.sqft) : (b.sqft || null),
-        comps: data.comps ?? null, search: data.search || null,
-        lat: data.subjectLat ?? null, lng: data.subjectLng ?? null,
-      } : null);
-      setRentLow(data.rentLow || null);
-      setRentComps(Array.isArray(data.compList) ? data.compList : []);
-      setRentHigh(data.rentHigh || null);
-      setRentFetchedFor(a);
-      setRentMsg(data.rent
-        ? { type: "ok", text: `RentCast estimate ${usd(data.rent)}/mo${data.rentLow && data.rentHigh ? ` (range ${usd(data.rentLow)}–${usd(data.rentHigh)})` : ""}. Override below if you have a better number.` }
-        : { type: "err", text: "No rent estimate available — enter rent manually below." });
-    } catch (e) {
-      setRentMsg({ type: "err", text: "Couldn't reach the rent service. Is the proxy deployed?" });
-    } finally {
-      setRentLoading(false);
-    }
-  }
-
-  // Rent comes from Auto-comp, the drawer's Get market rent button, or a remembered prior pull.
-
-  // rehab + MAO %
-  const [rehabLevel, setRehabLevel] = useState("");   // no default: repairs stay unknown until a rep picks a level or types a number
-  const [customPsf, setCustomPsf] = useState("");
-  const [repairOverride, setRepairOverride] = useState("");
-  // MAO bands, fixed per B (Oct 16 2026): the slider panel came out. It was not saved with a deal, so a
-  // drag on one house quietly carried to the next. Change the numbers here if the policy changes.
-  const underPct = 75; // under $200k band
-  const overPct = 80;  // over $200k band
-
-  // cash/mao
-  const [feeTyped, setFeeTyped] = useState("");   // blank = Jerry's scale fee for the ARV's range (wholesaleFee below)
-  const setWholesaleFee = setFeeTyped;
-
-
-  // Buyer-deck flip assumptions, shown next to the deck button on the Cash/MAO tab.
-  const [sellingPct, setSellingPct] = useState("10");
-  const [carryPerMonth, setCarryPerMonth] = useState("1200");   // loan interest + taxes + insurance + utilities
-  const [rehabPerMonth, setRehabPerMonth] = useState("20000");  // how much work your crew turns out in a month
-  const [holdingOverride, setHoldingOverride] = useState("");   // type a number to ignore the derivation
-  const SELL_MONTHS = 3;                                        // list, contract, close after the work is done
-  // One number, two screens. The calculator's seller asking price IS the Offer Call's "Their number",
-  // so typing in either place changes both. Before, they were separate fields kept in step by a copy.
-  const askingPrice = callState.ask;
-  const setAskingPrice = (v) => { setCallTouched(true); setCallState((p) => ({ ...p, ask: v })); };
-
-  // ---- One value per fact (per B, Oct 16 2026) ----
-  // Every box that shows the same fact edits the same value, so a change anywhere shows everywhere.
-  const setCallField = (k, v) => { setCallTouched(true); setCallState((p) => ({ ...p, [k]: v })); };
-  // The seller's price: Their number, the Cash tab's asking price, and the Hybrid and Seller Finance price.
-  const stBal = callState.balance, hyBal = callState.balance;          // the loan balance from the call
-  // A balance or payment typed on a strategy tab means there is a loan, so the Offer Call shows it too.
-  const setLoanField = (k, v) => { setCallTouched(true); setCallState((p) => ({ ...p, [k]: v, loan: num(v) > 0 ? "yes" : p.loan })); };
-  const setStBal = (v) => setLoanField("balance", v), setHyBal = setStBal;
-  const hyPrice = callState.ask, sfPrice = callState.ask;
-  const setHyPrice = setAskingPrice, setSfPrice = setAskingPrice;
-  // The payment. The box edits the seller's monthly payment from the call. The math runs on the full
-  // PITI: that payment plus taxes and insurance when they are not in escrow, plus HOA dues.
-  const pitiExtras = (callState.escrowed === "no" ? num(callState.tiMonthly) : 0) + (callState.hoa === "yes" ? num(callState.hoaAmt) : 0);
-  const callPiti = num(callState.payment) > 0 ? String(Math.round(num(callState.payment) + pitiExtras)) : "";
-  const stPiti = callPiti, hyPiti = callPiti;
-  const stPay = callState.payment, setStPay = (v) => setLoanField("payment", v);
-  const setStPiti = setStPay, setHyPiti = setStPay;   // older prop names, same payment
-  // Taxes + insurance (monthly) and HOA dues, the same numbers the call captures.
-  const taxIns = callState.tiMonthly, setTaxIns = (v) => setCallField("tiMonthly", v);
-  const hoaAmt = callState.hoaAmt;
-  const setHoaAmt = (v) => { setCallTouched(true); setCallState((p) => ({ ...p, hoaAmt: v, hoa: num(v) > 0 ? "yes" : p.hoa })); };
-  // The loan's rate from the call drives the Rate Savings panels on Sub-To and Hybrid.
-  const setCallRate = (n) => setCallField("rate", String(Math.round(n * 1000) / 1000));
-  const [stArrears, setStArrears] = useState("");
-  const [stCashSeller, setStCashSeller] = useState("");
-  const [closing, setClosing] = useState("3500");          // buyer's closing costs, every terms strategy
-  const [reservePct, setReservePct] = useState("12");     // vacancy + maintenance + management, every rental view
-  const [loanYrsLeft, setLoanYrsLeft] = useState("30");   // years left on the seller's loan
-  const [mktRate, setMktRate] = useState("7.5");          // today's market rate, for the rate-savings math
-  const stClosing = closing, hyClosing = closing, setStClosing = setClosing, setHyClosing = setClosing;
-  const stReservePct = reservePct, hyReservePct = reservePct, sfReservePct = reservePct;
-  const setStReservePct = setReservePct, setHyReservePct = setReservePct, setSfReservePct = setReservePct;
-  const stRent = rentOverride, hyRent = rentOverride, sfRent = rentOverride;
-  const setStRent = setRentOverride, setHyRent = setRentOverride, setSfRent = setRentOverride;
-  const sfTaxIns = taxIns, setSfTaxIns = setTaxIns;
-
-  // hybrid terms
-  const [hyDown, setHyDown] = useState("");
-  const [hyRate, setHyRate] = useState("0");
-  const [hyTerm, setHyTerm] = useState("30");
-
-  // seller finance terms
-  const [sfDown, setSfDown] = useState("");
-  const [sfRate, setSfRate] = useState("0");
-  const [sfAmort, setSfAmort] = useState("30");
-  const [sfBalloon, setSfBalloon] = useState("0");
-
-  // BRRRR inputs, kept here so they survive a tab switch and save with the deal
-  const [brPurchase, setBrPurchase] = useState("");
-  const [brPurchaseMode, setBrPurchaseMode] = useState("");   // "ask" or "askfee" keeps following the price and fee
-  const [brLtv, setBrLtv] = useState("75");
-  const [brRate, setBrRate] = useState("7.5");
-  const [brTerm, setBrTerm] = useState("30");
-  const [brReservePct, setBrReservePct] = useState("10");
-
-  // novation
-  const [novAsIs, setNovAsIs] = useState("");
-  const [novProfit, setNovProfit] = useState("30000");
-  const [novCommission, setNovCommission] = useState("6");     // % of the sale price
-  const [novClosing, setNovClosing] = useState("5000");        // flat $
-  const novRepairs = repairOverride, setNovRepairs = setRepairOverride;   // the deal's repair number
-
-  // As-Is formula (Cash tab): the online values, plus optional overrides of the scale (blank = scale)
-  const [aiZillow, setAiZillow] = useState("");
-  const [aiRealtor, setAiRealtor] = useState("");
-  const [aiRedfin, setAiRedfin] = useState("");
-  const [aiOther, setAiOther] = useState("");
-  const [aiExit, setAiExit] = useState("");
-  const aiFee = feeTyped, setAiFee = setFeeTyped;   // the deal's wholesale fee, not a second one
-  const [aiOffer, setAiOffer] = useState("");
-
-  // One handle on every strategy-tab field, so they can be cleared, saved and restored per address.
-  const tabVals = {
-    rentOverride, holdingOverride,
-    closing, reservePct, loanYrsLeft, mktRate,
-    stArrears, stCashSeller,
-    hyDown, hyRate, hyTerm,
-    sfDown, sfRate, sfAmort, sfBalloon,
-    novAsIs, novCommission, novClosing, novProfit,
-    aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiOffer,
-    brPurchase, brPurchaseMode, brLtv, brRate, brTerm, brReservePct,
-  };
-  const tabSet = {
-    rentOverride: setRentOverride, holdingOverride: setHoldingOverride,
-    closing: setClosing, reservePct: setReservePct, loanYrsLeft: setLoanYrsLeft, mktRate: setMktRate,
-    stArrears: setStArrears, stCashSeller: setStCashSeller,
-    hyDown: setHyDown, hyRate: setHyRate, hyTerm: setHyTerm,
-    sfDown: setSfDown, sfRate: setSfRate, sfAmort: setSfAmort, sfBalloon: setSfBalloon,
-    novAsIs: setNovAsIs, novCommission: setNovCommission, novClosing: setNovClosing, novProfit: setNovProfit,
-    aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin, aiOther: setAiOther, aiExit: setAiExit, aiOffer: setAiOffer,
-    brPurchase: setBrPurchase, brPurchaseMode: setBrPurchaseMode, brLtv: setBrLtv, brRate: setBrRate, brTerm: setBrTerm, brReservePct: setBrReservePct,
-  };
-  // (asIs is computed below the deal fee, since the formula runs on the same fee as everything else)
-  const tabsChanged = () => {
-    const d = {};
-    for (const k of Object.keys(TAB_DEFAULTS)) if (String(tabVals[k] ?? "") !== TAB_DEFAULTS[k]) d[k] = String(tabVals[k]);
-    return Object.keys(d).length ? d : null;
-  };
-  const tabKey = JSON.stringify(tabVals);   // one dependency for autosave instead of thirty
-
-  // ---- Offer Call -> strategy tabs -------------------------------------------------------
-  // What the rep captures on the phone should already be in whichever tab they open next.
-  // Rule: a tab field FOLLOWS the call until someone types a different number into that field.
-  // The old rule filled a field only while it was empty, and it ran on every keystroke, so typing
-  // 15000 into the call filled the tabs with "1" and then stopped because they were no longer empty.
-  const callFedRef = useRef({});   // the value each tab field last received from the call
-  useEffect(() => {
-    const ask = num(callState.ask);
-    const bal = num(callState.balance);
-    // The payment a rep can actually inherit: what the seller pays, plus escrow and dues when
-    // those sit outside it. Same build-up as the payment-vs-rent test.
-    const piti = num(callState.payment) > 0
-      ? num(callState.payment)
-        + (callState.escrowed === "no" ? num(callState.tiMonthly) : 0)
-        + (callState.hoa === "yes" ? num(callState.hoaAmt) : 0)
-      : 0;
-    const equity = ask > 0 && bal > 0 ? Math.max(0, ask - bal) : 0;
-    const fed = callFedRef.current;
-    const follow = (key, cur, setter, val) => {
-      const next = val > 0 ? String(Math.round(val)) : "";
-      const c = String(cur ?? "");
-      // Still following when the field is empty, still holds what the call last put there, or holds
-      // a leftover partial keystroke of the new number ("1" on the way to "15000").
-      const following = c === "" || c === next || c === (fed[key] ?? "") || (next && c.length < next.length && next.startsWith(c));
-      if (!following) return;
-      if (c !== next) setter(next);
-      fed[key] = next;
-    };
-    // Price, balance and payment are no longer copied: those boxes ARE the call's numbers now.
-    void piti;
-    // The cash they told us they need at closing is the cash a creative offer puts down (per B, Oct 16
-    // 2026). It fills the down payment on Hybrid and Seller Finance and the cash to seller on Sub-To,
-    // and keeps following the call until someone types a different number on that tab. With no
-    // answer yet, Sub-To falls back to their equity above the loan.
-    const need = num(callState.needCash);
-    follow("stCashSeller", stCashSeller, setStCashSeller, need > 0 ? need : equity);
-    follow("hyDown", hyDown, setHyDown, need);
-    follow("sfDown", sfDown, setSfDown, need);
-  }, [callState.ask, callState.balance, callState.payment, callState.escrowed, callState.tiMonthly, callState.hoa, callState.hoaAmt, callState.needCash]);
-
-
-
-  // ---- ARV ----
-  // Record-correction dollars: rides on TOP of whichever ARV is driving (sold-comp median or manual override),
-  // because a bedroom the county missed is missing from every one of those sources equally.
-  // Retired Sep 30 2026 per B: no flat $15K-per-bed / $10K-per-bath. Bed/bath corrections now describe
-  // the house, and the comps (and rent) are re-pulled for it, so the room count is in the sales
-  // themselves. Kept as a constant 0 so older display code reads cleanly.
-  const subjAdjust = 0;
-
-  // Structural flags + the shared price-outlier rule for the sold panel: flagged comps sit out of the
-  // rule; flagged comps are auto-EXCLUDED from the average (averages bruise easier than medians), clean
-  // comps auto-included, and every valid card carries an include/exclude override.
-
-  // Sold-comp summary — "best 4" selection:
-  //  1) structural junk filter (compFlags: beds/baths/size/age/distance)
-  //  2) price sanity — $/sf more than 25% off the structurally-clean group median gets a "price outlier"
-  //     flag (catches distressed/wholesale sales that are structurally identical; skipped when <3 clean comps
-  //     because the reference median would itself be junk)
-  //  3) the median runs on the TOP {SOLID_TARGET} solid comps (list arrives closest/newest first)
-  //     plus anything manually included; solid comps beyond the top N sit on the bench
-  //  4) fewer than MIN_SOLID comps in the median → thin flag drives the warning banner
-  const soldSummary = useMemo(() => {
-    const src = [...((soldData && soldData.comps) || []), ...manualSold];
-    if (!src.length) return null;
-    const mlsChecked = !!(soldData && soldData.mlsChecked);
-    const pool0 = mlsChecked && mlsOnly ? src.filter((c) => c.manualEntry || c.mls) : src;
-    const sf = num(sqft);
-    // Judge "bd off" / "ba off" against the house as corrected, not the county's count.
-    const subjNow = subjectInfo ? {
-      ...subjectInfo,
-      beds: subjectInfo.beds != null ? subjectInfo.beds + adjBeds : subjectInfo.beds,
-      baths: subjectInfo.baths != null ? subjectInfo.baths + adjBaths : subjectInfo.baths,
-    } : subjectInfo;
-    const base = pool0.map((c, i) => ({ ...c, i, flags: [...compFlags(c, subjNow, sf, soldData && soldData.window)] }));
-    // Size adjustment (appraiser-style): each sale's price, moved to the subject's size at the marginal rate.
-    const marginalUsed = num(marginalPsf) > 0 ? Math.round(num(marginalPsf)) : Math.round(cleanMedian(base.filter((c) => c.flags.length === 0).map((c) => c.ppsf || 0)) / 2);
-    base.forEach((c) => {
-      const canAdj = sf > 0 && c.sqft > 0 && c.salePrice > 0 && marginalUsed > 0;
-      c.adjPrice = canAdj ? Math.max(0, c.salePrice + (sf - c.sqft) * marginalUsed) : c.salePrice;
-      c.appsf = sf > 0 && c.adjPrice > 0 ? c.adjPrice / sf : (c.ppsf || 0);
-    });
-    flagPriceOutliers(base);
-    const solidIdx = base.filter((c) => c.flags.length === 0 && soldIncluded[c.i] !== false).slice(0, SOLID_TARGET).map((c) => c.i);
-    const flagged = base.map((c) => {
-      const o = soldIncluded[c.i];                       // true = force in, false = force out, undefined = auto
-      const auto = solidIdx.includes(c.i);
-      const included = o === true || (o === undefined && auto);
-      return { ...c, manual: o !== undefined, included, benched: c.flags.length === 0 && o === undefined && !auto };
-    });
-    const pool = flagged.filter((c) => c.included);
-    let medianPpsf = null, arv = null;
-    if (pool.length && sf > 0) {
-      const prices = pool.map((c) => c.adjPrice).filter((x) => x > 0).sort((a, b) => a - b);
-      if (prices.length) {
-        const m = Math.floor(prices.length / 2);
-        const medPrice = prices.length % 2 ? prices[m] : (prices[m - 1] + prices[m]) / 2;
-        arv = Math.round(medPrice);                       // median of size-adjusted sale prices = the sold-comp ARV
-        medianPpsf = Math.round(medPrice / sf);
-      }
-    } else if (pool.length) {
-      const pp = pool.map((c) => c.ppsf).filter((x) => x > 0).sort((a, b) => a - b);
-      if (pp.length) {
-        const m = Math.floor(pp.length / 2);
-        medianPpsf = Math.round(pp.length % 2 ? pp[m] : (pp[m - 1] + pp[m]) / 2);
-        arv = (soldData && soldData.soldArv) || null;     // no subject sq ft: fall back to the server's number
-      }
-    }
-    return { flagged, usedCount: pool.length, total: flagged.length, medianPpsf, arv, thin: pool.length < MIN_SOLID, marginalUsed, mlsChecked, mlsCount: src.filter((c) => c.mls).length, srcTotal: src.length };
-  }, [soldData, subjectInfo, sqft, soldIncluded, marginalPsf, manualSold, mlsOnly, adjBeds, adjBaths]);
-
-  // Stable pin list for the ARV map, so the map only redraws when the comps or their in/out state change.
-  const soldPins = useMemo(() => (soldSummary ? soldSummary.flagged : [])
-    .map((c) => ({ i: c.i, n: c.i + 1, lat: c.lat ?? null, lng: c.lng ?? null, price: c.salePrice, included: !!c.included, flagged: c.flags.length > 0, comp: c }))
-    .filter((p) => p.lat != null && p.lng != null), [soldSummary]);
-  const soldSubject = useMemo(() => (subjectInfo?.lat != null ? { lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" } : null), [subjectInfo, address]);
-
-  const rentSubject = useMemo(() => (subjectInfo?.lat != null ? { lat: subjectInfo.lat, lng: subjectInfo.lng, label: address || "Subject" }
-    : rentBasis && rentBasis.lat != null ? { lat: rentBasis.lat, lng: rentBasis.lng, label: address || "Subject" } : null), [subjectInfo, rentBasis, address]);
-
-  // Label the ARV stat with where the number actually came from — recorded sales or a manual override.
-  // Rounding mirrors the picker exactly so this label always agrees with the picker's ✓ state.
-  // The deal-driving ARV: manual override wins; otherwise the sold-comp median. Record corrections ride on top.
-  const arv = useMemo(() => {
-    // A typed ARV is taken as final. The bed/bath correction exists to patch a comp-derived number
-    // that was built on the county's bed/bath count, so applying it to a number a human comped
-    // themselves would count the same rooms twice and inflate the offer.
-    if (num(arvOverride) > 0) return Math.max(0, num(arvOverride));
-    const soldVal = soldSummary && soldSummary.arv > 0 ? soldSummary.arv : 0;
-    if (soldVal <= 0) return 0;
-    return Math.max(0, soldVal + subjAdjust);
-  }, [soldSummary, arvOverride, subjAdjust]);
-  // The fee every strategy runs on: the rep's number when typed, otherwise the scale fee for this ARV.
-  // With no ARV yet, the As-Is formula's average picks the range, so there is still one fee for the deal.
-  const asIsAvgNow = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther }).avg;
-  const feeBasis = arv > 0 ? arv : asIsAvgNow;
-  const feeAuto = scaleFee(feeBasis);
-  const wholesaleFee = String(feeTyped ?? "").trim() !== "" ? feeTyped : String(feeAuto);
-  const feeBasisWord = arv > 0 ? "an ARV" : "an as-is value";
-  const feeTierLabel = scaleTier(feeBasis) >= 0 ? (scaleTier(feeBasis) > 4 ? `${feeBasisWord} over $500K, the top of the scale` : `${feeBasisWord} of ${ASIS_SCALE[scaleTier(feeBasis)].label}`) : "";
-  const feeField = { typed: feeTyped, set: setFeeTyped, auto: feeAuto, tierLabel: feeTierLabel, over500: scaleTier(feeBasis) > 4 };
-  const asIs = asIsCalc({ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiOffer, dealFeeTyped: feeTyped, dealFeeAuto: feeAuto, dealFeeFromArv: arv > 0 });
-  // Taxes + insurance when nobody has typed them: about 1.5% of the ARV a year (U.S. averages, see BRRRR).
-  const taxInsEst = arv > 0 ? (arv * 0.015) / 12 : 0;
-
-  const arvStat = useMemo(() => {
-    const o = num(arvOverride);
-    const soldVal = soldSummary && soldSummary.arv > 0 ? Math.round(soldSummary.arv) : null;
-    let label = "ARV", sub = "sold-comp ARV · actual recorded sales";
-    const srcLbl = ARV_SOURCE_LABEL[arvSource] || "";
-    if (o > 0 && (!soldVal || o !== soldVal)) { label = "ARV"; sub = srcLbl ? `from ${srcLbl.toLowerCase()}` : "typed in — tag the source"; }
-    if (subjAdjust !== 0) sub += ` · includes ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction`;
-    return { label, sub };
-  }, [arvOverride, soldSummary, subjAdjust, arvSource]);
-
-  // ---- repairs ----
-  const repairPsf = rehabLevel === "cosmetic" ? 15 : rehabLevel === "moderate" ? 30 : rehabLevel === "gut" ? 50 : num(customPsf);
-  const repairsEstimated = num(repairOverride) > 0 ? num(repairOverride) : repairPsf * num(sqft);
-  // Nothing picked or typed yet: run on the $5K placeholder (per B, Oct 16 2026) and flag it.
-  const repairsDefault = !(repairsEstimated > 0);
-  const repairs = repairsDefault ? REPAIR_DEFAULT : repairsEstimated;
-  const repairsNeedSqft = repairsDefault && rehabLevel !== "" && !(num(sqft) > 0);   // a level was picked, but there is no sq ft to price it
-  // The MAO always runs now. The placeholder is called out wherever the repair number shows.
-  const repairsKnown = true;
-  // Holding cost scales with the job. A gut sits for months and a paint-and-carpet does not, so the
-  // months come from the rehab size and the dollars come from your monthly carry. A typed number wins.
-  const rehabMonths = num(rehabPerMonth) > 0 && repairs > 0 ? repairs / num(rehabPerMonth) : 0;
-  const holdMonths = repairs > 0 ? rehabMonths + SELL_MONTHS : 0;
-  const derivedHolding = Math.round(holdMonths * num(carryPerMonth));
-  const holding = num(holdingOverride) > 0 ? String(num(holdingOverride)) : String(derivedHolding);
-
-  // ---- rental ----
-  // Typed rent wins, then a fresh pull, then whatever this address returned last time it was worked.
-  // The remembered value keeps a re-opened deal complete without spending another RentCast credit.
-  // Rent the deal runs on: a rent the rep typed or slid, else what a tenant in place pays today, else
-  // RentCast's market estimate.
-  const tenantRentNow = callState.occupancy === "tenant" ? num(callState.tenantRent) : 0;
-  const effRent = num(rentOverride) > 0 ? num(rentOverride) : (tenantRentNow > 0 ? tenantRentNow : (rentEst || rentSaved || 0));
-  // The house as the team has it right now: record beds/baths plus corrections, and the sq ft.
-  const wantBasis = {
-    beds: subjectInfo?.beds != null ? subjectInfo.beds + adjBeds : null,
-    baths: subjectInfo?.baths != null ? subjectInfo.baths + adjBaths : null,
-    sqft: num(sqft) || null,
-    propertyType: subjectInfo?.propertyType ?? null,
-  };
-  // The estimate on screen was priced for a different house than the one on screen now.
-  const rentStale = !!(rentEst || rentSaved) && (
-    rentBasis
-      ? ((wantBasis.beds != null && rentBasis.beds != null && wantBasis.beds !== num(rentBasis.beds))
-        || (wantBasis.baths != null && rentBasis.baths != null && wantBasis.baths !== num(rentBasis.baths))
-        || (wantBasis.sqft && rentBasis.sqft && Math.abs(wantBasis.sqft - num(rentBasis.sqft)) >= 1))
-      : (adjBeds !== 0 || adjBaths !== 0)
-  );
-  const repullRent = () => fetchRent(address, wantBasis);
-  // What the sold comps were pulled for. Pulls from before Sep 30 2026 did not record beds/baths, so
-  // for those the county count stands in, and any correction since counts as a change.
-  const compBasis = soldData ? {
-    beds: soldData.subject && soldData.subject.beds != null ? soldData.subject.beds : null,
-    baths: soldData.subject && soldData.subject.baths != null ? soldData.subject.baths : null,
-    sqft: soldData.subject && soldData.subject.sqft ? soldData.subject.sqft : null,
-  } : null;
-  const compStale = !!compBasis && (
-    (wantBasis.sqft && compBasis.sqft && Math.abs(wantBasis.sqft - compBasis.sqft) >= 1)
-    // Pulled with no sq ft, so the server could not keep the sales near this house's size. Offer a re-pull once one is typed.
-    || (wantBasis.sqft && !compBasis.sqft)
-    || (compBasis.beds != null ? (wantBasis.beds != null && wantBasis.beds !== compBasis.beds) : adjBeds !== 0)
-    || (compBasis.baths != null ? (wantBasis.baths != null && wantBasis.baths !== compBasis.baths) : adjBaths !== 0)
-  );
-  // One button for both, so a rep settles the beds/baths/sq ft first and pays once.
-  const repullAll = async () => {
-    const jobs = [];
-    if (compStale) jobs.push(pullSold({}, { keepManual: true }));
-    if (rentStale) jobs.push(fetchRent(address, wantBasis));
-    await Promise.all(jobs);
-  };
-  const changeInfo = {
-    compStale, rentStale, want: wantBasis, compBasis, rentBasis,
-    loading: soldLoading || rentLoading, onRepull: repullAll,
-  };
-  const rentInfo = { basis: rentBasis, want: wantBasis, stale: rentStale, onRepull: repullRent, loading: rentLoading, overridden: num(rentOverride) > 0, has: !!(rentEst || rentSaved) };
-  rentInfo.change = changeInfo;   // every rent re-pull prompt in the app becomes the combined one
-  const onePctMax = effRent > 0 ? effRent * 100 : 0; // 1% rule: rent >= 1% of price → max price = rent × 100
-
-  // The RentCast data worth keeping: subject record, sold comps, sq ft, owner. Saved with the call
-  // so a second visit to this address costs nothing. Skipped entirely if nothing has been pulled.
-  // The rep's own underwriting on this address: a typed ARV and its source tag, comp include/exclude
-  // picks, hand-entered sales, the MLS filter, bed/bath corrections and the condition chip. Without
-  // these a reopened deal fell back to the raw comp median and showed a different ARV than the one
-  // the team actually used. Null when nothing differs from a fresh screen, so it never forces a save.
-  const deskPayload = () => {
-    const tabs = tabsChanged();
-    const d = {
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf,
-      soldIncluded, manualSold, mlsOnly, tabs,
-      fee: String(feeTyped ?? "").trim() !== "" ? feeTyped : null,
-      rentBasis,
-      compSearch: (compSearch.mi !== 1 || compSearch.sf !== 250 || compSearch.mo !== 12) ? compSearch : null,
-      // est = RentCast's number (never the rep's), so a reopened deal can still show "RentCast says".
-      rentRange: rentLow || rentHigh ? { low: rentLow, high: rentHigh, est: rentEst || rentSaved, comps: rentComps } : null,
-    };
-    // A rent pull on its own is worth keeping: the card, range and comp map should survive a reload.
-    const blank = !tabs && compSearch.mi === 1 && compSearch.sf === 250 && compSearch.mo === 12 && !rentBasis && !rentLow && !rentHigh && !String(feeTyped ?? "").trim() && !num(arvOverride) && !arvSource && !adjBeds && !adjBaths && !rehabLevel && !num(customPsf)
-      && Object.keys(soldIncluded || {}).length === 0 && (manualSold || []).length === 0 && mlsOnly === true;
-    return blank ? null : d;
-  };
-
-  const pullPayload = () => {
-    if (!soldData && !subjDetail) return null;
-    return {
-      subjDetail, subjectInfo, soldData,
-      sqft: num(sqft) > 0 ? num(sqft) : "",
-      ownerNames,
-      at: pullAt || new Date().toISOString(),
-    };
-  };
-
-  // The data on screen belongs to one address. The moment the box says something else, drop it all,
-  // otherwise a rep sees the previous property's photo, sq ft, details and comps under a new address.
-  useEffect(() => {
-    const now = String(address || "").trim().toLowerCase();
-    // Keyed on the last address seen, not on whether a RentCast pull exists. A rep who typed a
-    // PropStream ARV and worked the call without ever pulling had nothing to trigger the clear,
-    // so that house's ARV and seller carried onto the next address.
-    const prev = lastAddrRef.current;
-    lastAddrRef.current = now;
-    if (!prev || prev === now) return;
-    pullAddrRef.current = "";
-    setPullAt(null);
-    setSubjDetail(null); setSubjDetailOpen(false);
-    setSubjectInfo(null); setOwnerNames(null);
-    setSoldData(null); setSoldIncluded({}); setManualSold([]); setCompsOpen(false);
-    setRentEst(null); setRentSaved(null); setRentBasis(null); setRentLow(null); setRentHigh(null); setRentComps([]);
-    setSqft(""); setArvSource("");
-    setCompMsg(null); setSoldMsg(null);
-    setArvOverride(""); setRepairOverride("");
-    setAdjBeds(0); setAdjBaths(0);
-    setRehabLevel(""); setCustomPsf(""); setMlsOnly(true);   // one house's condition never prices another
-    setCompSearch(COMP_SEARCH_DEFAULT);
-    setFeeTyped("");   // a fee negotiated on one deal does not carry to the next
-    // Strategy tabs too. They only fill empty fields from the call, so a leftover balance or price from
-    // the last house would sit there, never get replaced, and quietly run that house's numbers.
-    for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](v);
-    callFedRef.current = {};
-    // The call is about a seller and a house. Carrying it to a different address would put the
-    // wrong seller's name, notes and numbers on the new property, and autosave would then write
-    // them into that property's record for the whole team. A saved call for the new address is
-    // restored immediately after this by the effect below.
-    setCallState(INITIAL_CALL); setCallTouched(false);
-    setCallLoadedAt(null); setCallSavedAt(null);
-  }, [address]);
-
-  // Restore a saved call when the rep lands on an address that already has one. The effect above
-  // has already cleared anything belonging to the previous property, so nothing leaks across.
-  useEffect(() => {
-    if (!addressSavable(address)) return;
-    const k = callStoreKey(address);
-    if (k === callKeyRef.current) return;
-    callKeyRef.current = k;
-    setRentSaved(null);   // never carry one property's rent onto another
-    setCallTouched(false);
-    setPullAt(null);
-    const local = readSavedCall(address);
-    const applyRecord = (rec, from) => {
-      // Deals saved before the sync kept price, balance, payment and taxes per strategy tab. Fold any of
-      // those into the call's own value when the call left it blank, so nothing typed is lost.
-      const lt = (rec.desk && rec.desk.tabs) || {};
-      const pick = (...ks) => { for (const k of ks) if (lt[k] != null && String(lt[k]).trim() !== "" && num(lt[k]) > 0) return String(lt[k]); return ""; };
-      const call0 = { ...INITIAL_CALL, ...rec.call };
-      if (!String(call0.ask || "").trim()) call0.ask = pick("hyPrice", "sfPrice");
-      if (!String(call0.balance || "").trim()) call0.balance = pick("stBal", "hyBal");
-      if (!String(call0.payment || "").trim()) call0.payment = pick("stPiti", "hyPiti");
-      if (!String(call0.tiMonthly || "").trim()) call0.tiMonthly = pick("sfTaxIns");
-      setCallState(call0);
-      // Only a record with real call content counts as a call in progress. A pull-only record
-      // (someone looked the address up and never dialed) leaves the pill reading "Offer Call".
-      setCallTouched(Object.keys(INITIAL_CALL).some((k) => (rec.call || {})[k] && rec.call[k] !== INITIAL_CALL[k]));
-      if (rec.repairOverride != null) setRepairOverride(rec.repairOverride);
-      // desk.fee is only ever written for a fee someone chose, so it wins outright, even at $20,000.
-      // desk.fee is only ever written for a fee someone typed, so it wins outright.
-      setFeeTyped(rec.desk && rec.desk.fee ? String(rec.desk.fee) : savedFee(rec.wholesaleFee));
-      // rec.rent is the rent the deal ran on, which may be the rep's own number. Only use it as the
-      // RentCast estimate when it is not just the rep's typed/slid rent echoed back.
-      const typedSaved = rec.desk && rec.desk.tabs && num(rec.desk.tabs.rentOverride) > 0 ? num(rec.desk.tabs.rentOverride) : 0;
-      if (num(rec.rent) > 0 && num(rec.rent) !== typedSaved) setRentSaved(num(rec.rent));
-      setRentBasis(rec.desk && rec.desk.rentBasis ? rec.desk.rentBasis : null);
-      setCompSearch(rec.desk && rec.desk.compSearch ? { ...COMP_SEARCH_DEFAULT, ...rec.desk.compSearch } : COMP_SEARCH_DEFAULT);
-      const rr = rec.desk && rec.desk.rentRange;
-      setRentLow(rr && rr.low ? num(rr.low) : null); setRentHigh(rr && rr.high ? num(rr.high) : null);
-      // The RentCast estimate itself, separate from a typed rent, so the card shows what RentCast said.
-      if (rr && num(rr.est) > 0) setRentSaved(num(rr.est));
-      setRentComps(rr && Array.isArray(rr.comps) ? rr.comps : []);
-      const dk = rec.desk || {};
-      setArvOverride(dk.arvOverride != null ? String(dk.arvOverride) : "");
-      setArvSource(dk.arvSource || "");
-      setAdjBeds(num(dk.adjBeds)); setAdjBaths(num(dk.adjBaths));
-      setRehabLevel(dk.rehabLevel || ""); setCustomPsf(dk.customPsf != null ? String(dk.customPsf) : "");
-      setMlsOnly(dk.mlsOnly !== false);
-      setManualSold(Array.isArray(dk.manualSold) ? dk.manualSold : []);
-      for (const [k, v] of Object.entries(TAB_DEFAULTS)) tabSet[k](dk.tabs && dk.tabs[k] != null ? String(dk.tabs[k]) : v);
-      // Older saves: shared values that used to sit on one strategy tab.
-      if (!(dk.tabs && dk.tabs.closing != null)) { const c = pick("stClosing", "hyClosing"); if (c) setClosing(c); }
-      if (!(dk.tabs && dk.tabs.reservePct != null)) { const r = pick("stReservePct", "hyReservePct", "sfReservePct"); if (r) setReservePct(r); }
-      if (!(dk.tabs && num(dk.tabs.rentOverride) > 0)) { const r = pick("stRent", "hyRent", "sfRent"); if (r) setRentOverride(r); }
-      if (!(num(rec.repairOverride) > 0)) { const r = pick("novRepairs"); if (r) setRepairOverride(r); }
-      if (!(rec.desk && rec.desk.fee) && !savedFee(rec.wholesaleFee)) { const f = pick("aiFee"); if (f) setFeeTyped(f); }
-      // Rehydrate a prior RentCast pull instead of paying for it again. Shown with its date so
-      // nobody mistakes month-old comps for fresh ones, and Re-pull is always one click away.
-      if (rec.pull && rec.pull.at) {
-        // Open it on a restored pull too, not just a live one, so a cached address looks the same.
-        if (rec.pull.subjDetail) { setSubjDetail(rec.pull.subjDetail); setSubjDetailOpen(true); }
-        if (rec.pull.subjectInfo) setSubjectInfo(rec.pull.subjectInfo);
-        if (rec.pull.soldData) { setSoldData(rec.pull.soldData); setCompsOpen(true); }
-        if (rec.pull.sqft) setSqft(String(rec.pull.sqft));
-        if (rec.pull.ownerNames) setOwnerNames(rec.pull.ownerNames);
-        setPullAt(rec.pull.at);
-        pullAddrRef.current = String(address || "").trim().toLowerCase();
-      } else setPullAt(null);
-      // Comp picks are keyed by position in the cached pull, so they only mean something alongside it.
-      setSoldIncluded(rec.pull && dk.soldIncluded && typeof dk.soldIncluded === "object" ? dk.soldIncluded : {});
-      setCallLoadedAt(rec.at || null);
-      setCallSavedAt(rec.at || null);
-      if (from === "team") setSyncState((p) => ({ ...p, status: "synced", by: rec.by || null, at: rec.at || null, msg: "" }));
-    };
-    if (local && local.call) applyRecord(local, "local"); else { setCallLoadedAt(null); setCallSavedAt(null); }
-
-    // Then ask the team store. Whichever copy is newer wins, so a teammate's later work
-    // is never overwritten by a stale local copy sitting in this browser.
-    const id = syncId;
-    if (!id.code) return;
-    let live = true;
-    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { headers: { "x-ylhb-key": id.code } })
-      .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
-      .then((d) => {
-        if (!live || !d) return;
-        if (d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
-        if (d.found && d.record && d.record.call) {
-          const remoteNewer = !local || !local.at || String(d.record.at || "") > String(local.at || "");
-          if (remoteNewer) applyRecord(d.record, "team");
-          else setSyncState((p) => ({ ...p, status: "synced", by: d.record.by || null, at: d.record.at || null, msg: "" }));
-        } else {
-          setSyncState({ status: "synced", by: null, at: null, msg: "" });
-        }
-      })
-      .catch((e) => { if (live) setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }); });
-    return () => { live = false; };
-  }, [address, syncId]);
-
-  // Autosave. Skips empty calls so simply opening the drawer never creates a record.
-  useEffect(() => {
-    if (!addressSavable(address)) return;
-    // On the render where the address changes, every value in this closure still belongs to the
-    // previous house (the clear and the restore land on the next render). Saving here wrote one
-    // seller's call into the new address's record and pushed it to the team. Skip exactly this pass.
-    const saveKey = callStoreKey(address);
-    if (saveKeyRef.current !== saveKey) { saveKeyRef.current = saveKey; return; }
-    const untouched = Object.keys(INITIAL_CALL).every((k) => callState[k] === INITIAL_CALL[k]);
-    // Worth saving if a rep has worked the call OR if there is a RentCast pull to bank. Opening the
-    // app and typing nothing still saves nothing.
-    if (untouched && !pullPayload() && !deskPayload()) return;
-    const at = new Date().toISOString();
-    try {
-      window.localStorage.setItem(callStoreKey(address), JSON.stringify({ call: callState, repairOverride, wholesaleFee: feeTyped, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), at }));
-      setCallSavedAt(at);
-    } catch { /* private mode or full storage — the call still works, it just will not persist */ }
-
-    // Push to the team store a beat after typing stops, so a call is one save, not one per keystroke.
-    if (!syncId.code) return;
-    // Only replace a pending push for this same address. A push still waiting for the house the rep
-    // just left carries that house's final state and must be allowed to land.
-    if (syncTimer.current && syncTimer.current.key === saveKey) clearTimeout(syncTimer.current.id);
-    const timerId = setTimeout(() => {
-      setSyncState((p) => ({ ...p, status: "saving" }));
-      fetch(`/api/calls?address=${encodeURIComponent(address)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-ylhb-key": syncId.code },
-        body: JSON.stringify({ call: callState, repairOverride, wholesaleFee: feeTyped, rent: effRent > 0 ? Math.round(effRent) : "", pull: pullPayload(), desk: deskPayload(), by: syncId.name, address }),
-      })
-        .then((r) => (r.status === 401 ? Promise.reject(new Error("bad-passcode")) : r.json()))
-        .then((d) => {
-          if (d && d.disabled) { setSyncState({ status: "off", by: null, at: null, msg: "" }); return; }
-          if (d && d.error) { setSyncState({ status: "error", by: null, at: null, msg: "" }); return; }
-          setSyncState({ status: "synced", by: syncId.name || null, at: (d && d.record && d.record.at) || at, msg: "" });
-        })
-        .catch((e) => setSyncState({ status: e.message === "bad-passcode" ? "denied" : "error", by: null, at: null, msg: "" }));
-    }, 1200);
-    syncTimer.current = { key: saveKey, id: timerId };
-  }, [callState, repairOverride, feeTyped, effRent, address, syncId,
-      arvOverride, arvSource, adjBeds, adjBaths, rehabLevel, customPsf, soldIncluded, manualSold, mlsOnly, tabKey, rentBasis, rentLow, rentHigh, rentComps, compSearch]);
-
-  // Typing a repair number sets the condition to match it (under $22/sf light, $22-40 moderate, over
-  // $40 heavy, the same split the scoring uses). Marked as set by the number, so the strategy engine
-  // still labels it inferred. A chip that already agrees is left alone, so a condition the rep tapped
-  // stays tapped.
-  useEffect(() => {
-    if (!(num(repairOverride) > 0) || !(num(sqft) > 0)) return;
-    const implied = impliedCondition(num(repairOverride), num(sqft));
-    if (!implied) return;
-    setCallState((p) => (p.condition === implied ? p : { ...p, condition: implied, conditionAuto: "yes" }));
-    const lvl = { light: "cosmetic", moderate: "moderate", heavy: "gut" }[implied];
-    setRehabLevel((cur) => (cur === lvl || cur === "custom" ? cur : lvl));   // a deliberate $/sf stays put
-  }, [repairOverride, sqft]);
-
-  // ---- cash MAO (both bands) ----
-  const ruleMaoUnder = arv * (num(underPct) / 100) - repairs;
-  const ruleMaoOver = arv * (num(overPct) / 100) - repairs;
-  const investorMaoUnder = ruleMaoUnder - num(wholesaleFee);
-  const investorMaoOver = ruleMaoOver - num(wholesaleFee);
-
-  // which band applies to THIS deal (by ARV) — used for the verdict
-  const isOver = arv >= 200000;
-  const activeRuleMao = isOver ? ruleMaoOver : ruleMaoUnder;
-  const activeInvestorMao = repairsKnown ? (isOver ? investorMaoOver : investorMaoUnder) : 0;
-  const activePct = isOver ? num(overPct) : num(underPct);
-
-  // Each tab carries a plain-English explainer shown on hover, so a newer rep can tell these five
-  // apart without leaving the screen. Written the way you would explain it to a seller, not a textbook.
-  const tabs = [
-    { id: "cash", label: "Cash / MAO", Icon: Calculator,
-      blurb: "You buy it outright, as-is, and close fast. The MAO is the most you can pay and still make money after repairs and your fee.",
-      fit: "Best when the house needs real work and the seller wants speed and certainty." },
-    { id: "subto", label: "Sub-To", Icon: Building2,
-      blurb: "You take over their existing mortgage payments. The loan stays in the seller's name, the deed comes to you.",
-      fit: "Best when there is little equity, the rate is good, or they are behind and need the bleeding to stop." },
-    { id: "hybrid", label: "Hybrid", Icon: Layers,
-      blurb: "Sub-To plus seller carry. You take over the loan, and the seller carries their equity above the balance as a note you pay over time.",
-      fit: "Best when there is a loan to take over AND real equity, so cash alone cannot reach their number." },
-    { id: "sf", label: "Seller Finance", Icon: Banknote,
-      blurb: "The seller becomes the bank. You pay them directly over time on terms you agree to, with no lender involved.",
-      fit: "Best when the house is owned free and clear and they do not need all the money today." },
-    { id: "nov", label: "Novation", Icon: RefreshCw,
-      blurb: "You prepare and sell the house retail on the seller's behalf, then get paid from the spread at closing.",
-      fit: "Best when the house is close to retail-ready and the seller can wait out a 60 to 90 day sale." },
-  ];
-
-  const deckCommon = {
-    address, arv, repairs,
-    subjectLine: propLine(subjectInfo),
-    rent: effRent,
-    askingDefault: num(askingPrice),
-    contractDefault: num(askingPrice),
-    fee: num(wholesaleFee),
-    compCount: num(arvOverride) > 0 ? 0 : (soldSummary ? soldSummary.usedCount : 0),
-    // The rent card's data, for the Rent Analysis slides.
-    rentAnalysis: (rentEst || rentSaved) ? {
-      est: rentEst || rentSaved, low: rentLow, high: rentHigh,
-      basis: rentBasis || wantBasis, comps: rentComps, subject: rentSubject,
-      tenantRent: tenantRentNow, leaseEnds: callState.occupancy === "tenant" ? String(callState.leaseEnds || "").trim() : "",
-    } : null,
-    avgPpsf: num(arvOverride) > 0 ? 0 : (soldSummary && soldSummary.medianPpsf ? soldSummary.medianPpsf : 0),
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
-      {/* header */}
-      <div className="bg-slate-900 px-5 py-5">
-        <div className="mx-auto max-w-5xl">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center rounded-lg bg-white px-2 py-1.5 shadow-sm">
-                <img src="/logo.png" alt="Your Local Home Buyer" className="h-9 w-auto object-contain" />
+          {/* 2. Property */}
+          <Card n="2" title="The property" sub="The facts as it sits today, and what it will be once it is set up.">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Deal name" hint="for your saved deals"><Text value={d.name} onChange={(v) => set("name", v)} placeholder="Oak St 5-bed" /></Field>
+              <Field label="Address"><Text value={d.address} onChange={(v) => set("address", v)} placeholder="123 Main St, Louisville, KY" /></Field>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Field label="Bedrooms now"><Num value={d.beds} onChange={(v) => set("beds", v)} /></Field>
+              <Field label="Bathrooms now"><Num value={d.baths} onChange={(v) => set("baths", v)} /></Field>
+              <Field label="Square feet"><Num value={d.sqft} onChange={(v) => set("sqft", v)} /></Field>
+              <Field label="Bathrooms after" tip="After any bathroom you add. A good co-living ratio is no more than 2 to 3 people per bathroom."><Num value={d.bathsAfter} onChange={(v) => set("bathsAfter", v)} placeholder={d.baths || "0"} /></Field>
+            </div>
+            {num(d.bathsAfter || d.baths) > 0 && rentableAuto > 0 && showRooms && (
+              <div className={`mt-2 text-[12px] ${d.roomCount / num(d.bathsAfter || d.baths) > 3 ? "text-amber-700" : "text-slate-600"}`}>
+                {(d.roomCount / num(d.bathsAfter || d.baths)).toFixed(1)} rented rooms per bathroom{d.roomCount / num(d.bathsAfter || d.baths) > 3 ? ". Over 3 per bathroom makes rooms harder to rent. Consider adding a bathroom." : "."}
               </div>
+            )}
+          </Card>
+
+          {/* 3. Income */}
+          <Card n="3" title="Rent and income" sub="List every rentable bedroom or unit after the conversion and what each one rents for, furnished with utilities included.">
+            {showRooms && (
+              <div className="mb-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  <Field label="Rentable bedrooms" tip="Count every bedroom you will rent, including any you are adding with the conversion. Rooms must meet your local code to count, like an egress window and a closet." className="w-40">
+                    <Num value={d.roomCount} onChange={(v) => resize("rooms", "roomCount", v, MAX_ROOMS)} />
+                  </Field>
+                  <Field label="Same rent for every room" className="w-48"><Money value={fillRooms} placeholder="fill all" onChange={(v) => { setFillRooms(v); fillAll("rooms", v); }} /></Field>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                  {d.rooms.map((r, i) => (
+                    <div key={i}>
+                      <div className="mb-0.5 flex items-center justify-between text-[11px] text-slate-600"><span>Room {i + 1}</span>
+                        {type === "hack" && <button type="button" onClick={() => setOwner("rooms", i)} className={`rounded px-1.5 text-[10px] font-bold ${r.owner ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600"}`}>{r.owner ? "You live here" : "I live here"}</button>}
+                      </div>
+                      <Money value={r.rent} onChange={(v) => setRent("rooms", i, v)} placeholder="799" />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11.5px] text-slate-600">Find room rents near the property on Facebook Marketplace, Furnished Finder, PadSplit and Roomster. Price bigger rooms and rooms with a private bath higher.</p>
+              </div>
+            )}
+            {showUnits && (
+              <div className="mb-4">
+                <Field label="Private units" className="w-40"><Num value={d.unitCount} onChange={(v) => resize("units", "unitCount", v, MAX_UNITS)} /></Field>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                  {d.units.map((u, i) => (
+                    <div key={i}>
+                      <div className="mb-0.5 flex items-center justify-between text-[11px] text-slate-600"><span>Unit {i + 1}</span>
+                        {type === "hack" && <button type="button" onClick={() => setOwner("units", i)} className={`rounded px-1.5 text-[10px] font-bold ${u.owner ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600"}`}>{u.owner ? "You live here" : "I live here"}</button>}
+                      </div>
+                      <Money value={u.rent} onChange={(v) => setRent("units", i, v)} placeholder="1599" />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11.5px] text-slate-600">Check Furnished Finder and Airbnb monthly stays for furnished units like yours.</p>
+              </div>
+            )}
+            {type === "hack" && ![...(showRooms ? d.rooms : []), ...(showUnits ? d.units : [])].some((r) => r.owner) && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">Tap "I live here" on the room you will live in, so it is not counted as rent.</div>}
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Occupancy" hint="Hobknob uses 95%" tip="The share of the year your rooms are rented. 95% leaves room for turnover between residents."><Num value={d.occupancy} onChange={(v) => set("occupancy", v)} suffix="%" /></Field>
+              <Field label="Other income" hint="monthly" tip="Parking, pet fees, laundry machines, storage. Leave blank if none."><Money value={d.otherIncome} onChange={(v) => set("otherIncome", v)} /></Field>
+              <Field label="Whole-house rent" hint="optional" tip="What the house would rent for to one family, unfurnished, tenant pays utilities. Check Zillow rentals. Used to show what co-living adds."><Money value={d.wholeHouseRent} onChange={(v) => set("wholeHouseRent", v)} /></Field>
+            </div>
+          </Card>
+
+          {/* 4. Acquisition */}
+          <Card n="4" title={type === "arb" ? "The lease" : type === "creative" ? "The creative terms" : type === "hack" ? "Buying it to live in" : "Buying it"}>
+            {(type === "buy" || type === "hack") && (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Purchase price"><Money value={d.price} onChange={(v) => set("price", v)} /></Field>
+                {type === "buy"
+                  ? <Field label="Loan to value" hint="DSCR lenders: 75-80%" tip="The share of the price the lender pays. DSCR loans qualify on the property's rent, not your job, and usually lend 75-80%."><Num value={d.ltv} onChange={(v) => set("ltv", v)} suffix="%" /></Field>
+                  : <Field label="Loan to value" hint="FHA: 96.5%" tip="Owner-occupied loans can go much higher. FHA lends up to 96.5% (3.5% down) on homes with 1 to 4 units when you live in one. Confirm with your lender."><Num value={d.hackLtv} onChange={(v) => set("hackLtv", v)} suffix="%" /></Field>}
+                <Field label="Closing costs" tip="Verify with your title company."><Money value={d.closing} onChange={(v) => set("closing", v)} /></Field>
+                <Field label="Interest rate"><Num value={d.rate} onChange={(v) => set("rate", v)} suffix="%" /></Field>
+                <Field label="Loan term"><Num value={d.term} onChange={(v) => set("term", v)} suffix="yrs" /></Field>
+                {type === "hack" && <Field label="Mortgage insurance" hint="% of loan per year" tip="FHA charges a yearly mortgage insurance premium, commonly 0.55% of the loan for most borrowers. Confirm your number with your lender."><Num value={d.miPct} onChange={(v) => set("miPct", v)} suffix="%" /></Field>}
+                <Field label="After-repair value" hint="optional" tip="What it will be worth once converted. Used for the 5-year appreciation. Blank uses price plus renovation."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                <div className="sm:col-span-3"><Check checked={d.financeReno} onChange={(v) => set("financeReno", v)}>The lender finances the renovation too (rolled into the loan)</Check></div>
+                {type === "hack" && <Field label="What you pay for housing now" hint="monthly" className="sm:col-span-1"><Money value={d.currentHousing} onChange={(v) => set("currentHousing", v)} /></Field>}
+              </div>
+            )}
+            {type === "arb" && (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Monthly lease to landlord"><Money value={d.leaseRent} onChange={(v) => set("leaseRent", v)} /></Field>
+                <Field label="Security deposit"><Money value={d.deposit} onChange={(v) => set("deposit", v)} /></Field>
+                <Field label="Months of rent upfront" tip="First month, and last month if the landlord asks for it."><Num value={d.firstMonths} onChange={(v) => set("firstMonths", v)} /></Field>
+                <Field label="Lease length" hint="months"><Num value={d.leaseMonths} onChange={(v) => set("leaseMonths", v)} /></Field>
+                <Field label="Application / broker fees"><Money value={d.arbFees} onChange={(v) => set("arbFees", v)} /></Field>
+                <Field label="Liability insurance" hint="monthly" tip="The landlord insures the building. You need your own liability policy that covers renting by the room. Get a quote."><Money value={d.arbInsurance} onChange={(v) => set("arbInsurance", v)} /></Field>
+                <div className="sm:col-span-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900"><b>Get it in writing.</b> The lease must give you written permission to rent the rooms to others. Without it, you can lose the house and everything you put into it.</div>
+              </div>
+            )}
+            {type === "creative" && (
               <div>
-                <div className="text-sm font-bold tracking-tight text-white">YLHB RE Calculator</div>
-                <div className="text-[11px] text-slate-400">Acquisitions</div>
-              </div>
-            </div>
-            <InstructionsButton />
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-5xl px-4 py-5">
-        {/* PROPERTY + ARV */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <SectionTitle>Property &amp; ARV</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="sm:col-span-2">
-              <Field label="Subject address" hint="start typing — pick the exact match">
-                <AddressAutocomplete value={address} onChange={setAddress} placeholder="1225 S 6th St, Louisville, KY" />
-              </Field>
-              {(propLine(subjectInfo) || lastSoldLine(subjectInfo) || address) && (
-                <div className="mt-1.5 space-y-0.5">
-                  {(propLine(subjectInfo) || lastSoldLine(subjectInfo)) && (
-                    <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-700">
-                      {propLine(subjectInfo) && <span>{propLine(subjectInfo)}</span>}
-                      {propLine(subjectInfo) && lastSoldLine(subjectInfo) && <span className="text-slate-300">•</span>}
-                      {lastSoldLine(subjectInfo) && <span className="font-medium text-slate-600">{lastSoldLine(subjectInfo)}</span>}
-                    </div>
-                  )}
-                  {address && (
-                    <a href={gsearch(address)} target="_blank" rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 hover:underline">
-                      <Search className="h-3 w-3" /> Google this property <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
-                  )}
-                </div>
-              )}
-            </div>
-            <div>
-              <Field label="Subject sq ft">
-                <PlainInput value={sqft} onChange={setSqft} placeholder="1500" suffix="sf" />
-              </Field>
-              {num(sqft) <= 0 && (
-                <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-800">
-                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
-                  <span><b>Needs a number before comps can run right.</b> The ARV math is built on it — Auto-comp fills it for most addresses, but if it stays blank after a pull, look it up and type it in.</span>
-                </div>
-              )}
-              {compDetail && (() => {
-                const c = soldSummary ? soldSummary.flagged.find((x) => x.i === compDetail.i) : null;
-                if (!c) return null;
-                const adj = Math.round(c.adjPrice || 0);
-                const tiles = [
-                  adj > 0 && adj !== Math.round(c.salePrice) ? { label: "Size-adjusted value", value: usd(adj) } : null,
-                  { label: "Recorded sale price", value: usd(c.salePrice) },
-                  c.ppsf > 0 ? { label: "Price / sq ft", value: `$${Math.round(c.ppsf)}` } : null,
-                  c.beds != null ? { label: "Beds", value: String(c.beds) } : null,
-                  c.baths != null ? { label: "Baths", value: String(c.baths) } : null,
-                  num(c.sqft) > 0 ? { label: "Sq ft", value: num(c.sqft).toLocaleString() } : null,
-                  c.yearBuilt ? { label: "Year built", value: String(c.yearBuilt) } : null,
-                  fmtLot(c.lotSize) ? { label: "Lot size", value: fmtLot(c.lotSize) } : null,
-                  c.distance != null ? { label: "Distance", value: `${Number(c.distance).toFixed(2)} mi` } : null,
-                  c.saleDate ? { label: "Sale date", value: mediumDate(c.saleDate) } : null,
-                  c.propertyType ? { label: "Type", value: String(c.propertyType) } : null,
-                  c.architecture ? { label: "Architecture", value: String(c.architecture) } : null,
-                  c.ownerOccupied != null ? { label: "Occupancy", value: c.ownerOccupied ? "Owner occupied" : "Absentee owner", amber: !c.ownerOccupied } : null,
-                  c.heating ? { label: "Heating", value: String(c.heating) } : null,
-                  c.cooling ? { label: "A/C", value: String(c.cooling) } : null,
-                  c.garage ? { label: "Garage", value: String(c.garage) } : null,
-                  c.mls && c.mls.number ? { label: "MLS #", value: String(c.mls.number) } : null,
-                  c.mls && c.mls.name ? { label: "MLS", value: String(c.mls.name) } : null,
-                  c.mls && c.mls.listPrice ? { label: "Last list price", value: usd(c.mls.listPrice) } : null,
-                  c.mls && c.mls.daysOnMarket != null ? { label: "Days on market", value: String(c.mls.daysOnMarket) } : null,
-                  c.mls && c.mls.listedDate ? { label: "Listed", value: mediumDate(c.mls.listedDate) } : null,
-                  c.mls && c.mls.removedDate ? { label: "Off market", value: mediumDate(c.mls.removedDate) } : null,
-                  c.mls && c.mls.listingType && c.mls.listingType !== "Standard" ? { label: "Listing type", value: String(c.mls.listingType), amber: true } : null,
-                ].filter(Boolean);
-                return (
-                  <CompDetailModal
-                    data={{
-                      n: c.i + 1,
-                      source: c.manualEntry ? "MANUAL" : c.mls ? "MLS SALE" : "DEED",
-                      address: c.address || "",
-                      sv: svLink(c),
-                      flags: c.flags || [],
-                      included: !!c.included,
-                      tiles,
-                      history: c.saleHistory || [],
-                      sqftNum: num(c.sqft),
-                    }}
-                    onClose={() => setCompDetail(null)}
-                    onToggle={() => setSoldIncluded((p) => ({ ...p, [compDetail.i]: !c.included }))}
-                  />
-                );
-              })()}
-              {/* ---- Offer Call: launch pill + guided drawer ---- */}
-              {!callOpen && (
-                <button type="button" onClick={() => setCallOpen(true)}
-                  className="fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-xl hover:bg-emerald-700">
-                  <Phone className="h-4 w-4" /> {callTouched ? "Resume call" : "Offer Call"}
-                </button>
-              )}
-              <OfferCall
-                open={callOpen}
-                onClose={() => setCallOpen(false)}
-                cs={callState}
-                upd={(k, v) => { setCallTouched(true); setCallState((p) => ({ ...p, [k]: v })); }}
-                reset={() => {
-                  setCallState(INITIAL_CALL);
-                  setCallTouched(false);
-                  setCallLoadedAt(null); setCallSavedAt(null);
-                  try { if (addressSavable(address)) window.localStorage.removeItem(callStoreKey(address)); } catch {}
-                  if (syncId.code && addressSavable(address)) {
-                    fetch(`/api/calls?address=${encodeURIComponent(address)}`, { method: "DELETE", headers: { "x-ylhb-key": syncId.code } }).catch(() => {});
-                  }
-                  setSyncState({ status: "idle", by: null, at: null, msg: "" });
-                }}
-                save={{ savable: addressSavable(address), savedAt: callSavedAt, loadedAt: callLoadedAt,
-                  sync: syncState, syncId,
-                  setIdentity: (v) => { writeSyncId(v); setSyncId(v); } }}
-                deal={{ arv, maxCash: activeInvestorMao > 0 ? Math.round(activeInvestorMao) : 0, asIs: asIs.ready ? asIs : null, feeField, repairs, repairsDefault, repairsNeedSqft, terms: { sf: { down: sfDown, setDown: setSfDown, years: sfAmort, setYears: setSfAmort, balloon: sfBalloon, setBalloon: setSfBalloon, rate: sfRate }, hy: { down: hyDown, setDown: setHyDown, years: hyTerm, setYears: setHyTerm, rate: hyRate }, st: { cash: stCashSeller, setCash: setStCashSeller, arrears: stArrears, setArrears: setStArrears } }, online: { vals: { aiZillow, aiRealtor, aiRedfin }, set: { aiZillow: setAiZillow, aiRealtor: setAiRealtor, aiRedfin: setAiRedfin } }, loanYrs: { value: loanYrsLeft, set: (v) => setLoanYrsLeft(String(v).trim() === "" ? "30" : v) }, address, ownerNames, repairOverride, setRepairOverride, repairPsf: num(repairPsf), wholesaleFee, setWholesaleFee, arvSource: ARV_SOURCE_LABEL[arvSource] || "",
-                  rent: effRent, rentLoading, onGetRent: repullRent, rentInfo, sqft: num(sqft),
-                  adjBeds, setAdjBeds, adjBaths, setAdjBaths, subjAdjust, changeInfo,
-                  recBeds: subjectInfo?.beds ?? null, recBaths: subjectInfo?.baths ?? null,
-                  repairsKnown, ownerType: subjectInfo?.ownerType ?? null, heldFor: subjectInfo?.heldFor ?? null, hoaKnown: subjectInfo?.hoa ?? null }}
-                onTab={(t) => { setTab(t); setTimeout(() => document.getElementById("deal-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60); }}
-                onDeck={(t) => { setTab(t); setDeckReq((p) => ({ tab: t, n: p.n + 1 })); }}
-                onCondition={(v) => { const map = { light: "cosmetic", moderate: "moderate", heavy: "gut" }; if (map[v]) setRehabLevel(map[v]); }}
-              />
-              <div className="mt-2 flex items-center gap-2">
-                <button onClick={autoComp} disabled={compLoading}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-60 ${pullAt ? "bg-slate-700 hover:bg-slate-800" : "bg-emerald-600 hover:bg-emerald-700"}`}>
-                  {compLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : pullAt ? <RefreshCw className="h-3.5 w-3.5" /> : <Zap className="h-3.5 w-3.5" />}
-                  {compLoading ? "Pulling…" : pullAt ? "Re-pull fresh data" : "Auto-comp address"}
-                </button>
-              </div>
-              {compMsg && compMsg.type === "err" && !compLoading && !(compMsg.needsSqft && num(sqft) > 0) && (
-                <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-900">
-                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
-                  <span>{compMsg.text}</span>
-                </div>
-              )}
-              {pullAt && !compLoading && (
-                <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-                  Showing the RentCast pull from <b className="text-slate-700">{fmtSavedAt(pullAt)}</b>, reloaded free. Re-pull only if this deal has gone cold or something changed.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Record corrections — beds/baths the county record missed */}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Record corrections</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-slate-700">Beds</span>
-                <button type="button" onClick={() => setAdjBeds((v) => v - 1)}
-                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">−</button>
-                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBeds !== 0 ? "text-emerald-700" : "text-slate-600"}`}>{adjBeds > 0 ? `+${adjBeds}` : adjBeds}</span>
-                <button type="button" onClick={() => setAdjBeds((v) => v + 1)}
-                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] text-slate-700">Baths</span>
-                <button type="button" onClick={() => setAdjBaths((v) => Math.round((v - 0.5) * 2) / 2)}
-                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">−</button>
-                <span className={`w-8 text-center font-mono text-sm font-bold tabular-nums ${adjBaths !== 0 ? "text-emerald-700" : "text-slate-600"}`}>{adjBaths > 0 ? `+${adjBaths}` : adjBaths}</span>
-                <button type="button" onClick={() => setAdjBaths((v) => Math.round((v + 0.5) * 2) / 2)}
-                  className="h-6 w-6 rounded border border-slate-200 bg-white text-sm font-bold text-slate-600 hover:bg-slate-100">+</button>
-              </div>
-              <span className="ml-auto text-[11px] font-semibold text-slate-600">
-                {wantBasis.beds != null ? `House is now ${fmtBasis(wantBasis)}` : null}
-              </span>
-              {(adjBeds !== 0 || adjBaths !== 0) && (
-                <button type="button" onClick={() => { setAdjBeds(0); setAdjBaths(0); }}
-                  className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-50">clear</button>
-              )}
-            </div>
-            <RepullNote info={changeInfo} />
-            <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-              For beds and baths the county got wrong, or the layout after the rehab (records say 3 bd but you walked a legit 4 bd, or you are adding a bath). There is no flat dollar amount anymore. Re-pull, and the ARV and rent come from sales and rentals with that room count. If the change also means more square footage, fix the sq ft too before you re-pull.
-            </div>
-          </div>
-        </div>
-
-        {/* SUBJECT DETAILS — on-demand deep dive from the property record */}
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <button type="button" onClick={openSubjDetail} className="flex w-full items-center justify-between gap-2">
-            <SectionTitle>Subject property details</SectionTitle>
-            <span className="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-600 hover:bg-emerald-50">
-              {subjDetailOpen ? "hide" : subjDetail ? "show" : "load details"}
-            </span>
-          </button>
-          {subjDetailOpen && (
-            subjDetailLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-[11px] font-semibold text-slate-700">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling the property record…
-              </div>
-            ) : subjDetail && subjDetail.error ? (
-              <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-rose-700">{subjDetail.error}</div>
-            ) : subjDetail && (
-              <>
-                <a href={svLink({ lat: subjDetail.raw?.lat ?? subjectInfo?.lat, lng: subjDetail.raw?.lng ?? subjectInfo?.lng, address: subjDetail.address })}
-                  target="_blank" rel="noopener noreferrer" title="Open interactive Street View"
-                  className="relative mt-3 block h-48 w-full max-w-2xl overflow-hidden rounded-xl bg-slate-100 sm:h-56">
-                  <span className="absolute inset-0 flex items-center justify-center"><Building2 className="h-10 w-10 text-slate-300" /></span>
-                  <img src={`/api/photo?size=640x360&address=${encodeURIComponent(subjDetail.address)}`} alt=""
-                    className="absolute inset-0 h-full w-full object-cover"
-                    onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                  <span className="absolute bottom-2 right-2 rounded bg-slate-900/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">Street View — click to explore</span>
-                </a>
-                <div className="mt-3 flex flex-wrap gap-1.5 border-b border-slate-100 pb-2">
-                  {Object.keys(subjDetail.sections).map((t) => (
-                    <button key={t} type="button" onClick={() => setSubjTab(t)}
-                      className={`rounded-md px-2.5 py-1 text-[11px] font-semibold ${subjTab === t ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                      {t}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                  {(subjDetail.sections[subjTab] || []).map(([label, value], k) => (
-                    <div key={k} className={`rounded-lg border p-2.5 ${String(value).includes("ABSENTEE") ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50/50"}`}>
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{label}</div>
-                      <div className="mt-0.5 text-xs font-semibold text-slate-800">{String(value)}</div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )
-          )}
-        </div>
-
-        {/* ACTUAL SOLD COMPS (recorded closings) — collapsed by default now that the ARV box is
-            the front door. Reps who already have a number never have to open this. */}
-        {!compsOpen ? (
-          <button type="button" onClick={() => setCompsOpen(true)}
-            className="mt-4 flex w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm hover:bg-slate-50 sm:px-5">
-            <span>
-              <span className="text-[11px] font-bold uppercase tracking-widest text-slate-700">Verify with Deal Desk comps (RentCast)</span>
-              <span className="mt-0.5 block text-[11px] leading-snug text-slate-600">
-                {soldSummary && soldSummary.arv > 0
-                  ? <>Recorded sales say <b className="text-slate-600">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b>{num(arvOverride) > 0 && Math.abs(num(arvOverride) - (soldSummary.arv + subjAdjust)) > (soldSummary.arv + subjAdjust) * 0.1 ? <span className="text-amber-600"> — more than 10% off your number, worth a look</span> : ""}. Open to review the comps.</>
-                  : "Auto-comp pulls recorded sales from RentCast to build or check an ARV. Optional if you already comped it elsewhere."}
-              </span>
-            </span>
-            <ChevronRight className="h-4 w-4 shrink-0 text-slate-600" />
-          </button>
-        ) : (
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="flex items-center justify-between gap-2">
-            <button type="button" onClick={() => setCompsOpen(false)} className="flex items-center gap-1.5 text-left hover:opacity-70" title="Collapse the comp engine">
-              <SectionTitle>Actual sold comps — recorded closings (RentCast)</SectionTitle>
-              <ChevronLeft className="h-3.5 w-3.5 shrink-0 text-slate-600" />
-            </button>
-            <div className="flex shrink-0 items-center gap-2">
-              {soldLoading && (
-                <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold text-slate-700">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Pulling…
-                </span>
-              )}
-              {soldData?.mlsChecked && (
-                <button type="button" onClick={() => setMlsOnly((v) => !v)}
-                  title={mlsOnly ? "Tap to also show deed-only sales — recorded closings that never matched an MLS listing" : "Tap to show only MLS-verified sales"}
-                  className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${mlsOnly ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                  {(() => {
-                    const h = ((soldData && soldData.comps) || []).filter((x) => !x.mls).length;
-                    return mlsOnly ? (h > 0 ? `✓ MLS sales only · ${h} deed ${h === 1 ? "sale" : "sales"} hidden — tap to show` : "✓ MLS sales only") : "Showing all sales — tap for MLS only";
-                  })()}
-                </button>
-              )}
-              {!soldAdd && (
-                <button type="button" onClick={() => setSoldAdd({ address: "", sqft: "", price: "" })}
-                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">
-                  + comp
-                </button>
-              )}
-            </div>
-          </div>
-          {soldAdd && (
-            <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
-              <div className="min-w-[180px] flex-1">
-                <Field label="Comp address" hint="optional">
-                  <input type="text" value={soldAdd.address} onChange={(e) => setSoldAdd((p) => ({ ...p, address: e.target.value }))}
-                    placeholder="123 Main St, City, ST"
-                    className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-100" />
-                </Field>
-              </div>
-              <div className="w-28"><Field label="Sq ft"><PlainInput value={soldAdd.sqft} onChange={(v) => setSoldAdd((p) => ({ ...p, sqft: v }))} placeholder="1500" suffix="sf" /></Field></div>
-              <div className="w-36"><Field label="Sale price"><MoneyInput value={soldAdd.price} onChange={(v) => setSoldAdd((p) => ({ ...p, price: v }))} placeholder="200000" /></Field></div>
-              <button type="button" disabled={!(num(soldAdd.sqft) > 0 && num(soldAdd.price) > 0)}
-                onClick={() => { const sf = num(soldAdd.sqft), pr = num(soldAdd.price); setManualSold((ms) => [...ms, { address: soldAdd.address.trim(), salePrice: pr, sqft: sf, ppsf: Math.round(pr / sf), manualEntry: true }]); setSoldAdd(null); }}
-                className="rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
-                Add
-              </button>
-              <button type="button" onClick={() => setSoldAdd(null)}
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">
-                Cancel
-              </button>
-            </div>
-          )}
-          {(() => {
-            // What the comps on screen were actually pulled with, vs what the controls are set to now.
-            const w = (soldData && soldData.window) || {};
-            const pulled = { mi: num(w.radius) || 1, sf: num(w.sqftBand) || 250, mo: Math.round((num(w.saleDateRange) || 365) / 30.44) };
-            const changed = !!soldData && (pulled.mi !== compSearch.mi || pulled.sf !== compSearch.sf || pulled.mo !== compSearch.mo);
-            const isDefault = compSearch.mi === 1 && compSearch.sf === 250 && compSearch.mo === 12;
-            const ctl = (key, label, fmt) => (
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-semibold text-slate-700">{label}</span>
-                <button type="button" aria-label={`Less ${label}`} disabled={compSearch[key] === COMP_STEPS[key][0]}
-                  onClick={() => setCompSearch((c) => ({ ...c, [key]: stepTo(COMP_STEPS[key], c[key], -1) }))}
-                  className="h-7 w-7 rounded-md border border-slate-300 bg-white text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">−</button>
-                <span className="min-w-[64px] text-center font-mono text-[12px] font-bold text-slate-900">{fmt(compSearch[key])}</span>
-                <button type="button" aria-label={`More ${label}`} disabled={compSearch[key] === COMP_STEPS[key][COMP_STEPS[key].length - 1]}
-                  onClick={() => setCompSearch((c) => ({ ...c, [key]: stepTo(COMP_STEPS[key], c[key], 1) }))}
-                  className="h-7 w-7 rounded-md border border-slate-300 bg-white text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40">+</button>
-              </div>
-            );
-            return (<>
-              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                {/* Every re-pull costs RentCast credits, so it is a tool for live deals, not for browsing. */}
-                <div className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11.5px] leading-snug text-amber-900">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
-                  <span>
-                    <b>Only re-pull when both are true:</b> the seller is serious about selling, and Privy, PropStream and the MLS do not have enough comps for this house.
-                    {" "}Each re-pull uses <b>about 2 RentCast credits</b>: 1 for the recorded sales and 1 for the MLS cross-check (1 if no sales come back). Changing the settings is free. Only the re-pull button costs credits.
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                  {ctl("mi", "Radius", (v) => `${v} mi`)}
-                  {ctl("sf", "Size", (v) => `±${v} sf`)}
-                  {ctl("mo", "Sold within", (v) => `${v} mo`)}
-                  {!isDefault && (
-                    <button type="button" onClick={() => setCompSearch(COMP_SEARCH_DEFAULT)} className="text-[11px] font-semibold text-emerald-700 hover:underline">Back to 1 mi · ±250 sf · 12 mo</button>
-                  )}
-                </div>
-                {changed && (
-                  <button type="button" disabled={soldLoading} onClick={() => pullSold({}, { keepManual: true })}
-                    className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
-                    <RefreshCw className="h-3.5 w-3.5" /> {soldLoading ? "Pulling…" : `Re-pull comps within ${compSearch.mi} mi, ±${compSearch.sf} sf, sold in the last ${compSearch.mo} months`}
-                  </button>
-                )}
-                {changed && <div className="mt-0.5 text-center text-[10.5px] text-slate-600">Uses about 2 RentCast credits. Your hand-entered comps stay.</div>}
-                {(compSearch.mi > 1.5 || compSearch.mo > 12) && (
-                  <div className="mt-1.5 text-[11px] leading-snug text-amber-800">Wider searches find more sales but looser matches. Older or farther sales can pull the ARV off today's value for this street, so check the map before you trust the number.</div>
-                )}
-              </div>
-              <div className="mt-1 text-[10px] text-slate-600">
-                Real recorded sale prices off the deed: last {pulled.mo} months, within {pulled.mi} mile{pulled.mi === 1 ? "" : "s"}, ±{pulled.sf} sq ft of the subject, sizes adjusted to the subject. Median of adjusted prices. (Different from Auto-comp above, which uses RentCast's estimate model.)
-              </div>
-            </>);
-          })()}
-
-          <div className="mt-2 text-[10px] italic text-slate-600">
-            The ARV median runs on the <b className="text-slate-700">best {SOLID_TARGET} solid sales</b> — structurally similar AND priced with the group, sizes adjusted to the subject. <b className="text-amber-700">Possible distressed sale</b> = sold way too cheap, leave it out; <b className="text-amber-700">possible renovated resale</b> = sold high because it's already fixed up — Google it, and if it's remodeled, hit include (that IS after-repair condition). Recorded prices come from public records and can lag a few weeks; KY and IN both disclose sale prices. Verify anything you'll hang a deal on.
-          </div>
-          {subjectInfo?.lat != null && soldSummary && soldSummary.flagged.some((c) => c.lat != null) && (
-            <>
-              <div className="relative mt-2 h-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <AutoCompMap subject={soldSubject} pins={soldPins} colorOf={soldPinColor} htmlOf={soldPinHtml}
-                  onToggle={(i) => { const cur = soldSummary.flagged.find((x) => x.i === i); setSoldIncluded((p) => ({ ...p, [i]: !(cur && cur.included) })); }} />
-              </div>
-              <div className="mt-1.5 px-1 text-[11px] text-slate-700">
-                <span className="font-bold text-cyan-500">●</span> this house · <span className="font-bold text-emerald-600">●</span> in the ARV · <span className="font-bold text-amber-600">●</span> flagged out · <span className="font-bold text-slate-600">●</span> out. Hover a pin for details, click it to include or exclude.
-              </div>
-            </>
-          )}
-
-          {soldMsg && (
-            <div className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${soldMsg.type === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
-              {soldMsg.text}
-            </div>
-          )}
-
-          {soldSummary && (
-            <>
-              {soldSummary.thin && (
-                <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span><b>Thin comps — only {soldSummary.usedCount} of the {MIN_SOLID} solid sales this ARV needs at minimum.</b> The median is fragile. Google the flagged ones and hit <b>include</b> on any you verify, or add solid sales by hand with + comp. When comps run thin, do what appraisers do: <b>go wider before you go older</b> — stretch the distance before you reach past the 12-month window. And YLHB’s rule while you widen: <b>don’t cross major roads, highways, or train tracks</b> — those are market boundaries, and the buyer pool changes on the other side.</span>
-                </div>
-              )}
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Stat label="Sold-comp ARV (After Repair Value)" value={soldSummary.arv ? usd(Math.max(0, soldSummary.arv + subjAdjust)) : "—"} tone={soldSummary.thin ? "default" : "good"} big sub={`${num(sqft) > 0 ? `size-adjusted median × ${num(sqft)} sf` : "Needs the house's sq ft. Type it in the Subject sq ft box at the top and the ARV fills in."}${soldSummary.arv && subjAdjust !== 0 ? ` · ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath` : ""}`} />
-                <Stat label="Median $/sf" value={soldSummary.medianPpsf ? `$${soldSummary.medianPpsf}` : "—"} sub={`${soldSummary.usedCount} of ${soldSummary.total} comps · ${num(sqft) > 0 ? "size-adjusted" : "not size-adjusted yet (no sq ft)"}`} />
-              </div>
-
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                {soldSummary.flagged.map((c, i) => (
-                  <div key={i} className={`rounded-xl border-2 bg-white p-3 ${c.included ? "border-emerald-400" : "border-slate-200"}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <button type="button" onClick={() => setSoldIncluded((p) => ({ ...p, [i]: !c.included }))} className="flex items-center gap-2">
-                        <span className={`flex h-5 w-5 items-center justify-center rounded-md font-mono text-[10px] font-bold text-white ${c.included ? "bg-emerald-600" : c.flags.length ? "bg-amber-500" : "bg-slate-400"}`}>{i + 1}</span>
-                        <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold ${c.included ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-transparent"}`}>✓</span>
-                        <span className="text-xs font-semibold text-slate-700">Include in ARV</span>
-                      </button>
-                      <span className="flex shrink-0 items-center gap-1">{c.mls && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-700" title={c.mls.number ? `MLS # ${c.mls.number}` : "Matched to an MLS listing"}>MLS</span>}<span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-sky-700">{c.manualEntry ? "MANUAL" : "DEED"}</span></span>
-                    </div>
-                    <div className="mt-2 flex gap-3">
-                      <button type="button" onClick={() => setCompDetail({ panel: "sold", i: c.i })} title="Open comp details"
-                        className="relative flex h-20 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100 transition hover:ring-2 hover:ring-emerald-300">
-                        <Building2 className="h-7 w-7 text-slate-300" />
-                        {c.address && (
-                          <img src={`/api/photo?address=${encodeURIComponent(c.address)}`} alt="" loading="lazy"
-                            className="absolute inset-0 h-full w-full object-cover"
-                            onError={(e) => { e.currentTarget.style.display = "none"; }} />
-                        )}
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{usd(c.salePrice)}</span>
-                          {c.distance != null && <span className="shrink-0 font-mono text-[11px] text-slate-700">{Number(c.distance).toFixed(2)} mi</span>}
-                        </div>
-                        {c.saleDate && <div className="text-[11px] text-slate-600">sold {mediumDate(c.saleDate)}</div>}
-                        <div className="mt-0.5 flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                          <span className="truncate">{c.address || "(address withheld)"}</span>
-                          {c.address && (
-                            <a href={gsearch(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[11px] font-semibold text-emerald-600 hover:underline">
-                              Google
-                            </a>
-                          )}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-slate-700">
-                          {[
-                            (c.beds != null || c.baths != null) ? `${c.beds ?? "?"} bd · ${c.baths ?? "?"} ba` : null,
-                            `${c.sqft.toLocaleString()} sqft`,
-                            c.yearBuilt ? String(c.yearBuilt) : null,
-                            `$${c.ppsf}/sf`,
-                            c.appsf > 0 && Math.round(c.appsf) !== Math.round(c.ppsf) ? `adj $${Math.round(c.appsf)}/sf` : null,
-                          ].filter(Boolean).join(" · ")}
-                        </div>
-                      </div>
-                    </div>
-                    {(c.flags.length > 0 || c.benched) && (
-                      <div className="mt-2 flex flex-wrap items-center gap-1">
-                        {c.flags.map((f, k) => (
-                          <span key={k} className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                            <AlertTriangle className="h-2.5 w-2.5" /> {f}
-                          </span>
-                        ))}
-                        {c.benched && (
-                          <span className="inline-flex items-center rounded bg-slate-200/70 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">beyond the top {SOLID_TARGET}</span>
-                        )}
-                      </div>
+                <Chips value={d.creativeMode} onChange={(v) => set("creativeMode", v)} opts={[["subto", "Subject-To (take over their loan)"], ["sf", "Seller Finance (they are the bank)"]]} />
+                {d.creativeMode === "subto" ? (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <Field label="Agreed price"><Money value={d.price} onChange={(v) => set("price", v)} /></Field>
+                    <Field label="Loan balance"><Money value={d.stBalance} onChange={(v) => set("stBalance", v)} /></Field>
+                    <Field label="Their monthly payment"><Money value={d.stPayment} onChange={(v) => set("stPayment", v)} /></Field>
+                    <div className="sm:col-span-3"><Check checked={d.stEscrowed !== false} onChange={(v) => set("stEscrowed", v)}>That payment already includes taxes and insurance (escrowed)</Check></div>
+                    <Field label="Loan rate"><Num value={d.stRate} onChange={(v) => set("stRate", v)} suffix="%" /></Field>
+                    <Field label="Years left on the loan"><Num value={d.stYearsLeft} onChange={(v) => set("stYearsLeft", v)} /></Field>
+                    <Field label="Cash to the seller"><Money value={d.stCashToSeller} onChange={(v) => set("stCashToSeller", v)} /></Field>
+                    <Field label="Back payments (arrears)"><Money value={d.stArrears} onChange={(v) => set("stArrears", v)} /></Field>
+                    <Field label="Closing costs"><Money value={d.closing} onChange={(v) => set("closing", v)} /></Field>
+                    <Field label="Seller carries" hint="optional" tip="Part of their equity they agree to receive over time instead of at closing, as a second note."><Money value={d.stCarry} onChange={(v) => set("stCarry", v)} /></Field>
+                    {num(d.stCarry) > 0 && <>
+                      <Field label="Carry rate"><Num value={d.stCarryRate} onChange={(v) => set("stCarryRate", v)} suffix="%" /></Field>
+                      <Field label="Carry term"><Num value={d.stCarryYears} onChange={(v) => set("stCarryYears", v)} suffix="yrs" /></Field>
+                    </>}
+                    {num(d.price) > 0 && num(d.stBalance) > 0 && num(d.price) - num(d.stBalance) - num(d.stCashToSeller) - num(d.stCarry) > 1 && (
+                      <div className="sm:col-span-3 text-[12px] text-amber-700">{fmt$(num(d.price) - num(d.stBalance) - num(d.stCashToSeller) - num(d.stCarry))} of the price is not covered by the loan, the cash or the carry. Add it to one of them so the numbers match the agreement.</div>
                     )}
                   </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-        )}
-
-        {/* ARV — leads with the number that is actually driving the deal, then lets a rep change
-            it. Showing a blank "optional" box first made VAs think the tool had no ARV at all,
-            even when the comps had already produced one. Answer first, override second. */}
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <SectionTitle>ARV — after repair value</SectionTitle>
-
-          <div className="mt-2 rounded-xl border-2 border-slate-900 bg-slate-50 p-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-700">Driving this deal</div>
-            <div className="mt-0.5 font-mono text-3xl font-bold tabular-nums text-slate-900">{arv > 0 ? usd(arv) : "—"}</div>
-            {compBasis && !num(arvOverride) && (compBasis.beds != null || compBasis.sqft) && (
-              <div className="mt-0.5 text-[11px] text-slate-700">Comps pulled for {fmtBasis(compBasis)}</div>
-            )}
-            {!num(arvOverride) && changeInfo.compStale && <RepullNote info={changeInfo} />}
-            <div className="mt-0.5 text-[11px] leading-snug text-slate-700">
-              {arv <= 0
-                ? "No ARV yet. Run Auto-comp up top, or type a number you comped elsewhere."
-                : num(arvOverride) > 0
-                  ? <>
-                      <b className="text-slate-700">Your number is being used.</b> It overrides the Deal Desk comps
-                      {soldSummary && soldSummary.arv > 0 ? <>, which say <b className="text-slate-700">{usd(Math.max(0, soldSummary.arv + subjAdjust))}</b></> : null}
-                      {arvSource ? <>. Tagged {(ARV_SOURCE_LABEL[arvSource] || "").toLowerCase()}</> : null}.
-                      {subjAdjust !== 0 ? <> The {subjAdjust > 0 ? "+" : "−"}{usd(Math.abs(subjAdjust))} bed/bath correction is <b>not</b> added, since you comped this yourself and already counted the rooms.</> : null} Clear the box to go back to the comps.
-                    </>
-                  : <>Calculated from the recorded sold comps that Auto-comp pulled from RentCast, shown above.{subjAdjust !== 0 ? ` Includes a ${subjAdjust > 0 ? "+" : "−"}${usd(Math.abs(subjAdjust))} bed/bath correction.` : ""} <b className="text-slate-700">Anything you type here wins over this.</b></>}
-            </div>
-
-            {/* The override sits inside the box, directly under the line explaining what it does,
-                so the number and the way to change it are one thing rather than two. */}
-            <div className="mt-2.5 border-t border-slate-300 pt-2.5">
-              <Field label={num(arvOverride) > 0 ? "Your ARV — overriding the comps" : "Use your own number instead"} hint={num(arvOverride) > 0 ? "clear it to go back to comps" : "wins over the comps"}>
-                <MoneyInput value={arvOverride} onChange={setArvOverride} placeholder={arv > 0 && num(arvOverride) <= 0 ? String(Math.round(arv)) : "optional"} />
-              </Field>
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Where did this number come from?</div>
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {ARV_SOURCES.map(([v, l]) => (
-                <button key={v} type="button" onClick={() => setArvSource(arvSource === v ? "" : v)}
-                  className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${arvSource === v ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                  {l}
-                </button>
-              ))}
-            </div>
-            {num(arvOverride) > 0 && !arvSource && (
-              <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
-                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
-                Tag the source. It goes on the call report, so anyone reviewing this deal later can see whether the ARV was comped or estimated.
-              </div>
-            )}
-            {arvSource === "ps-estimate" && (
-              <div className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-700">
-                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-500" />
-                That is an automated estimate, not comped value. Fine for a first pass, but comp it before you put a number in front of a seller.
-              </div>
-            )}
-          </div>
-
-          {/* Last thing in the card: with an ARV settled, the next move is the call, not more analysis. */}
-          {arv > 0 && !callTouched && (
-            <>
-              <button type="button" onClick={() => setCallOpen(true)}
-                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700">
-                <Phone className="h-4 w-4" /> You have an ARV. Open the Offer Call.
-              </button>
-              <div className="mt-1 text-center text-[10.5px] leading-snug text-slate-600">
-                The Offer Call walks the script, captures what the seller tells you, and tells you which strategy to pitch.
-              </div>
-            </>
-          )}
-        </div>
-
-        <RentCard est={rentEst || rentSaved || 0} low={rentLow} high={rentHigh} info={rentInfo}
-          typed={num(rentOverride)} hasAddress={!!address.trim()}
-          comps={rentComps} subject={rentSubject} change={changeInfo} onRent={setRentOverride} tenantRent={tenantRentNow} />
-
-        {/* CONTROLS: rehab (the MAO band panel came out Oct 16 2026, bands are fixed at 75/80) */}
-        <div className="mt-4">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <SectionTitle>Rehab level</SectionTitle>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[
-                { id: "cosmetic", t: "Light", s: "$15/sf" },
-                { id: "moderate", t: "Moderate", s: "$30/sf" },
-                { id: "gut", t: "Full Gut", s: "$50/sf" },
-                { id: "custom", t: "Custom", s: "set $/sf" },
-              ].map((r) => (
-                <button key={r.id} onClick={() => setRehabLevel(rehabLevel === r.id ? "" : r.id)}
-                  className={`rounded-lg border px-3 py-2 text-left transition ${
-                    rehabLevel === r.id ? "border-emerald-500 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"
-                  }`}>
-                  <div className="text-sm font-semibold text-slate-800">{r.t}</div>
-                  <div className="text-[11px] text-slate-700">{r.s}</div>
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {rehabLevel === "custom" && (
-                <Field label="Custom $/sf">
-                  <PlainInput value={customPsf} onChange={setCustomPsf} placeholder="45" suffix="$/sf" />
-                </Field>
-              )}
-              <Field label="Or total repair $" hint="overrides">
-                <MoneyInput value={repairOverride} onChange={setRepairOverride} placeholder="optional" />
-              </Field>
-              <div className="mt-3 flex items-baseline justify-between rounded-lg bg-slate-50 px-3 py-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Estimated rehab</span>
-                <span className={`font-mono text-xl tabular-nums ${repairsDefault ? "font-normal text-slate-400" : "font-bold text-slate-800"}`} title={repairsDefault ? "Default until a rehab level or a total is entered" : undefined}>{repairs > 0 ? usd(repairs) : "—"}</span>
-              </div>
-              {repairsDefault && (
-                <div className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-800">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" />
-                  <span><b>Using the {usd(REPAIR_DEFAULT)} default.</b> {repairsNeedSqft ? "A rehab level is picked, but there is no sq ft to price it with, so" : "Nobody has picked a rehab level or typed a number yet, so"} the MAO assumes {usd(REPAIR_DEFAULT)} of repairs. Most houses we buy need more, so confirm the condition before you quote a price.</span>
-                </div>
-              )}
-              <div className="mt-1 text-[10px] text-slate-600">
-                {num(repairOverride) > 0
-                  ? "manual total — overrides the $/sf tiles"
-                  : repairsDefault
-                    ? `default ${usd(REPAIR_DEFAULT)} until a rehab level or a total is entered`
-                  : num(sqft) > 0
-                    ? `${usd(repairPsf || 0)}/sf × ${num(sqft).toLocaleString()} sf — updates live with the tiles and subject sq ft`
-                    : "pick a level and enter subject sq ft above to compute"}
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        {/* QUICK NUMBER: the As-Is formula sits above the strategy tabs so it is there on every tab,
-            for a fast number when there is no time for comps (per B, Oct 17 2026). */}
-        <div className="mt-6">
-          <AsIsPanel address={address} ai={asIs} vals={{ aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }} set={{ ...tabSet, aiFee: setFeeTyped }}
-            ask={num(askingPrice)} arvMao={activeInvestorMao} arv={arv}
-            heavyRehab={rehabLevel === "gut" || (!rehabLevel && !repairsDefault && impliedCondition(repairs, sqft) === "heavy")} />
-        </div>
-
-        {/* TABS */}
-        {/* Strategy tabs. These switch the whole deal underneath them, so they read as a real
-            control bar rather than five quiet chips: a labeled container, a green active tab, and
-            an underline so the selected strategy connects visually to the panel below it. */}
-        <div id="deal-tabs" className="mt-6 scroll-mt-3">
-          <div className="mb-3 flex items-start gap-2 rounded-xl border-2 border-sky-300 bg-sky-50 px-3.5 py-2.5">
-            <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
-            <div className="text-[12px] leading-snug text-sky-950">
-              <b>Everything below this line is what the end buyer can expect</b> from each exit: their price, cash in, cash flow and returns. It fills in on its own from the Offer Call and Auto-comp, so you do not need to type it here. If a card shows a dash or asks for a number, go back to the call and get that answer from the seller.
-            </div>
-          </div>
-          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-600">Pick your exit strategy</div>
-          <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-100/70 p-1.5">
-            {tabs.map((t) => {
-              const Icon = t.Icon;
-              const on = tab === t.id;
-              return (
-                <div key={t.id} className="group relative flex-1">
-                  <button onClick={() => setTab(t.id)}
-                    className={`flex w-full items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-sm font-bold transition ${
-                      on
-                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/25 ring-2 ring-emerald-600 ring-offset-1 ring-offset-slate-100"
-                        : "bg-white text-slate-600 shadow-sm hover:bg-white hover:text-slate-900 hover:shadow"
-                    }`}>
-                    <Icon className={`h-4 w-4 ${on ? "" : "text-slate-600"}`} />
-                    <span className="whitespace-nowrap">{t.label}</span>
-                  </button>
-                  {/* Hover explainer. Hidden on touch screens, where there is no hover — the same
-                      wording lives under the tab bar on small screens instead. */}
-                  <div className="pointer-events-none absolute left-1/2 top-full z-30 hidden w-72 -translate-x-1/2 pt-2 opacity-0 transition-opacity group-hover:opacity-100 sm:group-hover:block">
-                    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
-                      <div className="flex items-center gap-1.5 text-[12px] font-bold text-slate-900">
-                        <Icon className="h-3.5 w-3.5 text-emerald-600" />{t.label}
-                      </div>
-                      <div className="mt-1 text-[11.5px] leading-snug text-slate-600">{t.blurb}</div>
-                      <div className="mt-1.5 text-[11px] leading-snug text-emerald-700">{t.fit}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {/* Phones and tablets cannot hover, so the active strategy explains itself right here. */}
-          {(() => {
-            const t = tabs.find((x) => x.id === tab);
-            return t ? (
-              <div className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11.5px] leading-snug text-slate-600 sm:hidden">
-                {t.blurb} <span className="text-emerald-700">{t.fit}</span>
-              </div>
-            ) : null;
-          })()}
-        </div>
-
-        <div className="mt-4">
-          {tab === "cash" && (
-            <CashTab {...{ deckOpenKey: deckKey("cash"), feeField, brrrrIn: { brPurchase, setBrPurchase, brPurchaseMode, setBrPurchaseMode, brLtv, setBrLtv, brRate, setBrRate, brTerm, setBrTerm, repairOverride, setRepairOverride, taxIns, setTaxIns, hoaAmt, setHoaAmt, reservePct: brReservePct, setReservePct: setBrReservePct }, onDeckOpened: deckDone, arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault: effRent, rentInfo, deckCommon, onGenerateRent: repullRent, rentLoading, rentMsg, hasAddress: !!address.trim(),
-              address, asIs, heavyRehab: rehabLevel === "gut" || (!rehabLevel && !repairsDefault && impliedCondition(repairs, sqft) === "heavy"), asIsVals: { aiZillow, aiRealtor, aiRedfin, aiOther, aiExit, aiFee, aiOffer }, asIsSet: { ...tabSet, aiFee: setFeeTyped } }} />
-          )}
-          {tab === "subto" && (
-            <SubToTab {...{ deckOpenKey: deckKey("subto"), feeField, stPay, setStPay, pitiExtras, loanRate: num(callState.rate), setCallRate, loanYrsLeft, setLoanYrsLeft, mktRate, setMktRate, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct }} />
-          )}
-          {tab === "hybrid" && (
-            <HybridTab {...{ deckOpenKey: deckKey("hybrid"), feeField, stPay, setStPay, pitiExtras, loanRate: num(callState.rate), setCallRate, loanYrsLeft, setLoanYrsLeft, mktRate, setMktRate, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, callRate: num(callState.rate), hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct }} />
-          )}
-          {tab === "sf" && (
-            <SellerFinanceTab {...{ deckOpenKey: deckKey("sf"), feeField, taxInsEst, mktRate, setMktRate, onDeckOpened: deckDone, arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault: effRent, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct }} />
-          )}
-          {tab === "nov" && (
-            <NovationTab {...{ repairs, asIsAvg: asIs.avg, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs }} />
-          )}
-        </div>
-
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] leading-relaxed text-slate-600">
-          Formulas use standard YLHB methodology (ARV = avg $/sf × sq ft; MAO = ARV × band % − repairs).
-          Bands default to 75% under $200k / 80% over, matching your sheet. Estimates only — verify comps and underwriting before offers. Not legal or financial advice.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- shared: how-to-use instructions ----------
-function InstructionsButton() {
-  const [open, setOpen] = useState(false);
-  const steps = [
-    ["Pull the property", "Type the address up top and hit Auto-comp. It pulls the ARV, sold comps, property details, and the subject's last sale — all from the address."],
-    ["Tighten the comps", "Auto-comp keeps the 8 most-similar sold comps (last 12 months, ±250 sq ft). Comps that are off on beds, baths, age, size, or distance get an amber flag — delete the weak ones and the ARV recalculates live."],
-    ["Pick your structure", "Use the tabs to run the deal as Cash/MAO, Sub-To, Hybrid, Seller Finance, Novation, or Rental. Each gives you a verdict and the key numbers."],
-    ["Read the verdict", "Green means it pencils, amber means it's tight, red means walk. Hover the ⓘ icons for what any field means."],
-    ["Wholesale it creative", "On the creative tabs, the 'If you wholesaled this agreement' panel shows what you could assign the deal for — equity PLUS the financing value of the low rate. Lower rate = more value."],
-    ["See the rate's worth", "The Rate Savings and amortization sliders show what a below-market loan saves over time and how the payment shifts from interest to principal."],
-    ["Check the rental & BRRRR exit", "On the Cash/MAO tab, the BRRRR/DSCR panel shows the refinance, DSCR, and cash flow. Market rent is pulled automatically with Auto-comp, or type your own."],
-    ["Send it to buyers", "Hit 'Download buyer deck' on any creative tab to generate a branded YLHB PowerPoint for your buyers list. Fill the required fields and it builds the slides."],
-    ["Learn as you go", "Every tab has a plain-English explainer at the bottom, plus free Pace Morby videos on that structure."],
-  ];
-  return (
-    <>
-      <button onClick={() => setOpen(true)}
-        className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-[12px] font-semibold text-slate-200 hover:bg-slate-700">
-        <HelpCircle className="h-4 w-4 text-emerald-400" /> How to use
-      </button>
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setOpen(false)}>
-          <div className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-1 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-slate-800">How to use the YLHB RE Calculator</h2>
-              <button onClick={() => setOpen(false)} className="text-slate-600 hover:text-slate-600"><X className="h-5 w-5" /></button>
-            </div>
-            <p className="mb-4 text-[13px] text-slate-700">Address in → deal out. Here's the flow, start to finish.</p>
-            <ol className="space-y-3">
-              {steps.map((s, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[12px] font-bold text-emerald-700">{i + 1}</span>
-                  <div>
-                    <div className="text-[13px] font-bold text-slate-800">{s[0]}</div>
-                    <div className="text-[13px] leading-relaxed text-slate-600">{s[1]}</div>
-                  </div>
-                </li>
-              ))}
-            </ol>
-            <div className="mt-5 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
-              Tip: numbers are estimates to get you to a fast yes/no. Always verify ARV, rent, condition, and loan terms before you commit a dollar.
-            </div>
-            <button onClick={() => setOpen(false)} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700">Got it</button>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ---------- shared: buyer deck (.pptx) ----------
-const YLHB = {
-  email: "deals@yourlocalhomebuyerteam.com",
-  phone: "(502) 305-8554",
-  phoneRaw: "+15023058554",
-  site: "www.yourlocalhomebuyerteam.com",
-  siteUrl: "https://www.yourlocalhomebuyerteam.com",
-};
-const DECK = { FOREST: "1E4D2B", SAGE: "9CAF88", ORANGE: "E8833A", INK: "1A2E22", PAPER: "F5F7F4", WHITE: "FFFFFF", LINE: "DDE3DC" };
-
-// Load PptxGenJS from CDN on first use (avoids bundling a heavy lib; keeps the Vercel build simple).
-let _pptxPromise = null;
-function loadPptx() {
-  if (typeof window !== "undefined" && window.PptxGenJS) return Promise.resolve(window.PptxGenJS);
-  if (_pptxPromise) return _pptxPromise;
-  _pptxPromise = new Promise((resolve, reject) => {
-    const sc = document.createElement("script");
-    sc.src = "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js";
-    sc.async = true;
-    sc.onload = () => (window.PptxGenJS ? resolve(window.PptxGenJS) : reject(new Error("PowerPoint library loaded but unavailable.")));
-    sc.onerror = () => reject(new Error("Could not load the PowerPoint library (check your connection)."));
-    document.head.appendChild(sc);
-  });
-  return _pptxPromise;
-}
-
-async function getLogoData() {
-  try {
-    const res = await fetch("/logo.png");
-    const blob = await res.blob();
-    return await new Promise((resolve) => {
-      const r = new FileReader();
-      r.onloadend = () => resolve(String(r.result).replace(/^data:/, "")); // pptxgenjs wants "image/png;base64,..."
-      r.onerror = () => resolve(null);
-      r.readAsDataURL(blob);
-    });
-  } catch { return null; }
-}
-
-// ---------- deck: rent analysis slides ----------
-// The same rent picture the app shows (estimate, $/sq ft, $/bedroom, low to high range, what it was
-// priced for, the comp map and the comps), for every deck where rent drives the numbers: Sub-To,
-// Hybrid, Seller Finance, and the BRRRR half of the cash deck. The map is a Google static image from
-// /api/staticmap. If that is unavailable the slide simply runs without it.
-async function getRentMapImage(ra) {
-  try {
-    const top = (ra.comps || []).filter((c) => c.lat != null && c.lng != null).slice(0, 9);
-    if (!top.length) return null;
-    const q = new URLSearchParams();
-    if (ra.subject && ra.subject.lat != null) q.set("subject", `${ra.subject.lat},${ra.subject.lng}`);
-    q.set("pins", top.map((c) => `${c.lat},${c.lng}`).join("|"));
-    const r = await fetch(`/api/staticmap?${q.toString()}`);
-    if (!r.ok) return null;
-    const d = await r.json();
-    return d && d.image ? d.image : null;
-  } catch { return null; }
-}
-function addRentSlides(pptx, header, ra, mapImg) {
-  if (!ra || !(ra.est > 0)) return;
-  const b = ra.basis || {};
-  const sq = num(b.sqft), beds = num(b.beds);
-  const psf = (v) => (sq > 0 && v > 0 ? `$${(v / sq).toFixed(2)}` : null);
-  const pbd = beds > 0 ? `$${(ra.est / beds).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
-  const C1 = [6, 182, 212], C2 = [59, 130, 246];   // cyan to blue, same as the app's range bar
-  const hex = (t) => C1.map((v, i) => Math.round(v + (C2[i] - v) * t).toString(16).padStart(2, "0")).join("").toUpperCase();
-
-  // Slide A: the estimate and the map
-  const s = pptx.addSlide(); header(s, "Rent Analysis");
-  const L = 0.6, W = mapImg ? 5.5 : 12.1;
-  s.addShape(pptx.ShapeType.roundRect, { x: L, y: 1.4, w: W, h: 5.25, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.1 });
-  s.addText("ESTIMATED MONTHLY RENT", { x: L, y: 1.6, w: W, h: 0.4, fontSize: 13, bold: true, color: "0891B2", align: "center", charSpacing: 2 });
-  s.addText(usd(ra.est), { x: L, y: 2.0, w: W, h: 1.0, fontSize: 48, bold: true, color: DECK.INK, align: "center" });
-  const sub = [psf(ra.est) ? `${psf(ra.est)} per sq ft` : null, pbd ? `${pbd} per bedroom` : null].filter(Boolean).join("     |     ");
-  if (sub) s.addText(sub, { x: L, y: 3.0, w: W, h: 0.4, fontSize: 14, color: "475569", align: "center" });
-  if (ra.low > 0 && ra.high > ra.low) {
-    const bx = L + 0.45, bw = W - 0.9, by = 3.95;
-    s.addText("Low estimate", { x: bx, y: by - 0.42, w: bw / 2, h: 0.3, fontSize: 11, color: "475569" });
-    s.addText("High estimate", { x: bx + bw / 2, y: by - 0.42, w: bw / 2, h: 0.3, fontSize: 11, color: "475569", align: "right" });
-    const N = 24;
-    for (let i = 0; i < N; i++) s.addShape(pptx.ShapeType.rect, { x: bx + (bw / N) * i, y: by, w: bw / N + 0.01, h: 0.22, fill: { color: hex(i / (N - 1)) }, line: { color: hex(i / (N - 1)), width: 0 } });
-    const t = Math.min(1, Math.max(0, (ra.est - ra.low) / (ra.high - ra.low)));
-    s.addShape(pptx.ShapeType.rect, { x: bx + bw * t - 0.03, y: by - 0.08, w: 0.06, h: 0.38, fill: { color: DECK.INK }, line: { color: DECK.INK, width: 0 } });
-    s.addText([{ text: usd(ra.low) + "\n", options: { fontSize: 15, bold: true, color: DECK.INK } }, { text: psf(ra.low) ? `${psf(ra.low)} /sq ft` : "", options: { fontSize: 11, color: "64748B" } }], { x: bx, y: by + 0.3, w: bw / 2, h: 0.7, valign: "top" });
-    s.addText([{ text: usd(ra.high) + "\n", options: { fontSize: 15, bold: true, color: DECK.INK } }, { text: psf(ra.high) ? `${psf(ra.high)} /sq ft` : "", options: { fontSize: 11, color: "64748B" } }], { x: bx + bw / 2, y: by + 0.3, w: bw / 2, h: 0.7, align: "right", valign: "top" });
-  }
-  const basisTxt = [fmtBasis(b) ? `Priced for ${fmtBasis(b)}` : null, b.comps ? `${b.comps} rental comps ${b.search || ""}`.trim() : null].filter(Boolean).join(" · ");
-  if (basisTxt) s.addText(basisTxt, { x: L + 0.2, y: 5.25, w: W - 0.4, h: 0.5, fontSize: 11, color: "64748B", align: "center" });
-  if (ra.tenantRent > 0) {
-    s.addText(`Tenant in place pays ${usd(ra.tenantRent)}/mo today${ra.leaseEnds ? ` (lease ends ${ra.leaseEnds})` : ""}${ra.est > ra.tenantRent ? `, ${usd(ra.est - ra.tenantRent)} under this market estimate` : ""}`, { x: L + 0.2, y: 5.7, w: W - 0.4, h: 0.55, fontSize: 12, bold: true, color: DECK.FOREST, align: "center" });
-  } else if (ra.used > 0 && Math.abs(ra.used - ra.est) >= 1) {
-    s.addText(`Rent used in this deck's numbers: ${usd(ra.used)}/mo`, { x: L + 0.2, y: 5.75, w: W - 0.4, h: 0.45, fontSize: 12, bold: true, color: DECK.FOREST, align: "center" });
-  }
-  if (mapImg) {
-    s.addShape(pptx.ShapeType.roundRect, { x: 6.35, y: 1.4, w: 6.35, h: 4.2, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.1 });
-    s.addImage({ data: mapImg, x: 6.45, y: 1.5, w: 6.15, h: 3.84 });
-    s.addText("Teal pin = this house · numbered pins = rental comps 1 to 9, detailed on the next slide", { x: 6.35, y: 5.7, w: 6.35, h: 0.4, fontSize: 11, color: "64748B", align: "center" });
-  }
-  s.addText("Estimate from RentCast, based on nearby rental listings. Listings show asking rents, not signed leases. Buyer to verify independently.", { x: 0.6, y: 6.85, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
-
-  // Slide B: the comps
-  const comps = (ra.comps || []).slice(0, 9);
-  if (!comps.length) return;
-  const t2 = pptx.addSlide(); header(t2, "Rental Comps");
-  const H = (x) => ({ text: x, options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, fontSize: 12 } });
-  const rows = [[H("#"), H("Address"), H("Bd / Ba"), H("Sq ft"), H("Distance"), H("Rent"), H("$/sq ft"), H("Last seen")]];
-  comps.forEach((c, i) => rows.push([
-    String(i + 1),
-    String(c.address || ""),
-    c.beds != null && c.baths != null ? `${c.beds} / ${c.baths}` : "—",
-    num(c.sqft) > 0 ? Math.round(num(c.sqft)).toLocaleString() : "—",
-    c.distance != null ? `${Number(c.distance).toFixed(2)} mi` : "—",
-    c.rent ? usd(c.rent) : "—",
-    c.rent && num(c.sqft) > 0 ? `$${(c.rent / num(c.sqft)).toFixed(2)}` : "—",
-    c.daysOld != null ? (c.daysOld === 0 ? "today" : `${c.daysOld} day${c.daysOld === 1 ? "" : "s"} ago`) : "—",
-  ]));
-  t2.addTable(rows, { x: 0.6, y: 1.4, w: 12.1, colW: [0.45, 4.6, 1.05, 0.95, 1.1, 1.15, 1.1, 1.7], fontSize: 11.5, color: DECK.INK, rowH: 0.48, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } });
-  const more = num(b.comps) > comps.length ? ` RentCast used ${b.comps} comps in total. The ${comps.length} shown are the closest matches.` : "";
-  t2.addText(`Numbers match the pins on the map.${more} Asking rents from listings, not signed leases. Buyer to verify independently.`, { x: 0.6, y: 6.75, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
-}
-
-// Tenant in place below market: show what the rent can become and what that does to the buyer's
-// return. The deal's numbers run on the tenant's rent (what the buyer collects on day one). This
-// slide shows the move to RentCast's market rent at the lease end, net of the same reserve % the
-// deal uses, with no other rent growth assumed. A projection, never a promise.
-function addRentUpsideSlide(pptx, header, ra, base) {
-  if (!ra || !(ra.tenantRent > 0) || !(ra.est > ra.tenantRent)) return;
-  const inc = ra.est - ra.tenantRent;
-  const resv = Math.max(0, Math.min(50, num(base && base.reservePct))) / 100;
-  const netInc = inc * (1 - resv);
-  const cashIn = num(base && base.cashIn);
-  const cf0 = num(base && base.monthlyCF);
-  const haveReturns = base && (cf0 !== 0 || cashIn > 0);
-  // Months until the rent can move: the lease end if we can read it, else assume the next renewal (12).
-  let m = 12;
-  const t = Date.parse(ra.leaseEnds || "");
-  if (Number.isFinite(t)) m = Math.max(0, Math.min(12, Math.round((t - Date.now()) / (30.44 * 86400000))));
-  else if (/month.?to.?month|mtm/i.test(ra.leaseEnds || "")) m = 2;   // month to month: about 60 days' notice
-
-  const s = pptx.addSlide(); header(s, "Rent Upside");
-  const tbl = (rows) => rows.map((r) => [{ text: r[0], options: { bold: true, color: DECK.FOREST } }, { text: r[1], options: { align: "right", color: DECK.INK } }]);
-  const opts = { fontSize: 14, color: DECK.INK, rowH: 0.5, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } };
-  const rows = [
-    ["Tenant pays today", `${usd(ra.tenantRent)}/mo`],
-    ["Market rent (RentCast)", `${usd(ra.est)}/mo`],
-    ["Increase at market", `+${usd(inc)}/mo · +${usd(inc * 12)}/yr`],
-    [resv > 0 ? `Increase after ${Math.round(resv * 100)}% reserves` : "Increase to cash flow", `+${usd(netInc)}/mo`],
-    ["Lease ends", ra.leaseEnds || "Not known, assumed 12 months"],
-  ];
-  s.addTable(tbl(rows), { x: 0.6, y: 1.4, w: 6.4, colW: [3.2, 3.2], ...opts });
-
-  if (haveReturns) {
-    const card = (x, label, value, sub, fill, ink) => {
-      s.addShape(pptx.ShapeType.roundRect, { x, y: 1.4, w: 2.75, h: 1.7, fill: { color: fill }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
-      s.addText([{ text: label.toUpperCase() + "\n", options: { fontSize: 10.5, bold: true, color: ink === DECK.WHITE ? DECK.SAGE : "6B7A6F" } }, { text: value + "\n", options: { fontSize: 24, bold: true, color: ink } }, { text: sub, options: { fontSize: 10, color: ink === DECK.WHITE ? DECK.SAGE : "6B7A6F" } }],
-        { x, y: 1.4, w: 2.75, h: 1.7, align: "center", valign: "middle" });
-    };
-    // With no cash left in (BRRRR after the refinance), cash-on-cash is infinite only when cash flow is
-    // positive. Negative cash flow on zero cash in is not "infinite", it is just negative.
-    const pct = (v) => (cashIn > 0 ? `${((v / cashIn) * 100).toFixed(2)}%` : v > 0 ? "∞" : "n/a");
-    card(7.35, "Cash-on-cash today", pct(cf0 * 12), `${usd(cf0)}/mo on ${cashIn > 0 ? usd(cashIn) : "no cash left in"}`, DECK.WHITE, DECK.FOREST);
-    card(10.0, "At market rent", pct((cf0 + netInc) * 12), `${usd(cf0 + netInc)}/mo`, DECK.FOREST, DECK.WHITE);
-
-    // 5-year cash-flow ROI
-    const H = (x) => ({ text: x, options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, fontSize: 12 } });
-    const proj = [[H("Year"), H("Monthly cash flow"), H("Year cash flow"), H("Cumulative"), H(cashIn > 0 ? "Cash-flow ROI" : "ROI")]];
-    let cum = 0;
-    for (let y = 1; y <= 5; y++) {
-      const yr = y === 1 ? cf0 * m + (cf0 + netInc) * (12 - m) : (cf0 + netInc) * 12;
-      cum += yr;
-      proj.push([String(y), usd(y === 1 ? yr / 12 : cf0 + netInc), usd(yr), usd(cum), cashIn > 0 ? `${((cum / cashIn) * 100).toFixed(2)}%` : cum > 0 ? "∞" : "n/a"]);
-    }
-    s.addText("5-year projection", { x: 7.35, y: 3.25, w: 5.4, h: 0.35, fontSize: 13, bold: true, color: DECK.FOREST });
-    s.addTable(proj, { x: 7.35, y: 3.6, w: 5.4, colW: [0.6, 1.25, 1.15, 1.15, 1.25], fontSize: 11, color: DECK.INK, rowH: 0.42, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 }, align: "center" });
-    s.addText(`Buyer cash in: ${cashIn > 0 ? usd(cashIn) : "none left in the deal"}. Year 1 blends ${m} month${m === 1 ? "" : "s"} at today's rent with the rest at market.`, { x: 0.6, y: 4.6, w: 6.4, h: 0.6, fontSize: 11, color: "475569" });
-  }
-  s.addText("Projection only, not a guarantee. Assumes the rent moves to RentCast's market estimate when the lease ends, no other rent growth, and expenses as shown in this deck. Buyer to verify the lease, the tenant, and the market independently.", { x: 0.6, y: 6.75, w: 12.1, h: 0.5, fontSize: 9, color: "8A968C", italic: true });
-}
-
-async function generateBuyerDeck(data) {
-  const PptxGenJS = await loadPptx();
-  const logo = await getLogoData();
-  const pptx = new PptxGenJS();
-  pptx.defineLayout({ name: "W", width: 13.333, height: 7.5 });
-  pptx.layout = "W";
-  pptx.author = "Your Local Home Buyer";
-  pptx.company = "Your Local Home Buyer";
-  const addLogo = (s, x, y, w) => { if (logo) s.addImage({ data: logo, x, y, w, h: w * 0.59 }); };
-
-  // Slide 1 — cover (photo if provided, else branded title card)
-  let s = pptx.addSlide();
-  if (data.photo) {
-    s.background = { color: DECK.INK };
-    try { s.addImage({ data: data.photo, x: 0, y: 0, w: 13.333, h: 5.1, sizing: { type: "cover", w: 13.333, h: 5.1 } }); } catch { /* bad image — skip */ }
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 5.1, w: 13.333, h: 2.4, fill: { color: DECK.FOREST } });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.35, w: 13.333, h: 0.15, fill: { color: DECK.ORANGE } });
-    addLogo(s, 11.1, 5.32, 1.6);
-    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 5.3, w: 10, h: 0.4, fontSize: 14, color: DECK.SAGE, bold: true, charSpacing: 3 });
-    s.addText(data.address || "Property address", { x: 0.6, y: 5.7, w: 10.3, h: 0.9, fontSize: 30, color: DECK.WHITE, bold: true });
-    if (data.headline) s.addText(data.headline, { x: 0.6, y: 6.7, w: 11, h: 0.5, fontSize: 16, color: DECK.SAGE });
-  } else {
-    s.background = { color: DECK.FOREST };
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.7, w: 13.333, h: 0.8, fill: { color: DECK.ORANGE } });
-    addLogo(s, 0.6, 0.5, 2.3);
-    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 2.5, w: 12.1, h: 0.5, fontSize: 16, color: DECK.SAGE, bold: true, charSpacing: 3 });
-    s.addText(data.address || "Property address", { x: 0.6, y: 3.0, w: 12.1, h: 1.2, fontSize: 38, color: DECK.WHITE, bold: true });
-    if (data.headline) s.addText(data.headline, { x: 0.6, y: 4.35, w: 12.1, h: 0.6, fontSize: 18, color: DECK.SAGE });
-  }
-
-  const header = (slide, title) => {
-    slide.background = { color: DECK.PAPER };
-    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 1.1, fill: { color: DECK.FOREST } });
-    slide.addText(title, { x: 0.6, y: 0.28, w: 10.4, h: 0.6, fontSize: 26, color: DECK.WHITE, bold: true });
-    addLogo(slide, 11.3, 0.2, 1.45);
-  };
-  const kv = (rows) => rows.map((r) => [{ text: r[0], options: { bold: true, color: DECK.FOREST } }, { text: r[1], options: { align: "right", color: DECK.INK } }]);
-  const tableOpts = { fontSize: 15, color: DECK.INK, rowH: 0.6, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } };
-
-  // Slide 2 — property
-  s = pptx.addSlide(); header(s, "The Property");
-  const propRows = [["Address", data.address || "—"]];
-  if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
-  propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
-  propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
-  propRows.push([data.priceLabel || "Purchase price", data.asking ? usd(data.asking) : "—"]);
-  if (data.rentAnalysis && data.rentAnalysis.tenantRent > 0) {
-    propRows.push(["Current rent (tenant in place)", usd(data.rentAnalysis.tenantRent) + "/mo"]);
-    if (data.rentAnalysis.est > 0) propRows.push(["Market rent (RentCast)", usd(data.rentAnalysis.est) + "/mo"]);
-  } else propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
-  s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts });
-  s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
-
-  // Rent analysis: these are hold strategies, so the rent is what the buyer is underwriting.
-  if (data.rentAnalysis) addRentSlides(pptx, header, { ...data.rentAnalysis, used: num(data.rent) }, await getRentMapImage(data.rentAnalysis));
-  if (data.rentAnalysis) addRentUpsideSlide(pptx, header, data.rentAnalysis, data.upsideBase || (data.brrrr && data.brrrr.upsideBase));
-
-  // Slide 3 — the deal
-  s = pptx.addSlide(); header(s, `The Deal — ${data.dealType}`);
-  const dRows = (data.dealRows && data.dealRows.length ? data.dealRows : [["—", "—"]]);
-  s.addTable(kv(dRows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
-  if (dRows.some((r) => /PITI/i.test(String(r[0])))) s.addText("PITI = principal, interest, taxes & insurance — the monthly payment you take over.", { x: 0.6, y: 1.5 + dRows.length * 0.6 + 0.15, w: 7.9, h: 0.5, fontSize: 11, color: "6B7A6F", italic: true });
-  s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
-  s.addText([
-    { text: (data.totalLabel || "TOTAL DEAL VALUE").toUpperCase() + "\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } },
-    { text: data.totalValue || "—", options: { fontSize: 32, color: DECK.WHITE, bold: true } },
-  ], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
-  if (data.verdict) s.addText(data.verdict, { x: 8.9, y: 4.05, w: 3.8, h: 2.4, fontSize: 12, color: DECK.INK, align: "center" });
-
-  // Slide 4 — why this deal
-  const highlights = (data.highlights || []).filter(Boolean);
-  if (highlights.length) {
-    s = pptx.addSlide(); header(s, "Why this deal");
-    const items = highlights.slice(0, 6).map((h) => ({ text: h, options: { bullet: { code: "2713", indent: 18 }, color: DECK.INK, fontSize: 18, paraSpaceAfter: 14 } }));
-    s.addText(items, { x: 0.9, y: 1.6, w: 11.5, h: 4.6, valign: "top" });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
-  }
-
-  // Slide — returns snapshot
-  const R = data.returns;
-  if (R && (R.monthlyCF || R.cashToClose || R.annualCF)) {
-    s = pptx.addSlide(); header(s, "The Returns");
-    const card = (x, label, value, accent) => {
-      s.addShape(pptx.ShapeType.roundRect, { x, y: 1.6, w: 2.85, h: 1.9, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
-      s.addText([
-        { text: label.toUpperCase() + "\n", options: { fontSize: 11, color: "6B7A6F", bold: true } },
-        { text: value, options: { fontSize: 26, color: accent || DECK.FOREST, bold: true } },
-      ], { x, y: 1.85, w: 2.85, h: 1.4, align: "center", valign: "middle" });
-    };
-    card(0.6, "Cash to close", R.cashToClose ? usd(R.cashToClose) : "—", DECK.INK);
-    card(3.65, "Monthly cash flow", R.monthlyCF ? usd(R.monthlyCF) : "—", DECK.FOREST);
-    card(6.7, "Annual cash flow", R.annualCF ? usd(R.annualCF) : "—", DECK.FOREST);
-    card(9.75, "Cash-on-cash", R.coc ? R.coc.toFixed(1) + "%" : "—", DECK.ORANGE);
-    if (data.exits && data.exits.length) {
-      s.addText("Exit strategies", { x: 0.6, y: 3.9, w: 12, h: 0.4, fontSize: 15, color: DECK.FOREST, bold: true });
-      const ex = data.exits.slice(0, 4).map((e) => ({ text: e, options: { bullet: { code: "2022", indent: 16 }, color: DECK.INK, fontSize: 15, paraSpaceAfter: 8 } }));
-      s.addText(ex, { x: 0.7, y: 4.4, w: 12, h: 2, valign: "top" });
-    }
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
-  }
-
-  // Slide — what taking over this loan saves (financing value)
-  try {
-    const LS = data.loanSavings;
-    if (LS && LS.totalSaved > 0) {
-      s = pptx.addSlide(); header(s, "What This Loan Saves");
-      s.addText("Held to maturity — vs. financing this property with a new loan today", { x: 0.6, y: 1.18, w: 12.1, h: 0.3, fontSize: 12, color: DECK.SAGE, italic: true });
-      const lsCard = (x, label, value, sub) => {
-        s.addShape(pptx.ShapeType.roundRect, { x, y: 1.55, w: 5.95, h: 1.6, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
-        s.addText([
-          { text: label.toUpperCase() + "\n", options: { fontSize: 12, color: "6B7A6F", bold: true } },
-          { text: value + "\n", options: { fontSize: 30, color: DECK.FOREST, bold: true } },
-          { text: sub, options: { fontSize: 11, color: "8A968C" } },
-        ], { x: x + 0.25, y: 1.62, w: 5.45, h: 1.45, align: "left", valign: "middle" });
-      };
-      lsCard(0.6, "Rate savings", usd(LS.rateSaved), `${LS.rate.toFixed(2)}% vs ${LS.mkt.toFixed(2)}%, same ${LS.term} yrs left`);
-      lsCard(6.78, "Seasoning savings", usd(LS.seasoningSaved), `${LS.term} yrs left vs a fresh ${LS.effOrig}-yr loan`);
-      s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 3.35, w: 12.13, h: 1.0, fill: { color: DECK.FOREST }, rectRadius: 0.08 });
-      s.addText([
-        { text: "TOTAL INTEREST SAVED     ", options: { fontSize: 16, color: DECK.SAGE, bold: true } },
-        { text: usd(LS.totalSaved), options: { fontSize: 34, color: DECK.WHITE, bold: true } },
-      ], { x: 0.9, y: 3.35, w: 11.5, h: 1.0, align: "left", valign: "middle" });
-      const cmp = [
-        [{ text: "" }, { text: "Take this loan", options: { bold: true, color: DECK.FOREST, align: "center" } }, { text: "Get a new loan", options: { bold: true, color: DECK.INK, align: "center" } }],
-        [{ text: "Rate", options: { bold: true, color: DECK.FOREST } }, { text: LS.rate.toFixed(2) + "%", options: { align: "center", color: DECK.FOREST } }, { text: LS.mkt.toFixed(2) + "%", options: { align: "center", color: DECK.INK } }],
-        [{ text: "Years to pay", options: { bold: true, color: DECK.FOREST } }, { text: LS.term + " left", options: { align: "center", color: DECK.FOREST } }, { text: LS.effOrig + " fresh", options: { align: "center", color: DECK.INK } }],
-      ];
-      if (LS.haveRealPmt) cmp.push([{ text: "Payment", options: { bold: true, color: DECK.FOREST } }, { text: usd(LS.takePayment) + "/mo", options: { align: "center", color: DECK.FOREST } }, { text: usd(LS.newPmtFull) + "/mo", options: { align: "center", color: DECK.INK } }]);
-      cmp.push([{ text: "Total interest", options: { bold: true, color: DECK.FOREST } }, { text: usd(LS.intSubTo), options: { align: "center", color: DECK.FOREST } }, { text: usd(LS.intNew), options: { align: "center", color: DECK.INK } }]);
-      s.addTable(cmp, { x: 0.6, y: 4.6, w: 7.6, colW: [2.6, 2.5, 2.5], fontSize: 12.5, color: DECK.INK, rowH: 0.38, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } });
-      const miniCard = (y, label, value, sub) => {
-        s.addShape(pptx.ShapeType.roundRect, { x: 8.45, y, w: 4.28, h: 0.92, fill: { color: DECK.WHITE }, line: { color: DECK.LINE, width: 1 }, rectRadius: 0.08 });
-        s.addText([
-          { text: label.toUpperCase() + "   ", options: { fontSize: 10, color: "6B7A6F", bold: true } },
-          { text: value, options: { fontSize: 19, color: DECK.ORANGE, bold: true } },
-          { text: "\n" + sub, options: { fontSize: 9, color: "8A968C" } },
-        ], { x: 8.65, y: y + 0.04, w: 3.9, h: 0.84, align: "left", valign: "middle" });
-      };
-      miniCard(4.6, "Monthly payment relief", usd(LS.moRelief), "lighter payment vs a new loan");
-      miniCard(5.62, "Paid off sooner", LS.seasoned > 0 ? `${LS.seasoned} ${LS.seasoned === 1 ? "yr" : "yrs"}` : "—", "free & clear earlier");
-      s.addText("Realized in full only if the loan is held to payoff. Estimates for buyer review.", { x: 0.6, y: 6.5, w: 12.1, h: 0.3, fontSize: 9, color: "8A968C", italic: true });
-      s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
-    }
-  } catch (e) { /* loan-savings slide is optional — never block the rest of the deck */ }
-
-  // Slide — 5-year wealth projection
-  const P5 = data.projection;
-  if (P5 && P5.total5 > 0) {
-    s = pptx.addSlide(); header(s, "5-Year Wealth Snapshot");
-    const projRows = [
-      ["Equity today (below ARV)", usd(P5.startEquity)],
-      ["Loan paydown (5 yrs)", usd(P5.paydown5)],
-      [`Appreciation (5 yrs @ ${P5.apprRate}%/yr)`, usd(P5.appreciation5)],
-      ["Cumulative cash flow (5 yrs)", usd(P5.cumCF5)],
-    ];
-    s.addTable(kv(projRows), { x: 0.6, y: 1.6, w: 7.9, colW: [5.4, 2.5], ...tableOpts, rowH: 0.7 });
-    s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.6, w: 3.8, h: 2.8, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
-    s.addText([
-      { text: "TOTAL 5-YEAR VALUE\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } },
-      { text: usd(P5.total5), options: { fontSize: 30, color: DECK.WHITE, bold: true } },
-    ], { x: 8.9, y: 2.2, w: 3.8, h: 1.6, align: "center", valign: "middle" });
-    s.addText("Equity build + paydown + modest appreciation + cash flow. Appreciation is an assumption, not a guarantee.", { x: 0.6, y: 6.6, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
-  }
-
-  // Slide — CTA / contact
-  s = pptx.addSlide();
-  s.background = { color: DECK.FOREST };
-  addLogo(s, 5.45, 0.7, 2.45);
-  s.addText("Want this deal? Let's talk.", { x: 0.6, y: 2.35, w: 12.1, h: 0.8, fontSize: 34, color: DECK.WHITE, bold: true, align: "center" });
-
-  const c = data.contact || {};
-  let cy = 3.35;
-  if (c.name) { s.addText(c.name, { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 20, color: DECK.SAGE, bold: true, align: "center" }); cy += 0.55; }
-
-  s.addText([
-    { text: "✉  ", options: { color: DECK.SAGE } },
-    { text: YLHB.email, options: { color: DECK.WHITE, hyperlink: { url: `mailto:${YLHB.email}` } } },
-  ], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
-  cy += 0.5;
-  s.addText([
-    { text: "✆  ", options: { color: DECK.SAGE } },
-    { text: c.phone || YLHB.phone, options: { color: DECK.WHITE, hyperlink: { url: `tel:${YLHB.phoneRaw}` } } },
-  ], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
-  cy += 0.5;
-  s.addText([
-    { text: "⌂  ", options: { color: DECK.SAGE } },
-    { text: YLHB.site, options: { color: DECK.WHITE, bold: true, hyperlink: { url: YLHB.siteUrl } } },
-  ], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
-
-  s.addText("We work a short buyers list and move quickly — reach out to lock this one up.", { x: 0.6, y: cy + 0.7, w: 12.1, h: 0.5, fontSize: 14, color: DECK.SAGE, align: "center", italic: true });
-  s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
-  const safe = (data.address || "deal").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
-  const kind = String(data.dealType || "buyer-deck").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
-  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-${kind}-buyer-deck-${new Date().toISOString().slice(0, 10)}.pptx` });
-}
-
-// Dual-exit deck: shows the SAME deal as both a Fix & Flip and a BRRRR hold, so the buyer picks their lane.
-async function generateDualDeck(data) {
-  const PptxGenJS = await loadPptx();
-  const logo = await getLogoData();
-  const pptx = new PptxGenJS();
-  pptx.defineLayout({ name: "W", width: 13.333, height: 7.5 });
-  pptx.layout = "W";
-  pptx.author = "Your Local Home Buyer";
-  pptx.company = "Your Local Home Buyer";
-  const addLogo = (s, x, y, w) => { if (logo) s.addImage({ data: logo, x, y, w, h: w * 0.59 }); };
-  const header = (slide, title) => {
-    slide.background = { color: DECK.PAPER };
-    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 1.1, fill: { color: DECK.FOREST } });
-    slide.addText(title, { x: 0.6, y: 0.28, w: 10.4, h: 0.6, fontSize: 26, color: DECK.WHITE, bold: true });
-    addLogo(slide, 11.3, 0.2, 1.45);
-  };
-  const kv = (rows) => rows.map((r) => [{ text: r[0], options: { bold: true, color: DECK.FOREST } }, { text: r[1], options: { align: "right", color: DECK.INK } }]);
-  const tableOpts = { fontSize: 14, color: DECK.INK, rowH: 0.55, valign: "middle", fill: { color: DECK.WHITE }, border: { type: "solid", color: DECK.LINE, pt: 1 } };
-  const bullets = (arr, accent) => (arr || []).filter(Boolean).map((t) => ({ text: t, options: { bullet: { code: "2022", indent: 14 }, fontSize: 13, color: DECK.INK, paraSpaceAfter: 7 } }));
-
-  // Slide 1 — cover
-  let s = pptx.addSlide();
-  const headline = "Two ways to win — Fix & Flip or BRRRR";
-  if (data.photo) {
-    s.background = { color: DECK.INK };
-    try { s.addImage({ data: data.photo, x: 0, y: 0, w: 13.333, h: 5.1, sizing: { type: "cover", w: 13.333, h: 5.1 } }); } catch {}
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 5.1, w: 13.333, h: 2.4, fill: { color: DECK.FOREST } });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.35, w: 13.333, h: 0.15, fill: { color: DECK.ORANGE } });
-    addLogo(s, 11.1, 5.32, 1.6);
-    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 5.3, w: 10, h: 0.4, fontSize: 14, color: DECK.SAGE, bold: true, charSpacing: 3 });
-    s.addText(data.address || "Property address", { x: 0.6, y: 5.7, w: 10.3, h: 0.9, fontSize: 30, color: DECK.WHITE, bold: true });
-    s.addText(headline, { x: 0.6, y: 6.7, w: 11, h: 0.5, fontSize: 16, color: DECK.SAGE });
-  } else {
-    s.background = { color: DECK.FOREST };
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.7, w: 13.333, h: 0.8, fill: { color: DECK.ORANGE } });
-    addLogo(s, 0.6, 0.5, 2.3);
-    s.addText("INVESTMENT OPPORTUNITY", { x: 0.6, y: 2.5, w: 12.1, h: 0.5, fontSize: 16, color: DECK.SAGE, bold: true, charSpacing: 3 });
-    s.addText(data.address || "Property address", { x: 0.6, y: 3.0, w: 12.1, h: 1.2, fontSize: 38, color: DECK.WHITE, bold: true });
-    s.addText(headline, { x: 0.6, y: 4.35, w: 12.1, h: 0.6, fontSize: 18, color: DECK.SAGE });
-  }
-
-  // Slide 2 — property
-  s = pptx.addSlide(); header(s, "The Property");
-  const propRows = [["Address", data.address || "—"]];
-  if (data.subjectLine) propRows.push(["Property", data.subjectLine]);
-  propRows.push(["After-Repair Value (ARV)", data.arv ? usd(data.arv) : "—"]);
-  propRows.push(["Estimated rehab", data.repairs ? usd(data.repairs) : "—"]);
-  propRows.push([data.priceLabel || "Purchase price", data.asking ? usd(data.asking) : "—"]);
-  if (data.rentAnalysis && data.rentAnalysis.tenantRent > 0) {
-    propRows.push(["Current rent (tenant in place)", usd(data.rentAnalysis.tenantRent) + "/mo"]);
-    if (data.rentAnalysis.est > 0) propRows.push(["Market rent (RentCast)", usd(data.rentAnalysis.est) + "/mo"]);
-  } else propRows.push(["Estimated rent", data.rent ? usd(data.rent) + "/mo" : "—"]);
-  s.addTable(kv(propRows), { x: 0.6, y: 1.5, w: 12.1, colW: [4.2, 7.9], ...tableOpts, rowH: 0.6, fontSize: 15 });
-  s.addText("Estimates for buyer review. Buyer to verify all figures, condition, and terms independently.", { x: 0.6, y: 6.9, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
-
-  // Slide 3 — two ways to win (the hero comparison)
-  s = pptx.addSlide(); header(s, "Two ways to win");
-  // Flip card
-  s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y: 1.45, w: 5.9, h: 4.9, fill: { color: DECK.WHITE }, line: { color: DECK.ORANGE, width: 2 }, rectRadius: 0.1 });
-  s.addText("OPTION A — FIX & FLIP", { x: 0.85, y: 1.7, w: 5.4, h: 0.4, fontSize: 15, color: DECK.ORANGE, bold: true });
-  s.addText([{ text: "Profit potential\n", options: { fontSize: 12, color: "6B7A6F" } }, { text: data.flip.profitStr, options: { fontSize: 30, color: DECK.INK, bold: true } }], { x: 0.85, y: 2.15, w: 5.4, h: 1.1, valign: "top" });
-  s.addText(bullets(data.flip.bullets), { x: 0.95, y: 3.35, w: 5.3, h: 2.85, valign: "top" });
-  // BRRRR card
-  s.addShape(pptx.ShapeType.roundRect, { x: 6.85, y: 1.45, w: 5.9, h: 4.9, fill: { color: DECK.WHITE }, line: { color: DECK.FOREST, width: 2 }, rectRadius: 0.1 });
-  s.addText("OPTION B — BRRRR (HOLD)", { x: 7.1, y: 1.7, w: 5.4, h: 0.4, fontSize: 15, color: DECK.FOREST, bold: true });
-  s.addText([{ text: "Cash flow & DSCR\n", options: { fontSize: 12, color: "6B7A6F" } }, { text: data.brrrr.headlineStr + "\n", options: { fontSize: 24, color: DECK.FOREST, bold: true } }, { text: data.brrrr.returnStr, options: { fontSize: 13.5, color: DECK.INK, bold: true } }], { x: 7.1, y: 2.15, w: 5.4, h: 1.5, valign: "top" });
-  s.addText(bullets(data.brrrr.bullets), { x: 7.2, y: 3.7, w: 5.3, h: 2.5, valign: "top" });
-  s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
-
-  // Slide 4 — Option A detail (flip)
-  s = pptx.addSlide(); header(s, "Option A — Fix & Flip");
-  s.addTable(kv(data.flip.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts });
-  s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.ORANGE }, rectRadius: 0.1 });
-  s.addText([{ text: "PROFIT POTENTIAL\n", options: { fontSize: 13, color: DECK.WHITE, bold: true } }, { text: data.flip.profitStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
-  if (data.flip.note) s.addText(data.flip.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
-
-  // Slide 5 — Option B detail (BRRRR)
-  s = pptx.addSlide(); header(s, "Option B — BRRRR (Hold)");
-  s.addTable(kv(data.brrrr.rows), { x: 0.6, y: 1.5, w: 7.9, colW: [5.1, 2.8], ...tableOpts, rowH: 0.5 });
-  s.addText("PITIA = principal, interest, taxes, insurance & HOA — the all-in monthly payment on the new loan.", { x: 0.6, y: 1.5 + data.brrrr.rows.length * 0.5 + 0.15, w: 7.9, h: 0.5, fontSize: 11, color: "6B7A6F", italic: true });
-  s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.5, w: 3.8, h: 2.4, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
-  s.addText([{ text: "CASH-ON-CASH\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: data.brrrr.cocStr, options: { fontSize: 32, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 1.95, w: 3.8, h: 1.5, align: "center", valign: "middle" });
-  if (data.brrrr.note) s.addText(data.brrrr.note, { x: 8.9, y: 4.05, w: 3.8, h: 2.2, fontSize: 12, color: DECK.INK, align: "center" });
-
-  // Rent analysis belongs with the hold option: it is what the BRRRR refinance and cash flow run on.
-  if (data.rentAnalysis) addRentSlides(pptx, header, { ...data.rentAnalysis, used: num(data.rent) }, await getRentMapImage(data.rentAnalysis));
-  if (data.rentAnalysis) addRentUpsideSlide(pptx, header, data.rentAnalysis, data.upsideBase || (data.brrrr && data.brrrr.upsideBase));
-
-  // Slide 6 — 5-year wealth (BRRRR)
-  const P5 = data.brrrr.projection;
-  if (P5 && P5.total5 > 0) {
-    s = pptx.addSlide(); header(s, "BRRRR — 5-Year Wealth Snapshot");
-    const projRows = [
-      ["Equity after rehab (below ARV)", usd(P5.startEquity)],
-      ["Loan paydown (5 yrs)", usd(P5.paydown5)],
-      [`Appreciation (5 yrs @ ${P5.apprRate}%/yr)`, usd(P5.appreciation5)],
-      ["Cumulative cash flow (5 yrs)", usd(P5.cumCF5)],
-    ];
-    s.addTable(kv(projRows), { x: 0.6, y: 1.6, w: 7.9, colW: [5.4, 2.5], ...tableOpts, rowH: 0.7, fontSize: 15 });
-    s.addShape(pptx.ShapeType.roundRect, { x: 8.9, y: 1.6, w: 3.8, h: 2.8, fill: { color: DECK.FOREST }, rectRadius: 0.1 });
-    s.addText([{ text: "TOTAL 5-YEAR VALUE\n", options: { fontSize: 13, color: DECK.SAGE, bold: true } }, { text: usd(P5.total5), options: { fontSize: 30, color: DECK.WHITE, bold: true } }], { x: 8.9, y: 2.2, w: 3.8, h: 1.6, align: "center", valign: "middle" });
-    s.addText("Equity build + paydown + modest appreciation + cash flow. Appreciation is an assumption, not a guarantee.", { x: 0.6, y: 6.6, w: 12.1, h: 0.5, fontSize: 10, color: "8A968C", italic: true });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
-  }
-
-  // Slide 7 — How the returns grow (1–30 yr chart)
-  const CV = data.brrrr.curve;
-  if (CV && CV.series && CV.series.length && CV.series[CV.series.length - 1].total > 0) {
-    s = pptx.addSlide(); header(s, "How the returns grow — year 1 to 30");
-    const labels = CV.series.map((p) => String(p.year));
-    const values = CV.series.map((p) => Math.round(p.total));
-    s.addChart(pptx.ChartType.line, [{ name: "Total return ($)", labels, values }], {
-      x: 0.6, y: 1.4, w: 12.1, h: 3.55, showLegend: false, showTitle: false,
-      lineSize: 3, lineSmooth: true, color: DECK.FOREST, chartColors: [DECK.FOREST],
-      catAxisTitle: "Years held", showCatAxisTitle: true, catAxisTitleColor: "5A6B5E", catAxisTitleFontSize: 11,
-      valAxisTitle: "Total return ($)", showValAxisTitle: true, valAxisTitleColor: "5A6B5E", valAxisTitleFontSize: 11,
-      catAxisLabelFontSize: 9, valAxisLabelFontSize: 9, valAxisLabelColor: "5A6B5E", catAxisLabelColor: "5A6B5E",
-    });
-    const ms = CV.milestones;
-    const headRow = [{ text: "Years held", options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, align: "left", fontSize: 12 } },
-      ...ms.map((m) => ({ text: String(m.year), options: { bold: true, color: DECK.WHITE, fill: { color: DECK.FOREST }, align: "center", fontSize: 12 } }))];
-    const totalRow = [{ text: "Total return", options: { bold: true, color: DECK.INK, align: "left", fontSize: 12 } },
-      ...ms.map((m) => ({ text: usd(m.total), options: { color: DECK.INK, align: "center", fontSize: 12 } }))];
-    const rows = [headRow, totalRow];
-    if (CV.cashToClose > 0) {
-      rows.push([{ text: "Return on cash in", options: { bold: true, color: DECK.INK, align: "left", fontSize: 12 } },
-        ...ms.map((m) => ({ text: (m.total / CV.cashToClose).toFixed(1) + "x", options: { bold: true, color: DECK.ORANGE, align: "center", fontSize: 12 } }))]);
-    }
-    const colRest = (12.1 - 2.7) / ms.length;
-    s.addTable(rows, { x: 0.6, y: 5.15, w: 12.1, colW: [2.7, ...ms.map(() => colRest)], rowH: 0.46, valign: "middle", border: { type: "solid", color: DECK.LINE, pt: 0.5 } });
-    s.addText("Total return = equity captured + loan paydown + cash flow + appreciation at 3%/yr. Appreciation is an assumption, not a guarantee.", { x: 0.6, y: 6.95, w: 12.1, h: 0.4, fontSize: 9, color: "8A968C", italic: true });
-    s.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: DECK.ORANGE } });
-  }
-
-  // Slide 8 — CTA
-  s = pptx.addSlide();
-  s.background = { color: DECK.FOREST };
-  addLogo(s, 5.45, 0.7, 2.45);
-  s.addText("Flip it or hold it — either way, let's talk.", { x: 0.6, y: 2.35, w: 12.1, h: 0.8, fontSize: 30, color: DECK.WHITE, bold: true, align: "center" });
-  const c = data.contact || {};
-  let cy = 3.35;
-  if (c.name) { s.addText(c.name, { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 20, color: DECK.SAGE, bold: true, align: "center" }); cy += 0.55; }
-  s.addText([{ text: "✉  ", options: { color: DECK.SAGE } }, { text: YLHB.email, options: { color: DECK.WHITE, hyperlink: { url: `mailto:${YLHB.email}` } } }], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" }); cy += 0.5;
-  s.addText([{ text: "✆  ", options: { color: DECK.SAGE } }, { text: c.phone || YLHB.phone, options: { color: DECK.WHITE, hyperlink: { url: `tel:${YLHB.phoneRaw}` } } }], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" }); cy += 0.5;
-  s.addText([{ text: "⌂  ", options: { color: DECK.SAGE } }, { text: YLHB.site, options: { color: DECK.WHITE, bold: true, hyperlink: { url: YLHB.siteUrl } } }], { x: 0.6, y: cy, w: 12.1, h: 0.45, fontSize: 18, align: "center" });
-  s.addText("We work a short buyers list and move quickly — reach out to lock this one up.", { x: 0.6, y: cy + 0.7, w: 12.1, h: 0.5, fontSize: 14, color: DECK.SAGE, align: "center", italic: true });
-  s.addShape(pptx.ShapeType.rect, { x: 0, y: 6.9, w: 13.333, h: 0.6, fill: { color: DECK.ORANGE } });
-
-  const safe = (data.address || "deal").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
-  await pptx.writeFile({ fileName: `YLHB-${safe || "deal"}-Flip-BRRRR-buyer-deck-${new Date().toISOString().slice(0, 10)}.pptx` });
-}
-
-// Strip the leading house/street number from an address so buyer decks show street + city only (protects the exact property; the calculator's comp/search still use the full address).
-const stripHouseNum = (a) => String(a || "").replace(/^\s*\d[\w-]*\s+/, "");
-
-function BuyerDeckButton({ deal, common, generateOverride, label, priceLabel = "Purchase price", openKey = 0, onOpened }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [photo, setPhoto] = useState(null); // data URL of uploaded property photo
-  const [f, setF] = useState({
-    address: stripHouseNum(common.address) || "",
-    contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : "",
-    rent: common.rent ? String(Math.round(common.rent)) : "",
-    name: "", phone: "", email: "",
-  });
-  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target?.value ?? e }));
-  const openForm = () => { setF((p) => ({ ...p, address: stripHouseNum(common.address) || p.address, contract: common.contractDefault ? String(Math.round(common.contractDefault + (common.fee || 0))) : p.contract, rent: common.rent ? String(Math.round(common.rent)) : p.rent })); setOpen(true); };
-  // Asked for from the Offer Call's "Which strategy did you go with?" button.
-  useEffect(() => { if (openKey > 0) { openForm(); if (onOpened) onOpened(); } }, [openKey]);
-  const missing = ["address", "contract", "rent"].filter((k) => !String(f[k]).trim());
-
-  function onPhoto(e) {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) { alert("Please choose an image file (JPG or PNG)."); return; }
-    const r = new FileReader();
-    r.onload = () => setPhoto(String(r.result));
-    r.readAsDataURL(file);
-  }
-
-  async function go() {
-    if (missing.length) return;
-    setBusy(true);
-    const buyerPrice = num(f.contract);  // field already holds contract + your fee (buyer's all-in)
-    try {
-      if (generateOverride) {
-        await generateOverride({ address: f.address, asking: buyerPrice, rent: num(f.rent), photo, contact: { name: f.name, phone: f.phone, email: f.email } });
-        setOpen(false);
-        return;
-      }
-      await generateBuyerDeck({
-        dealType: deal.type,
-        address: f.address,
-        subjectLine: common.subjectLine,
-        arv: common.arv,
-        repairs: common.repairs,
-        asking: buyerPrice,
-        priceLabel,
-        rent: num(f.rent),
-        photo,
-        headline: deal.headline,
-        dealRows: deal.rows,
-        totalLabel: deal.totalLabel,
-        totalValue: deal.totalValue,
-        verdict: deal.verdict,
-        highlights: deal.highlights,
-        returns: deal.returns,
-        projection: deal.projection,
-        rentAnalysis: common.rentAnalysis || null,
-        upsideBase: deal.upsideBase || null,
-        loanSavings: deal.loanSavings,
-        basis: { compCount: common.compCount, avgPpsf: common.avgPpsf, rent: num(f.rent) },
-        exits: deal.exits,
-        contact: { name: f.name, phone: f.phone, email: f.email },
-      });
-      setOpen(false);
-    } catch (e) {
-      alert("Couldn't generate the deck: " + (e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const req = (k, label, money) => (
-    <div>
-      <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label} <span className="text-rose-500">*</span></label>
-      <div className={`mt-1 flex items-center rounded-lg border bg-white px-3 py-2 ${!String(f[k]).trim() ? "border-rose-300" : "border-slate-200"}`}>
-        {money && <span className="mr-1 text-slate-600">$</span>}
-        <input value={f[k]} onChange={set(k)} className="w-full text-sm outline-none" placeholder={label} />
-      </div>
-    </div>
-  );
-
-  return (
-    <>
-      <button onClick={openForm}
-        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
-        <FileDown className="h-4 w-4" /> {label || `Download buyer deck (.pptx) — ${deal.type}`}
-      </button>
-
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setOpen(false)}>
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-1 flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-800">{label || `Buyer deck — ${deal.type}`}</h3>
-              <button onClick={() => setOpen(false)} className="text-slate-600 hover:text-slate-600"><X className="h-5 w-5" /></button>
-            </div>
-            <p className="mb-4 text-[12px] text-slate-700">Confirm the details for the slides. Fields marked <span className="text-rose-500">*</span> are required.</p>
-            <div className="space-y-3">
-              {req("address", "Property address")}
-              <div className="grid grid-cols-2 gap-3">
-                {req("contract", `${priceLabel}${num(common.fee) > 0 ? " (incl. fee)" : ""}`, true)}
-                {req("rent", "Monthly rent", true)}
-              </div>
-              {num(common.fee) > 0 && <div className="-mt-1 text-[10px] text-slate-600">{priceLabel} includes your {usd(num(common.fee))} wholesale fee — what the buyer pays. Edit if needed.</div>}
-              <div className="border-t border-slate-100 pt-3">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Property photo for the cover (optional)</div>
-                {photo ? (
-                  <div className="flex items-center gap-3">
-                    <img src={photo} alt="cover" className="h-16 w-24 rounded-md object-cover" />
-                    <button onClick={() => setPhoto(null)} className="text-[12px] font-semibold text-rose-500 hover:underline">Remove</button>
-                  </div>
                 ) : (
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-3 text-[12px] font-semibold text-slate-700 hover:bg-slate-50">
-                    <FileDown className="h-4 w-4" /> Choose a photo (JPG/PNG)
-                    <input type="file" accept="image/*" onChange={onPhoto} className="hidden" />
-                  </label>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <Field label="Price"><Money value={d.price} onChange={(v) => set("price", v)} /></Field>
+                    <Field label="Down payment"><Money value={d.sfDown} onChange={(v) => set("sfDown", v)} /></Field>
+                    <Field label="Rate"><Num value={d.sfRate} onChange={(v) => set("sfRate", v)} suffix="%" /></Field>
+                    <Field label="Amortization"><Num value={d.sfAmort} onChange={(v) => set("sfAmort", v)} suffix="yrs" /></Field>
+                    <Field label="Balloon" hint="0 = none" tip="The year the rest of the balance is due in one payment."><Num value={d.sfBalloon} onChange={(v) => set("sfBalloon", v)} suffix="yrs" /></Field>
+                    <Field label="Closing costs"><Money value={d.closing} onChange={(v) => set("closing", v)} /></Field>
+                    {a.balloonDue > 0 && <div className="sm:col-span-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">About <b>{fmt$(a.balloonDue)}</b> comes due in year {num(d.sfBalloon)}. Plan now for how you will refinance or sell to pay it.</div>}
+                  </div>
                 )}
-                <div className="mt-1 text-[10px] text-slate-600">No photo? The cover falls back to a clean branded YLHB title card with the address.</div>
               </div>
-              <div className="border-t border-slate-100 pt-3">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-600">Contact for the CTA slide (optional)</div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <input value={f.name} onChange={set("name")} placeholder="Name" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
-                  <input value={f.phone} onChange={set("phone")} placeholder="Phone" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
-                  <input value={f.email} onChange={set("email")} placeholder="Email" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none" />
-                </div>
+            )}
+            {type !== "arb" && !(type === "creative" && d.creativeMode === "subto" && d.stEscrowed !== false) && (
+              <div className="mt-4 grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-2">
+                <Field label="Property taxes" hint={d.taxMode === 1 ? "monthly $" : "% of price per year"} tip="Verify with your county. Hobknob's sheet uses 1.85% of the price per year.">
+                  <div className="flex gap-2">
+                    <div className="flex-1">{d.taxMode === 1 ? <Money value={d.taxMonthly} onChange={(v) => set("taxMonthly", v)} /> : <Num value={d.taxPct} onChange={(v) => set("taxPct", v)} suffix="%" />}</div>
+                    <button type="button" onClick={() => set("taxMode", d.taxMode === 1 ? 0 : 1)} className="rounded-lg border border-slate-300 px-2 text-[11px] font-semibold text-slate-600">{d.taxMode === 1 ? "use %" : "use $"}</button>
+                  </div>
+                </Field>
+                <Field label="Insurance" hint={d.insMode === 1 ? "monthly $" : "% of price per year"} tip="Get a quote for a policy that covers renting by the room. Hobknob's sheet uses 1.2% of the price per year.">
+                  <div className="flex gap-2">
+                    <div className="flex-1">{d.insMode === 1 ? <Money value={d.insMonthly} onChange={(v) => set("insMonthly", v)} /> : <Num value={d.insPct} onChange={(v) => set("insPct", v)} suffix="%" />}</div>
+                    <button type="button" onClick={() => set("insMode", d.insMode === 1 ? 0 : 1)} className="rounded-lg border border-slate-300 px-2 text-[11px] font-semibold text-slate-600">{d.insMode === 1 ? "use %" : "use $"}</button>
+                  </div>
+                </Field>
               </div>
+            )}
+          </Card>
+
+          {/* 5. Setup costs */}
+          <Card n="5" title="Getting it ready" sub="Renovation, furnishing and the time it takes to fill the rooms.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Months until rented" tip="How long until the rooms are filled. The house costs money every month before then: the loan or lease, taxes, insurance and about half the utilities."><Num value={d.monthsToRent} onChange={(v) => set("monthsToRent", v)} /></Field>
+              <Field label="Other upfront costs" tip="Permits, inspections, photos, listing fees, LLC setup."><Money value={d.otherUpfront} onChange={(v) => set("otherUpfront", v)} /></Field>
             </div>
-            {missing.length > 0 && <div className="mt-3 text-[11px] text-rose-500">Fill in: {missing.map((m) => ({ address: "address", contract: "purchase price", rent: "monthly rent" }[m])).join(", ")}.</div>}
-            <button onClick={go} disabled={busy || missing.length > 0}
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
-              {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Building deck…</> : <><FileDown className="h-4 w-4" /> Generate PowerPoint</>}
-            </button>
-          </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200">
+              <button type="button" onClick={() => setShowCapex((s) => !s)} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                <span className="text-[13px] font-bold text-slate-800">Renovation and conversion <span className="font-mono text-slate-600">{fmt$(a.reno)}</span></span>
+                {showCapex ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+              </button>
+              {showCapex && (
+                <div className="grid gap-2 border-t border-slate-100 p-3 sm:grid-cols-2">
+                  {CAPEX_ITEMS.map(([k, l]) => <Field key={k} label={l}><Money value={d.capex[k] ?? ""} onChange={(v) => setIn("capex", k, v)} /></Field>)}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 rounded-xl border border-slate-200">
+              <button type="button" onClick={() => setShowFurnish((s) => !s)} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                <span className="text-[13px] font-bold text-slate-800">Furnishing and setup <span className="font-mono text-slate-600">{fmt$(a.furnishing)}</span>{num(d.furnishOverride) > 0 && <span className="ml-1 text-[11px] font-normal text-slate-500">(your number)</span>}</span>
+                {showFurnish ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+              </button>
+              {showFurnish && (
+                <div className="border-t border-slate-100 p-3">
+                  <p className="mb-2 text-[12px] text-slate-600">Hobknob's furnishing costs per room (as of 10/01/2025), appliances not included. Blank counts come from the property. Hobknob shops for decor at TJ Maxx, HomeGoods, Burlington and Goodwill, and for furniture on Facebook Marketplace, Amazon (beds), Wayfair, Walmart and Restore.</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {[["bedrooms", "Bedrooms", FURNISH_RATES.bedroom], ["bathrooms", "Bathrooms", FURNISH_RATES.bathroom], ["kitchens", "Kitchens", FURNISH_RATES.kitchen], ["laundry", "Laundry rooms", FURNISH_RATES.laundry],
+                      ["living", "Living rooms", FURNISH_RATES.living], ["dining", "Dining rooms", FURNISH_RATES.dining], ["sqft", "Sq ft (misc.)", FURNISH_RATES.perSqft]].map(([k, l, rate]) => (
+                      <Field key={k} label={l} hint={k === "sqft" ? "$0.70/sf" : `$${rate.toLocaleString()} each`}><Num value={d.furnish[k]} onChange={(v) => setIn("furnish", k, v)} placeholder={String(furnAuto[k] || 0)} /></Field>
+                    ))}
+                  </div>
+                  <div className="mt-2"><Check checked={d.furnish.hire} onChange={(v) => setIn("furnish", "hire", v)}>Hire someone to set it up (adds about $3 per sq ft)</Check></div>
+                  <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+                    {a.furn.lines.filter((l) => l.qty > 0).map((l) => <Row key={l.label} label={`${l.label} (${l.qty.toLocaleString()} x $${l.rate.toLocaleString()})`} value={fmt$(l.cost)} />)}
+                    {a.furn.hireExtra > 0 && <Row label="Setup labor" value={fmt$(a.furn.hireExtra)} />}
+                    <Row label="Estimate" value={fmt$(a.furn.total)} strong />
+                  </div>
+                  <Field label="Or use your own number" hint="overrides the estimate" className="mt-3 sm:w-64"><Money value={d.furnishOverride} onChange={(v) => set("furnishOverride", v)} placeholder="optional" /></Field>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* 6. Expenses */}
+          <Card n="6" title="Monthly operating costs" sub="Pre-filled with Hobknob's 12-month averages for a 5-bedroom co-living home. Change any of them to match your house and market.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              {EXPENSE_ITEMS.map(([k, l]) => <Field key={k} label={l}><Money value={d.expenses[k]} onChange={(v) => setIn("expenses", k, v)} /></Field>)}
+              <Field label="Management per room" hint={d.selfManage ? "self-managed" : `x ${a.rentedCount} = ${fmt$(a.mgmt)}`} tip="Hobknob budgets $50 per room per month. Keep it in even if you self-manage, so the deal still works the day you hire it out.">
+                <Money value={d.selfManage ? "0" : d.mgmtPerRoom} onChange={(v) => set("mgmtPerRoom", v)} />
+              </Field>
+            </div>
+            <div className="mt-3"><Check checked={d.selfManage} onChange={(v) => set("selfManage", v)}>I will manage it myself (management at $0)</Check></div>
+          </Card>
+
+          {/* 7. Long-term (ownership) */}
+          {a.owns && (
+            <Card n="7" title="5-year assumptions" sub="For the 5-year return. Talk to your CPA about your own tax picture.">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label="Appreciation per year"><Num value={d.appreciation} onChange={(v) => set("appreciation", v)} suffix="%" /></Field>
+                <Field label="Land share of price" tip="Land cannot be depreciated, only the building. Your county assessment shows the land value."><Num value={d.landPct} onChange={(v) => set("landPct", v)} suffix="%" /></Field>
+                <Field label="Your tax rate"><Num value={d.taxRate} onChange={(v) => set("taxRate", v)} suffix="%" /></Field>
+              </div>
+            </Card>
+          )}
+
+          <Card title="Notes"><textarea className={`${inputCls} min-h-[80px]`} value={d.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Zoning, HOA rules, lender, contractor quotes, questions to ask..." /></Card>
+
+          <Checklist type={type} />
         </div>
-      )}
-    </>
+
+        {/* ---------- Results ---------- */}
+        <aside id="results" className="scroll-mt-4 space-y-4 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto lg:pb-2">
+          <div className={`flex items-start gap-2.5 rounded-2xl border-2 px-4 py-3 ${vStyle}`}>
+            <VIcon className="mt-0.5 h-5 w-5 shrink-0" />
+            <div><div className="text-base font-extrabold">{a.verdict.label}</div><div className="text-[12.5px] leading-snug">{a.verdict.note}</div></div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <Stat label="Monthly cash flow" value={fmt$(a.cashFlow)} tone={a.cashFlow > 0 ? "good" : a.rentedCount ? "bad" : "default"} big sub={a.cfPerRoom != null ? `${fmt$(a.cfPerRoom)} per room` : null} />
+            {type === "arb"
+              ? <Stat label="Payback" value={a.paybackMonths ? `${Math.ceil(a.paybackMonths)} mo` : "--"} big sub="to earn back startup cash" tone={a.paybackMonths && a.paybackMonths <= TARGETS.arbPaybackSolid ? "good" : a.paybackMonths ? "warn" : "default"} />
+              : type === "hack"
+                ? <Stat label="Your housing cost" value={a.hack.yourCost <= 0 ? "$0" : fmt$(a.hack.yourCost)} big sub={a.hack.yourCost <= 0 ? `and you are paid ${fmt$(-a.hack.yourCost)}` : "per month to live there"} tone={a.hack.yourCost <= 0 ? "good" : "warn"} />
+                : <Stat label="Cash-on-cash" value={pct(a.coc)} big sub="yearly cash flow / cash in" tone={a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default"} />}
+            <Stat label="Cash needed" value={fmt$(a.cashIn)} sub="to buy, set up and fill it" />
+            <Stat label={a.owns ? "Cost per rentable room" : "Startup per room"} value={fmt$(a.costPerRoom)} sub={a.owns ? "price + renovation / rooms" : "cash in / rooms"} />
+            {a.owns && <Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"} sub={`rent / loan payment with taxes, insurance, HOA. Most want ${TARGETS.dscrMin}+`} tone={a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
+            <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
+            {type === "hack" && <Stat label="Cash-on-cash" value={pct(a.coc)} sub="yearly cash flow / cash in" />}
+            {a.owns && type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">Monthly breakdown</div>
+            <Row label={`Rent (${a.rentedCount} ${a.rentedCount === 1 ? "rental" : "rentals"} at 100%)`} value={fmt$(a.grossRent)} />
+            <Row label={`At ${pct(a.occ * 100)} occupancy${a.otherIncome ? " + other income" : ""}`} value={fmt$(a.effectiveIncome)} strong />
+            {a.leaseRent > 0 && <Row label="Lease to landlord" value={`-${fmt$(a.leaseRent)}`} />}
+            {a.taxesMo > 0 && <Row label="Property taxes" value={`-${fmt$(a.taxesMo)}`} />}
+            {a.insMo > 0 && <Row label="Insurance" value={`-${fmt$(a.insMo)}`} />}
+            <Row label="Operating costs" value={`-${fmt$(a.opex - a.mgmt)}`} />
+            {a.mgmt > 0 && <Row label="Management" value={`-${fmt$(a.mgmt)}`} />}
+            <Row label="Net operating income" value={fmt$(a.noi)} strong />
+            {a.pAndI > 0 && <Row label={type === "creative" && d.creativeMode === "subto" ? "Their loan payment" : "Loan payment (P&I)"} value={`-${fmt$(a.pAndI)}`} />}
+            {a.mi > 0 && <Row label="Mortgage insurance" value={`-${fmt$(a.mi)}`} />}
+            {a.notePay > 0 && <Row label="Seller carry note" value={`-${fmt$(a.notePay)}`} />}
+            <Row label="Cash flow" value={fmt$(a.cashFlow)} strong />
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">Cash needed</div>
+            {a.cashInLines.length ? a.cashInLines.map((l) => <Row key={l.label} label={l.label} value={fmt$(l.amt)} />) : <div className="text-[12px] text-slate-500">Fill in the deal to see it.</div>}
+            <Row label="Total" value={fmt$(a.cashIn)} strong />
+            {type === "arb" && num(d.deposit) > 0 && <div className="mt-1 text-[11px] text-slate-600">The {fmt$(num(d.deposit))} deposit comes back at the end of the lease if the house is in good shape.</div>}
+            {type === "arb" && num(d.leaseMonths) > 0 && a.cashFlow > 0 && (
+              <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[12px] text-slate-700">Over the {num(d.leaseMonths)}-month lease: <b>{fmt$(a.cashFlow * num(d.leaseMonths) - a.cashIn)}</b> after earning back your startup cash{num(d.deposit) > 0 ? `, plus the deposit back` : ""}.</div>
+            )}
+          </div>
+
+          {a.premium && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-600"><Users className="h-3.5 w-3.5" />Co-living vs. one family</div>
+              <Row label="Extra rent vs. the whole-house rent" value={fmt$(a.premium.gross)} />
+              <Row label="Extra costs you carry (utilities, wifi, cleaning, supplies, management)" value={`-${fmt$(a.premium.extras)}`} />
+              <Row label="What co-living adds each month" value={fmt$(a.premium.net)} strong />
+              <div className="mt-1 text-[11px] text-slate-600">{a.premium.net > 0 ? "Renting by the room beats renting the whole house, even after the extra costs." : "At these numbers a traditional rental would do as well or better. Check your room rents."}</div>
+            </div>
+          )}
+
+          {wit && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+              <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-emerald-800"><Lightbulb className="h-3.5 w-3.5" />What it takes</div>
+              {type === "hack" ? (
+                <div className="text-[12.5px] text-emerald-950">
+                  {wit.rentNeeded != null && <div>To live for free, the other rooms need to average <b>{fmt$(wit.rentNeeded)}</b> (now {fmt$(wit.avgNow)}).</div>}
+                  {wit.maxPrice != null && <div className="mt-1">Or buy at <b>{fmt$(wit.maxPrice)}</b> or less.</div>}
+                </div>
+              ) : (
+                <>
+                  <div className="mb-2 flex items-center gap-2 text-[12px] text-emerald-900">Target cash-on-cash <div className="w-20"><Num value={d.targetCoc} onChange={(v) => set("targetCoc", v)} suffix="%" /></div></div>
+                  <div className="space-y-1 text-[12.5px] text-emerald-950">
+                    {wit.rentNeeded != null && <div>Average rent per {showRooms && !showUnits ? "room" : "rental"}: <b>{fmt$(wit.rentNeeded)}</b> (now {fmt$(wit.avgNow)}).</div>}
+                    {wit.maxPrice != null && <div>Most you can pay: <b>{fmt$(wit.maxPrice)}</b>{a.price > 0 ? ` (now ${fmt$(a.price)})` : ""}.</div>}
+                    {wit.maxLease != null && <div>Most you can lease it for: <b>{fmt$(wit.maxLease)}/mo</b>{a.leaseRent > 0 ? ` (now ${fmt$(a.leaseRent)})` : ""}.</div>}
+                    {witBreakeven && witBreakeven.rentNeeded != null && <div className="text-[11.5px] text-emerald-900">Break-even rent: {fmt$(witBreakeven.rentNeeded)} average.</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {a.five && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <button type="button" onClick={() => setShowFive((s) => !s)} className="flex w-full items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-slate-600">5-year return</span>
+                {showFive ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+              </button>
+              {showFive && <>
+                <Row label="Cash flow" value={fmt$(a.five.cashflow5)} />
+                <Row label="Loan paid down" value={fmt$(a.five.paydown)} />
+                <Row label={`Appreciation (${pct(num(d.appreciation))}/yr)`} value={fmt$(a.five.appreciation)} />
+                <Row label="Depreciation tax savings" value={fmt$(a.five.depreciationSavings)} />
+                <Row label="Total over 5 years" value={fmt$(a.five.total)} strong />
+                <Row label="Average yearly return on cash in" value={pct(a.five.avgAnnualPct)} muted />
+              </>}
+            </div>
+          )}
+
+          <p className="px-1 text-[11px] leading-snug text-slate-500">For education only. These are estimates, not guarantees, and real results vary. This is not financial, legal or tax advice. Verify every number with your lender, title company, insurance agent, CPA and local codes before you commit.</p>
+          <button onClick={onLock} className="px-1 text-[11px] text-slate-400 underline">Lock the analyzer</button>
+        </aside>
+      </main>
+    </div>
   );
 }
 
-// ---------- shared: per-tab explainer + free learning links ----------
-const PACE_CHANNEL = "https://www.youtube.com/channel/UCRkUNGepO8YnTFHSj7urWsQ";
-const ytSearch = (q) => `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
-
-const EDU = {
-  cash: {
-    title: "Cash / MAO (wholesaling)",
-    what: "A straight cash play. You lock the property up under an agreement at a low enough price that a cash buyer can fix it and flip it — and you pocket the difference as an assignment fee, or buy it yourself.",
-    how: "Start from the ARV (what it's worth fixed up), take 75–80% of it (the band), then subtract repairs and your fee. That's your Max Allowable Offer — the most you can pay and still leave meat on the bone for the next buyer.",
-    analogy: "Like buying wholesale to resell at retail — your profit is baked in at the buy.",
-    videos: [{ label: "Wholesaling basics", q: "pace morby wholesaling for beginners" }, { label: "How to calculate MAO", q: "pace morby maximum allowable offer ARV" }],
-  },
-  subto: {
-    title: "Subject-To (Sub-To)",
-    what: "You buy the house but leave the seller's existing mortgage in place — you take over their payments, while the loan stays in their name. You get the deed; they get out from under the debt.",
-    how: "Gold when the seller has a low locked-in interest rate. You inherit that cheap payment (PITI), cover any back payments, and maybe hand the seller a little cash for their equity. Your money is made on the gap between the rent and that low inherited payment.",
-    analogy: "Like taking over someone's gym membership at last year's rate instead of signing up at today's higher price.",
-    videos: [{ label: "Subject-To explained", q: "pace morby subject to explained" }, { label: "Sub-To from start to finish", q: "pace morby subject to deal walkthrough" }],
-  },
-  hybrid: {
-    title: "Hybrid (Sub-To + Seller Note)",
-    what: "A combo deal: you take over the existing low-rate loan subject-to, AND the seller carries a second note for their equity on top.",
-    how: "The cheap first loan stays in place. The gap between the price and that loan (minus your down) becomes a seller-financed note — often at 0%. You end up with two payments: one cheap and inherited, one to the seller. It gets deals done when the seller needs more than just debt relief.",
-    analogy: "Sub-To handles the bank's loan; the seller note handles the seller's equity — best of both.",
-    videos: [{ label: "Hybrid deals explained", q: "pace morby hybrid subject to seller carry explained" }, { label: "Combining sub-to + seller finance", q: "pace morby subto seller finance combo" }],
-  },
-  sf: {
-    title: "Seller Financing",
-    what: "The seller becomes the bank. Instead of paying a mortgage company, you make payments straight to the seller over time, on terms the two of you agree to.",
-    how: "You negotiate the price, down payment, interest rate (often 0% in trade for a higher price), how long it amortizes, and whether there's a balloon. No bank, no qualifying. Works best when the seller owns the home free-and-clear.",
-    analogy: "Like a payment plan made directly with the owner — they hold the note, you hold the keys.",
-    videos: [{ label: "Seller finance explained", q: "pace morby seller finance explained" }, { label: "Structuring 0% seller finance", q: "pace morby zero percent seller financing" }],
-  },
-  nov: {
-    title: "Novation",
-    what: "An agreement that lets you improve and re-sell the seller's home for more — you keep the spread between what you promised them and what it sells for, without ever taking title.",
-    how: "Start from what the house will sell for. Take off the agent commissions, the closing costs, your desired profit and the repairs, and what is left is the most you can promise the seller. You're not buying it to hold — you're adding value and capturing the resale spread.",
-    analogy: "Like a consignment deal: you don't own it, you just make it worth more and take a cut of the upside.",
-    videos: [{ label: "Novation agreements", q: "pace morby novation agreement real estate" }, { label: "Novation vs wholesaling", q: "pace morby novation vs wholesale" }],
-  },
-  rental: {
-    title: "Rental (Buy-and-Hold + the 1% rule)",
-    what: "Buying a property to keep as a long-term rental for cash flow and appreciation. The 1% rule is a quick screen: the monthly rent should be at least 1% of the purchase price.",
-    how: "Estimate the rent, then divide by your target percentage to get the highest price that still pencils. It's a fast filter to spot cash-flowing deals — but it ignores taxes, insurance, vacancy, and management, so always underwrite the real numbers before you commit.",
-    analogy: "The 1% rule is a metal detector, not a shovel — it tells you where to dig, not that there's treasure.",
-    videos: [{ label: "Buy-and-hold rentals", q: "pace morby buy and hold rental" }, { label: "The 1% rule explained", q: "1 percent rule rental property explained" }],
-  },
-};
-
-function TabEducation({ id }) {
-  const e = EDU[id];
-  if (!e) return null;
-  return (
-    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
-      <div className="mb-2 flex items-center gap-2">
-        <Info className="h-4 w-4 text-emerald-500" />
-        <h3 className="text-sm font-bold text-slate-700">What is {e.title}?</h3>
-      </div>
-      <p className="text-[13px] leading-relaxed text-slate-600">{e.what}</p>
-      <p className="mt-2 text-[13px] leading-relaxed text-slate-600"><b className="font-semibold text-slate-700">How it works:</b> {e.how}</p>
-      {e.analogy && (
-        <p className="mt-2 rounded-lg bg-white px-3 py-2 text-[12px] italic leading-relaxed text-slate-700">💡 {e.analogy}</p>
-      )}
-      <div className="mt-3">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Learn more — free Pace Morby videos</div>
-        <div className="mt-1.5 flex flex-wrap gap-2">
-          {e.videos.map((v, k) => (
-            <a key={k} href={ytSearch(v.q)} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:border-rose-300 hover:text-rose-600">
-              <Play className="h-3 w-3 text-rose-500" /> {v.label} <ExternalLink className="h-2.5 w-2.5 text-slate-300" />
-            </a>
-          ))}
-          <a href={PACE_CHANNEL} target="_blank" rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">
-            Pace Morby's channel <ExternalLink className="h-2.5 w-2.5 text-slate-300" />
-          </a>
-        </div>
-        <div className="mt-1.5 text-[10px] text-slate-600">Links open a YouTube search of Pace Morby's content on the topic — always current, never a dead link.</div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- CASH ----------
-function CashTab(props) {
-  const { arv, repairs, underPct, overPct, isOver, ruleMaoUnder, ruleMaoOver, investorMaoUnder, investorMaoOver, activeInvestorMao, activeRuleMao, activePct, wholesaleFee, setWholesaleFee, sellingPct, setSellingPct, holding, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride, holdMonths, askingPrice, setAskingPrice, rentOverride, setRentOverride, rentDefault, deckCommon, onGenerateRent, rentLoading, rentMsg, hasAddress } = props;
-  const ask = num(askingPrice);
-  let status = "maybe", headline = "Enter an asking price to grade the deal", detail = "";
-  if (ask > 0 && arv > 0) {
-    const spread = activeInvestorMao - ask;
-    if (ask <= activeInvestorMao) {
-      status = "go"; headline = "WHOLESALE — lock it";
-      detail = `At ${usd(ask)} you're under your MAO with ~${usd(spread)} of room above your fee (${activePct}% band).`;
-    } else if (ask <= activeRuleMao) {
-      status = "maybe"; headline = "FLIP margin — thin for an assignment";
-      detail = `Works as a flip at the ${activePct}% rule, but ${usd(ask - activeInvestorMao)} over your wholesale MAO. Renegotiate or shrink the fee.`;
-    } else {
-      status = "no"; headline = "PASS / renegotiate";
-      detail = `Asking is ${usd(ask - activeRuleMao)} above even the ${activePct}% MAO. Numbers don't work at this price.`;
-    }
-  }
-  return (
-    <div className="space-y-4">
-      {/* INPUTS: your wholesale numbers (full width) */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SectionTitle>Your wholesale numbers</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <Field label="Your wholesale fee" info="Your assignment fee — the spread YOU keep for putting the deal together. Subtracted to get your MAO (Max Allowable Offer), and added on top for the buyer's all-in on the deck. Leave it blank to use the fee scale for the ARV's price range."><MoneyInput value={props.feeField.typed} onChange={props.feeField.set} placeholder={props.feeField.auto > 0 ? String(props.feeField.auto) : "set by the ARV"} filled /></Field>
-            <FeeScaleNote f={props.feeField} />
-          </div>
-          <Field label="Seller asking price" hint="same as Their number in the Offer Call" info="This is the same number as Their number in the Offer Call. Change it in either place and both update. It grades the deal while you negotiate and prints on the buyer deck as your agreement price (plus your wholesale fee), so once they approve the agreement, update it to the locked number."><MoneyInput value={askingPrice} onChange={setAskingPrice} /></Field>
-        </div>
-      </div>
-
-      {/* VERDICT */}
-      <Verdict status={status} headline={headline} detail={detail} />
-
-      {/* RESULTS: MAO table + stat cards */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm overflow-x-auto">
-          <SectionTitle>Max Allowable Offer — both bands</SectionTitle>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-[11px] uppercase tracking-wide text-slate-600">
-                <th className="py-1 text-left font-semibold"></th>
-                <th className={`py-1 text-right font-semibold ${!isOver ? "text-emerald-600" : ""}`}>Under $200k ({underPct}%)</th>
-                <th className={`py-1 text-right font-semibold ${isOver ? "text-emerald-600" : ""}`}>Over $200k ({overPct}%)</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono tabular-nums">
-              <CRow label="% of ARV" a={usd(arv * underPct / 100)} b={usd(arv * overPct / 100)} />
-              <CRow label="− Repairs" a={usd(repairs)} b={usd(repairs)} />
-              <CRow label="= Wholesale price" a={usd(ruleMaoUnder)} b={usd(ruleMaoOver)} muted />
-              <CRow label="− Your fee" a={usd(num(wholesaleFee))} b={usd(num(wholesaleFee))} />
-              <tr className="border-t-2 border-slate-200">
-                <td className="py-2 font-sans text-[11px] font-bold uppercase tracking-wide text-slate-700">MAO (Max Allowable Offer)</td>
-                <td className={`py-2 text-right text-base font-bold ${!isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoUnder)}</td>
-                <td className={`py-2 text-right text-base font-bold ${isOver ? "text-emerald-600" : "text-slate-900"}`}>{usd(investorMaoOver)}</td>
-              </tr>
-              <tr className="border-t border-slate-100">
-                <td className="py-1.5 font-sans text-[11px] font-semibold uppercase tracking-wide text-slate-700">Opening offer ({Math.round(ANCHOR_PCT * 100)}% of MAO)</td>
-                <td className={`py-1.5 text-right ${!isOver ? "font-bold text-emerald-700" : "text-slate-700"}`}>{usd(Math.max(0, Math.round(investorMaoUnder * ANCHOR_PCT)))}</td>
-                <td className={`py-1.5 text-right ${isOver ? "font-bold text-emerald-700" : "text-slate-700"}`}>{usd(Math.max(0, Math.round(investorMaoOver * ANCHOR_PCT)))}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Stat label={`${activePct}% Rule MAO`} value={usd(activeRuleMao)} tone={activeRuleMao > 0 ? "default" : "bad"} big sub="ARV × band − repairs" />
-          <Stat label="MAO (Max Allowable Offer)" value={usd(activeInvestorMao)} tone={activeInvestorMao > 0 ? "good" : "bad"} big sub="after your fee" />
-          <Stat label="ARV" value={usd(arv)} sub={`repairs ${usd(repairs)}`} />
-          <Stat label="Opening offer" value={activeInvestorMao > 0 ? usd(Math.round(activeInvestorMao * ANCHOR_PCT)) : "—"} tone={activeInvestorMao > 0 ? "good" : "default"} big sub={`${Math.round(ANCHOR_PCT * 100)}% of MAO · say this first`} />
-          <div className="sm:col-span-2 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11.5px] leading-snug text-emerald-900">
-            <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-            <span><b>Open at the opening offer, not the MAO.</b> {ANCHOR_WHY}{activeInvestorMao > 0 ? ` That leaves ${usd(activeInvestorMao - Math.round(activeInvestorMao * ANCHOR_PCT))} of room between the two.` : ""}</span>
-          </div>
-        </div>
-      </div>
-
-
-      <BrrrrPanel
-        shared={props.brrrrIn}
-        deckOpenKey={props.deckOpenKey} onDeckOpened={props.onDeckOpened} rentInfo={props.rentInfo}
-        arv={arv} repairs={repairs} rentDefault={rentDefault} rentOverride={rentOverride} setRentOverride={setRentOverride} purchaseDefault={activeInvestorMao}
-        askingPrice={askingPrice} wholesaleFee={wholesaleFee} deckCommon={deckCommon}
-        onGenerateRent={onGenerateRent} rentLoading={rentLoading} rentMsg={rentMsg} hasAddress={hasAddress}
-        flipDeck={{
-          sellingCost: arv * num(sellingPct) / 100,
-          holdingCost: num(holding),
-          sellingPct: num(sellingPct),
-          holdMonths,
-          assumptions: { sellingPct, setSellingPct, carryPerMonth, setCarryPerMonth, rehabPerMonth, setRehabPerMonth, holdingOverride, setHoldingOverride },
-        }}
-      />
-      <TabEducation id="cash" />
-    </div>
-  );
-}
-// Under every creative down payment box: the $10K cap, said the moment a number goes over it.
-const DownCapNote = ({ amount, what = "down" }) => {
-  const a = num(amount);
-  if (a <= CREATIVE_DOWN_MAX) return a > 0 ? <div className="mt-1 text-[10.5px] text-slate-600">Max {usd(CREATIVE_DOWN_MAX)} {what} on a creative offer.</div> : null;
-  return (
-    <div className="mt-1.5 flex items-start gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2 py-1.5 text-[10.5px] leading-snug text-rose-900">
-      <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-rose-600" />
-      <span><b>{usd(a - CREATIVE_DOWN_MAX)} over our {usd(CREATIVE_DOWN_MAX)} max.</b> We never put more than {usd(CREATIVE_DOWN_MAX)} {what} on a creative offer. Move the rest into the payments over time, or bring the price down.</span>
-    </div>
-  );
-};
-
-// One line under every wholesale fee box: where the number comes from and how to get back to the scale.
-const FeeScaleNote = ({ f }) => {
-  if (!f) return null;
-  const typed = String(f.typed ?? "").trim() !== "";
-  return (
-    <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-      {typed
-        ? <>Your number for this deal. Clear it to go back to the fee scale{f.auto > 0 ? ` (${usd(f.auto)})` : ""}.</>
-        : f.auto > 0
-          ? <>From the fee scale: <b>{usd(f.auto)}</b> for {f.tierLabel}.{f.over500 ? " The scale stops at $500K, so type your own fee if this one is too low." : " Type a number to override it for this deal."}</>
-          : <>Fills in from the fee scale once the deal has an ARV: $10K under $100K, $15K to $200K, $20K to $300K, $25K to $400K, $35K to $500K.</>}
-    </div>
-  );
-};
-
-// As-Is formula panel (Jerry Norton's Instant Offer Calculator). A fast screen off the online values,
-// shown next to the ARV MAO so the rep can see when the two methods disagree.
-function AsIsPanel({ address, ai, vals, set, ask, arvMao, arv, heavyRehab }) {
-  const a = String(address || "").trim();
-  const look = (site) => a ? gsearch(`${a} ${site}`) : null;
-  const src = [
-    ["aiZillow", "Zillow", "zillow"], ["aiRealtor", "Realtor.com", "realtor.com"],
-    ["aiRedfin", "Redfin", "redfin"], ["aiOther", "Other", null],
+// Before-you-commit checklist, by deal type.
+function Checklist({ type }) {
+  const [open, setOpen] = useState(false);
+  const common = [
+    "Zoning and occupancy rules: how many unrelated adults can live there, and whether rent-by-the-room is allowed.",
+    "Fire and safety code for every bedroom: egress window, smoke and CO detectors, a door that locks.",
+    "Parking: one spot per resident is a common local requirement for room rentals.",
+    "Insurance quote for a policy that covers rent-by-the-room.",
+    "HOA rules, if there is an HOA. Many ban short and mid-term rentals or room rentals.",
   ];
-  const over = ask > 0 && ai.ready ? ask - ai.maxBuy : null;
-  const gap = ai.ready && arvMao > 0 ? ai.maxBuy - arvMao : null;
-  const rows = ai.ready ? [
-    [`Average as-is value (${ai.count} source${ai.count === 1 ? "" : "s"})`, usd(ai.avg), null],
-    [`× ${pct2(ai.exitPct)} exit, what a cash buyer pays${ai.typedExit ? " (typed here)" : ""}`, usd(ai.exitPrice), null],
-    [`− Wholesale fee${ai.typedFee ? " (your fee for this deal)" : ai.feeFromArv ? " (the deal's fee, set by the ARV)" : ""}`, usd(ai.fee), null],
-    ["= Max buy", usd(ai.maxBuy), `${pct2(ai.avg > 0 ? (ai.maxBuy / ai.avg) * 100 : 0)} of value`],
-  ] : [];
+  const byType = {
+    buy: ["A lender that allows rent-by-the-room. Many DSCR lenders do, but confirm before you are under contract.", "Contractor bids for every conversion line, plus 10-15% for surprises."],
+    arb: ["Written permission in the lease to rent the rooms to others.", "A lease long enough to earn back your startup cash.", "Who handles repairs, and the landlord's response time."],
+    creative: ["An attorney or title company experienced in Subject-To and seller financing.", "The mortgage statement, to verify the balance, payment and that it is current.", "A plan for the due-on-sale clause, and how payments will be made and verified."],
+    hack: ["The lender's owner-occupancy rules: how long you must live there.", "Whether house rules and shared space still work for you as the person living there."],
+  };
+  const items = [...common, ...(byType[type] || [])];
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-2">
-        <SectionTitle>As-Is formula (no comps, no repair estimate)</SectionTitle>
-        <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-800">Quick number</span>
-      </div>
-      <div className="-mt-1 mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] leading-snug text-emerald-900">
-        <b>Short on time, or just need a quick number? Use this.</b> Type what Zillow, Realtor.com and Redfin say the house is worth today, and it gives you an opening offer and a max. No comps or repair estimate needed. The same boxes are in the Offer Call's Prep stage.
-      </div>
-      <div className="mb-3 text-[11.5px] leading-snug text-slate-700">
-        Jerry Norton's instant offer, with the exit and offer percentages tuned for Louisville: average the online as-is values, take what a cash buyer pays for that price range, subtract the wholesale fee for that range, then open lower. When you have more time, the MAO on the Cash / MAO tab, built on real comps and a repair number, is the more accurate offer, so use this to cross-check it.
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {src.map(([k, label, site]) => (
-          <div key={k}>
-            <Field label={label} hint="as-is value"><MoneyInput value={vals[k]} onChange={set[k]} placeholder="0" /></Field>
-            {site && look(site) && (
-              <a href={look(site)} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-[10.5px] font-semibold text-emerald-700 hover:underline">
-                <Search className="h-3 w-3" /> Look it up on {label} <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            )}
-          </div>
-        ))}
-      </div>
-      {ai.count === 1 && (
-        <div className="mt-2 text-[11px] leading-snug text-amber-800">Only one value so far. The formula averages up to four, so add the others when you can. One site's estimate can be far off on a house that needs work.</div>
-      )}
-      {ai.spread > 25 && (
-        <div className="mt-2 text-[11px] leading-snug text-amber-800">The online values are {pct2(ai.spread)} apart. Check whether one site has old or wrong data (beds, baths, sq ft) before trusting the average.</div>
-      )}
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label="Exit %" hint={ai.typedExit ? "typed here" : ai.tier ? "from the scale" : ai.custom ? "type it, over $500K" : ""}>
-          <PlainInput value={vals.aiExit} onChange={set.aiExit} placeholder={ai.tier ? String(ai.tier.exit) : ""} suffix="%" />
-        </Field>
-        <Field label="Wholesale fee" hint={ai.typedFee ? "the deal's fee · same everywhere" : ai.feeFromArv ? "the deal's fee, by the ARV" : ai.tier ? "scale, by the as-is value" : ai.custom ? "type it, over $500K" : ""}
-          info="This is the deal's wholesale fee, the same one on the Cash tab, the Offer Call and every strategy. Typing here changes it everywhere. Clear it to go back to the fee scale.">
-          <MoneyInput value={vals.aiFee} onChange={set.aiFee} placeholder={ai.fee > 0 ? String(ai.fee) : ai.tier ? String(ai.tier.fee) : ""} />
-        </Field>
-        <Field label="Opening offer %" hint={ai.typedOffer ? "typed here" : ai.tier ? "of the max buy, from the scale" : ai.custom ? "type it, over $500K" : ""}>
-          <PlainInput value={vals.aiOffer} onChange={set.aiOffer} placeholder={ai.tier ? String(ai.tier.offer) : ""} suffix="%" />
-        </Field>
-      </div>
-      {ai.ready && heavyRehab && (
-        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
-          This house reads as a gut job. The Louisville percentages assume a moderate rehab, so this formula will overpay on heavy repairs. Trust the ARV MAO above on this one.
-        </div>
-      )}
-      {ai.needsCustom && (
-        <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900">
-          The average is over $500K. The scale has no numbers past $500K, so type the Exit %, the wholesale fee and the opening offer % to run it.
-        </div>
-      )}
-      <div className="mt-3 grid gap-4 md:grid-cols-2">
-        <div className="overflow-hidden rounded-xl border border-slate-200">
-          {ai.ready ? (
-            <>
-              {rows.map(([label, val, sub], i) => (
-                <div key={i} className="flex items-center justify-between border-b border-slate-100 px-3 py-2 text-sm">
-                  <span className="text-slate-700">{label}</span>
-                  <span className="text-right font-mono text-slate-800">{val}{sub && <span className="ml-2 font-sans text-[10.5px] text-slate-600">{sub}</span>}</span>
-                </div>
-              ))}
-              <div className="flex items-center justify-between bg-emerald-50 px-3 py-2.5">
-                <span className="text-sm font-bold text-slate-900">Opening offer <span className="font-normal text-[11px] text-slate-700">({pct2(ai.offerPct)} of max buy{ai.typedOffer ? ", typed here" : ""}, {pct2(ai.avg > 0 ? (ai.offer / ai.avg) * 100 : 0)} of value)</span></span>
-                <span className="font-mono text-lg font-bold text-emerald-700">{usd(ai.offer)}</span>
-              </div>
-            </>
-          ) : (
-            <div className="px-3 py-4 text-center text-[12px] text-slate-600">{ai.count ? "Fill in the boxes above to run it." : "Enter at least one online as-is value to run it."}</div>
-          )}
-        </div>
-        <div className="space-y-2">
-          {ai.ready && (
-            <div className={`rounded-lg border px-3 py-2 text-[12px] leading-snug ${ai.maxBuy <= 0 ? "border-rose-200 bg-rose-50 text-rose-800" : over == null ? "border-slate-200 bg-slate-50 text-slate-700" : over > 0 ? "border-rose-200 bg-rose-50 text-rose-800" : ask <= ai.offer ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
-              {ai.maxBuy <= 0 ? <>The fee is more than a cash buyer would pay. This formula says there is no cash deal here.</>
-                : over == null ? <>Open at <b>{usd(ai.offer)}</b> and negotiate up to <b>{usd(ai.maxBuy)}</b> at most. Enter the seller's asking price above to grade it.</>
-                : over > 0 ? <>Their number is <b>{usd(over)}</b> over the as-is max buy of {usd(ai.maxBuy)}.</>
-                : ask <= ai.offer ? <>Their number is at or under the opening offer. Strong cash deal on this formula.</>
-                : <>Their number is between the opening offer and the max buy, with <b>{usd(ai.maxBuy - ask)}</b> of room left.</>}
-            </div>
-          )}
-          {gap != null && (
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] leading-snug text-slate-700">
-              ARV method MAO: <b className="font-mono">{usd(arvMao)}</b>. As-Is max buy: <b className="font-mono">{usd(ai.maxBuy)}</b>.{" "}
-              {Math.abs(gap) <= Math.max(10000, arvMao * 0.1)
-                ? <>The two methods land close together, which is a good sign the numbers are sound.</>
-                : <span className="text-amber-800">They are <b>{usd(Math.abs(gap))}</b> apart. {gap > 0 ? "The As-Is formula is higher, so check whether the repair number is too high or the online values are too optimistic for this condition." : "The As-Is formula is lower, so check whether the ARV is too high or the repairs too light."} Find out which one is off before you make the offer.</span>}
-            </div>
-          )}
-          <div className="overflow-hidden rounded-lg border border-slate-200 text-[11px]">
-            <div className="grid grid-cols-4 bg-slate-50 px-2 py-1 font-semibold uppercase tracking-wide text-slate-700">
-              <span>Avg value</span><span className="text-right">Exit %</span><span className="text-right">Fee</span><span className="text-right">Offer %</span>
-            </div>
-            {ASIS_SCALE.map((t, i) => (
-              <div key={i} className={`grid grid-cols-4 px-2 py-1 font-mono ${ai.tierIdx === i ? "bg-emerald-50 font-bold text-emerald-800" : "text-slate-700"}`}>
-                <span className="font-sans">{t.label}</span>
-                <span className="text-right">{t.exit}%</span>
-                <span className="text-right">{usd(t.fee)}</span>
-                <span className="text-right">{t.offer}%</span>
-              </div>
-            ))}
-            <div className={`grid grid-cols-4 px-2 py-1 ${ai.tierIdx === 5 ? "bg-amber-50 font-bold text-amber-900" : "text-slate-700"}`}>
-              <span>Over $500K</span><span className="col-span-3 text-right">type your own</span>
-            </div>
-            {/* The green row is the scale. When the math above runs on a typed number instead, say so
-                right here, so the table and the math never look like they disagree. */}
-            {ai.ready && ai.tier && (() => {
-              const diffs = [];
-              if (ai.fee !== ai.tier.fee) diffs.push(<>the deal's <b>{usd(ai.fee)}</b> fee {ai.typedFee ? "typed for this deal" : "for the ARV's range"} instead of {usd(ai.tier.fee)} for the as-is range</>);
-              if (ai.exitPct !== ai.tier.exit) diffs.push(<>a <b>{pct2(ai.exitPct)}</b> exit instead of {ai.tier.exit}%</>);
-              if (ai.offerPct !== ai.tier.offer) diffs.push(<>a <b>{pct2(ai.offerPct)}</b> opening offer instead of {ai.tier.offer}%</>);
-              if (!diffs.length) return null;
-              return (
-                <div className="flex items-start gap-1.5 border-t border-amber-200 bg-amber-50 px-2 py-1.5 text-[10.5px] leading-snug text-amber-900">
-                  <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-amber-600" />
-                  <span>The math is using {diffs.map((d, i) => <span key={i}>{i ? (i === diffs.length - 1 ? " and " : ", ") : ""}{d}</span>)}. {ai.fee !== ai.tier.fee && !ai.typedFee && diffs.length === 1 ? "The whole deal runs on one fee, picked by the ARV. Type a fee to set your own." : `Clear ${diffs.length > 1 ? "those boxes" : "that box"} to go back to the green row.`}</span>
-                </div>
-              );
-            })()}
-            <div className="border-t border-slate-100 px-2 py-1 text-[10px] leading-snug text-slate-600">The exit and offer % come from YLHB's buyer math on a moderate rehab, and the fees are YLHB's own. Check them against our closed deals.</div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between">
+        <span className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-slate-800"><Layers className="h-4 w-4" />Before you commit</span>
+        {open ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+      </button>
+      {open && <ul className="mt-3 space-y-1.5">{items.map((t) => <li key={t} className="flex gap-2 text-[12.5px] text-slate-700"><CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />{t}</li>)}</ul>}
+    </section>
   );
 }
 
-const CRow = ({ label, a, b, muted }) => (
-  <tr className="border-t border-slate-100">
-    <td className="py-1.5 font-sans text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}</td>
-    <td className={`py-1.5 text-right ${muted ? "text-slate-700" : "text-slate-900"}`}>{a}</td>
-    <td className={`py-1.5 text-right ${muted ? "text-slate-700" : "text-slate-900"}`}>{b}</td>
-  </tr>
-);
-
-// ---------- shared: BRRRR + DSCR (the hold/refi exit) ----------
-function BrrrrPanel({ shared, deckOpenKey, onDeckOpened, rentInfo, arv, repairs, rentDefault, rentOverride, setRentOverride, purchaseDefault, askingPrice, wholesaleFee, deckCommon, flipDeck, onGenerateRent, rentLoading, rentMsg, hasAddress }) {
-  // Every input here is a deal value, so it matches every other screen and survives a tab switch:
-  // rehab is the deal's repair number, taxes/insurance and HOA are the call's, reserves are shared.
-  const sh = shared || {};
-  const rehab = sh.repairOverride ?? "", setRehab = sh.setRepairOverride || (() => {});
-  const taxIns = sh.taxIns ?? "", setTaxIns = sh.setTaxIns || (() => {});
-  const hoa = sh.hoaAmt ?? "", setHoa = sh.setHoaAmt || (() => {});
-  const ltv = sh.brLtv ?? "75", setLtv = sh.setBrLtv || (() => {});
-  const rate = sh.brRate ?? "7.5", setRate = sh.setBrRate || (() => {});
-  const term = sh.brTerm ?? "30", setTerm = sh.setBrTerm || (() => {});
-  const reservePct = sh.reservePct ?? "10", setReservePct = sh.setReservePct || (() => {});   // BRRRR's own 10%
-
-  const ask = num(askingPrice);                              // asking / contract price (set on the Cash / MAO tab above)
-  const fee = num(wholesaleFee);                             // your assignment fee — shared Cash-tab value
-  const askPlusFee = ask + fee;                              // what an end buyer pays when you wholesale it
-  // The quick-fill buttons keep following the price and fee after they are tapped. Typing a number stops that.
-  const mode = sh.brPurchaseMode || "";
-  const purchase = mode === "ask" ? (ask > 0 ? String(Math.round(ask)) : "") : mode === "askfee" ? (ask > 0 ? String(Math.round(askPlusFee)) : "") : (sh.brPurchase ?? "");
-  const setPurchase = (v) => { if (sh.setBrPurchaseMode) sh.setBrPurchaseMode(""); if (sh.setBrPurchase) sh.setBrPurchase(v); };
-  const buy = num(purchase);                                 // no default — enter the all-in price (incl. wholesale fee)
-  const fix = num(rehab) > 0 ? num(rehab) : repairs;
-  const rnt = num(rentDefault);                              // shared rent (Generate or manual), already = override || estimate
-  const allIn = buy + fix;
-  const refiLoan = arv * (num(ltv) / 100);
-  const cashLeftIn = allIn - refiLoan;
-  const pi = pmt(refiLoan, num(rate), num(term));
-  // Estimated taxes + insurance from the ARV (editable). Based on U.S. average rates, excluding the
-  // outlier states CA, NY & FL: ~0.9%/yr effective property tax + ~0.6%/yr dwelling insurance = ~1.5%/yr.
-  const estTax = arv > 0 ? (arv * 0.009) / 12 : 0;
-  const estIns = arv > 0 ? (arv * 0.006) / 12 : 0;
-  const estTaxIns = estTax + estIns;
-  const taxInsEff = num(taxIns) > 0 ? num(taxIns) : estTaxIns;
-  const pitia = pi + taxInsEff + num(hoa);                 // lender's denominator
-  const dscr = pitia > 0 && rnt > 0 ? rnt / pitia : 0;
-  const reserves = rnt * (num(reservePct) / 100);
-  const trueCF = rnt - pitia - reserves;                      // your real monthly cash flow
-  const annualCF = trueCF * 12;
-  const coc = cashLeftIn > 0 ? (annualCF / cashLeftIn) * 100 : null; // null = all capital recovered
-  // ---- ROI metrics ----
-  const noiAnnual = (rnt - taxInsEff - num(hoa) - reserves) * 12;        // operating income, before debt service
-  const capRate = arv > 0 ? (noiAnnual / arv) * 100 : 0;                 // unlevered yield on the asset
-  const equityCaptured = arv - allIn;                                    // instant equity from buying right + rehab
-  const paydown1 = refiLoan > 0 ? refiLoan - balanceAt(refiLoan, num(rate), num(term), 1) : 0; // year-1 principal
-  const totalReturn1 = annualCF + paydown1;                             // year-1 cash flow + loan paydown
-  const totalRoi = cashLeftIn > 0 ? (totalReturn1 / cashLeftIn) * 100 : null; // null = all capital recovered
-
-  let dTone = "default", dNote = "Qualifies at standard terms.";
-  if (dscr <= 0) { dTone = "default"; dNote = "Enter rent + PITIA to score the refi."; }
-  else if (dscr >= 1.25) { dTone = "good"; dNote = "Strong — qualifies for the best DSCR rates."; }
-  else if (dscr >= 1.0) { dTone = "good"; dNote = "Qualifies with most DSCR lenders (standard terms)."; }
-  else if (dscr >= 0.75) { dTone = "warn"; dNote = "Thin — needs compensating factors (bigger down, reserves, IO)."; }
-  else { dTone = "bad"; dNote = "Won't cover the payment — most lenders pass below 0.75."; }
-
-  let brrrrLine = "Fill in your buy price and refi terms to see how much capital comes back out.";
-  if (arv > 0 && buy > 0) {
-    if (cashLeftIn <= 0) brrrrLine = `Full BRRRR — the ${usd(refiLoan)} refi pulls out everything you put in, plus ${usd(-cashLeftIn)} above your basis. Infinite return: all your capital recycles into the next deal.`;
-    else if (cashLeftIn <= 15000) brrrrLine = `Near-full BRRRR — you'd leave just ${usd(cashLeftIn)} in the deal after the ${usd(refiLoan)} refi. Most of your capital comes back out.`;
-    else brrrrLine = `Capital-heavy — ${usd(cashLeftIn)} stays trapped in the deal after refi. Push the buy price down or the rehab leaner to recover more.`;
-  }
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-1 flex items-center gap-2">
-        <RefreshCw className="h-4 w-4 text-emerald-500" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">BRRRR / DSCR — if you (or your buyer) hold it as a rental</h3>
-      </div>
-      <p className="mb-3 text-[11px] text-slate-600">Buy, rehab, rent, refinance, repeat. Refinance at the ARV, pull your capital back out, and see if it qualifies for a DSCR loan (rent ÷ PITIA).</p>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Purchase price (plus wholesale fee)" hint="all-in buy price" info="What the buyer actually pays to acquire it — the agreement price PLUS your wholesale / assignment fee. If you're keeping it yourself, just enter your buy price (no fee to add). Enter it directly; no default.">
-          <MoneyInput value={purchase} onChange={setPurchase} placeholder="Purchase price (plus wholesale fee)" />
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <button type="button" onClick={() => sh.setBrPurchaseMode && sh.setBrPurchaseMode("ask")} disabled={ask <= 0}
-              className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
-              title={ask > 0 ? "Fill with your asking / agreement price — keeping it yourself, no fee to add" : "Enter a Seller asking price on the Cash / MAO tab above first"}>
-              Use asking{ask > 0 ? ` · ${usd(ask)}` : ""}
-            </button>
-            <button type="button" onClick={() => sh.setBrPurchaseMode && sh.setBrPurchaseMode("askfee")} disabled={ask <= 0}
-              className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
-              title={ask > 0 ? `Wholesaling it — asking + your ${usd(fee)} wholesale fee, what the buyer pays` : "Enter a Seller asking price on the Cash / MAO tab above first"}>
-              Asking + fee{ask > 0 ? ` · ${usd(askPlusFee)}` : ""}
-            </button>
-          </div>
-          {ask <= 0
-            ? <div className="mt-1 text-[10px] italic text-slate-600">Set a <b className="text-slate-700">Seller asking price</b> on the Cash / MAO tab above to enable these quick-fills.</div>
-            : <div className="mt-1 text-[10px] text-slate-600">{mode ? <>Following the {mode === "ask" ? "asking price" : "asking price plus your fee"}, so it updates when either changes. Type a number to stop following.</> : <>Tap a button to fill from your asking / agreement price, or type any amount. <b className="text-slate-700">Wholesaling</b> → price + your fee (what the buyer pays). <b className="text-slate-700">Keeping it</b> → just the price.</>}</div>}
-        </Field>
-        <Field label="Rehab budget" info="The deal's repair number. Typing here changes it everywhere: the Deal Desk, the Offer Call and every strategy."><MoneyInput value={rehab} onChange={setRehab} placeholder={repairs > 0 ? String(Math.round(repairs)) : "e.g. 30000"} /></Field>
-        <Field label="Monthly rent" info="Market rent once it's fixed and leased. Pulled automatically with Auto-comp — type here to use your own number instead.">
-          <MoneyInput value={rentOverride} onChange={setRentOverride} filled={num(rentDefault) > 0}
-            placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : (rentLoading ? "Pulling…" : "Type the rent")} />
-          {rentMsg && rentMsg.type === "err" && <div className="mt-1 text-[10px] text-rose-600">{rentMsg.text}</div>}
-          {num(rentDefault) > 0 && !rentLoading && <RentBasisNote info={rentInfo} />}
-          {num(rentDefault) <= 0 && !rentLoading && <div className="mt-0.5 text-[10px] text-slate-600">Run Auto-comp up top to pull this automatically, or type it.</div>}
-        </Field>
-        <Field label="Taxes + insurance" hint="monthly" info="Monthly property taxes + insurance — part of PITIA, the DSCR denominator. Auto-estimated from the ARV using U.S. average rates (~0.9% tax + ~0.6% insurance per year), excluding the outlier states CA, NY & FL. Type the actual to override.">
-          <MoneyInput value={taxIns} onChange={setTaxIns} placeholder={estTaxIns > 0 ? String(Math.round(estTaxIns)) : "e.g. 300"} />
-          {estTaxIns > 0 && (
-            <div className="mt-1 text-[10px] text-slate-600">
-              {num(taxIns) <= 0 ? <>Auto-estimate ~${Math.round(estTax).toLocaleString()} tax + ~${Math.round(estIns).toLocaleString()} insurance/mo. </> : null}
-              <span className="italic">U.S. average rates, excludes CA/NY/FL — verify the actual for this property.</span>
-            </div>
-          )}
-        </Field>
-        <Field label="HOA" hint="monthly, if any" info="Monthly HOA / association dues, if the property has them. Also part of PITIA. Same number as the HOA dues in the Offer Call."><MoneyInput value={hoa} onChange={setHoa} /></Field>
-        <Field label="Reserves" hint="% of rent" info="Vacancy + maintenance + management set-aside. NOT part of the lender's DSCR, but real money — used here for your true cash flow."><PlainInput value={reservePct} onChange={setReservePct} suffix="%" /></Field>
-      </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label="Refi LTV" hint="% of ARV" info="Cash-out refinances on rentals typically max out around 70–75% of the after-repair value."><PlainInput value={ltv} onChange={setLtv} suffix="%" /></Field>
-        <Field label="Refi rate" hint="%" info="DSCR loan rates run ~6–7.5% right now. Higher than owner-occupied — these are investor loans."><PlainInput value={rate} onChange={setRate} suffix="%" /></Field>
-        <Field label="Refi term" hint="years" info="Almost always a 30-year amortization on DSCR loans."><PlainInput value={term} onChange={setTerm} suffix="yr" /></Field>
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Refi loan" value={arv > 0 ? usd(refiLoan) : "—"} sub={`ARV × ${num(ltv)}%`} />
-        <Stat label="Cash left in deal" value={arv > 0 && buy > 0 ? usd(cashLeftIn) : "—"} tone={buy > 0 ? (cashLeftIn <= 0 ? "good" : cashLeftIn <= 15000 ? "default" : "warn") : "default"} sub={cashLeftIn <= 0 ? "all capital out" : "stays in after refi"} />
-        <Stat label="DSCR" value={dscr > 0 ? dscr.toFixed(2) : "—"} tone={dTone} big sub="rent ÷ PITIA" />
-        <Stat label="New payment (PITIA)" value={pitia > 0 ? usd(pitia) : "—"} sub={`P&I ${usd(pi)} + tax/ins/HOA`} />
-      </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <Stat label="Monthly cash flow" value={pitia > 0 && rnt > 0 ? usd(trueCF) : "—"} tone={trueCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`after ${num(reservePct)}% reserves`} />
-        <Stat label="Cash-on-cash" value={buy <= 0 ? "—" : coc === null ? "∞ (all cash out)" : annualCF !== 0 && cashLeftIn > 0 ? coc.toFixed(1) + "%" : "—"} tone={buy > 0 && (coc === null || (coc && coc > 8)) ? "good" : "default"} sub={coc === null ? "no capital left in" : "annual CF ÷ cash left in"} />
-      </div>
-
-      {/* ROI / Returns */}
-      <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
-        <div className="mb-2 flex items-center gap-2">
-          <TrendingDown className="h-4 w-4 rotate-180 text-emerald-500" />
-          <h4 className="text-[11px] font-bold uppercase tracking-widest text-emerald-700/80">ROI / Returns</h4>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Cap rate" value={arv > 0 && rnt > 0 ? capRate.toFixed(1) + "%" : "—"} tone={capRate >= 7 ? "good" : capRate > 0 ? "default" : "default"} sub="NOI ÷ ARV (unlevered)" />
-          <Stat label="Equity captured" value={arv > 0 && buy > 0 ? usd(equityCaptured) : "—"} tone={buy > 0 && equityCaptured > 0 ? "good" : buy > 0 ? "bad" : "default"} sub="ARV − all-in" />
-          <Stat label="Total ROI (yr 1)" value={buy <= 0 ? "—" : totalRoi === null ? "∞ (all cash out)" : (cashLeftIn > 0 && totalReturn1 !== 0 ? totalRoi.toFixed(1) + "%" : "—")} tone={buy > 0 && (totalRoi === null || (totalRoi && totalRoi > 12)) ? "good" : "default"} sub="cash flow + paydown ÷ cash in" />
-          <Stat label="Annual cash flow" value={pitia > 0 && rnt > 0 ? usd(annualCF) : "—"} tone={annualCF > 0 ? "good" : pitia > 0 ? "bad" : "default"} sub={`${usd(trueCF)}/mo × 12`} />
-        </div>
-        <div className="mt-2 text-[10px] text-slate-600">
-          Cap rate is the unlevered yield (NOI ÷ ARV). Total ROI (yr 1) adds your first-year loan paydown to cash flow{buy > 0 && equityCaptured > 0 ? <>, on top of the <b className="text-emerald-700">{usd(equityCaptured)}</b> of equity you captured up front</> : null} — your real return on the cash left in the deal.
-        </div>
-      </div>
-
-      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${dTone === "good" ? "bg-emerald-50 text-emerald-700" : dTone === "bad" ? "bg-rose-50 text-rose-700" : dTone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-700"}`}>
-        <b>DSCR {dscr > 0 ? dscr.toFixed(2) : "—"}:</b> {dNote}
-      </div>
-      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">{brrrrLine}</div>
-      <div className="mt-2 text-[10px] text-slate-600">DSCR uses gross rent ÷ PITIA (the lender's formula — no operating expenses). Your cash flow above subtracts reserves for the real picture. Verify rent, taxes, and rate with the lender before counting on it.</div>
-
-      {/* Same idea as the creative tabs' "If you wholesaled this" card: what a BRRRR buyer gets if you assign
-          it to them at the seller's price plus your fee. Runs on its own from the Offer Call numbers. */}
-      {(() => {
-        const wbBuy = ask > 0 ? ask + fee : 0;                     // what the buyer pays you: their price + your fee
-        const wbAllIn = wbBuy + fix;
-        const wbLeft = wbAllIn - refiLoan;                         // their cash still in after the refi
-        const wbEquity = arv - wbAllIn;
-        const wbCoc = wbLeft > 0 ? (annualCF / wbLeft) * 100 : null;
-        const maxFeeFull = refiLoan - (ask + fix);                 // biggest fee that still lets them pull every dollar out
-        const ready = arv > 0 && ask > 0;
-        let tone = "default", note = "Set the ARV up top and get their number in the Offer Call. This fills in on its own from there.";
-        if (ready) {
-          if (wbLeft <= 0) { tone = "good"; note = `Full BRRRR for your buyer. At ${usd(wbBuy)} (their price plus your ${usd(fee)} fee) and ${usd(fix)} of rehab, the ${usd(refiLoan)} refi gives them back every dollar${wbLeft < 0 ? ` plus ${usd(-wbLeft)}` : ""}.`; }
-          else if (wbLeft <= 15000) { tone = "default"; note = `Near-full BRRRR for your buyer. They leave ${usd(wbLeft)} in after the refi and step into ${usd(Math.max(0, wbEquity))} of equity.`; }
-          else { tone = "warn"; note = `Capital-heavy for a BRRRR buyer. ${usd(wbLeft)} stays in after the refi. Most BRRRR buyers want close to all of it back, so this sells better as a flip or at a lower price.`; }
-        }
-        const box = tone === "good" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-700";
-        return (
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="mb-1 flex items-center gap-2">
-              <RefreshCw className="h-4 w-4 text-slate-600" />
-              <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">If you wholesaled this to a BRRRR buyer</h3>
-            </div>
-            <p className="mb-3 text-[11px] text-slate-600">Assign it to an investor who will rehab, rent and refinance it. They pay the seller's price plus your fee. This is what they can expect, using the rent, rehab and refi terms above.</p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Buyer pays" value={ready ? usd(wbBuy) : "—"} sub={`their price + your ${usd(fee)} fee`} />
-              <Stat label="Buyer's cash left in" value={ready ? usd(Math.max(0, wbLeft)) : "—"} tone={ready ? (wbLeft <= 0 ? "good" : wbLeft <= 15000 ? "default" : "warn") : "default"} sub={ready && wbLeft <= 0 ? "all capital back out" : "after the refi"} />
-              <Stat label="Buyer's equity" value={ready ? usd(wbEquity) : "—"} tone={ready ? (wbEquity > 0 ? "good" : "bad") : "default"} sub="ARV − price − fee − rehab" />
-              <Stat label="Buyer cash-on-cash" value={!ready || !(pitia > 0 && rnt > 0) ? "—" : wbCoc === null ? "∞ (all cash out)" : pct(wbCoc)} tone={ready && (wbCoc === null || wbCoc > 8) ? "good" : "default"} sub="annual cash flow ÷ cash left in" />
-            </div>
-            {ready && <div className={`mt-3 rounded-lg border px-3 py-2 text-[11.5px] leading-snug ${box}`}>{note}</div>}
-            {ready && maxFeeFull > 0 && (
-              <div className="mt-1.5 text-[10.5px] text-slate-700">The most you can charge and still give them a full BRRRR (every dollar back at the refi) is <b>{usd(maxFeeFull)}</b>.</div>
-            )}
-          </div>
-        );
-      })()}
-
-      {deckCommon && flipDeck && flipDeck.assumptions && (
-        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Buyer deck assumptions</div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <Field label="Selling costs" hint="% of ARV"><PlainInput value={flipDeck.assumptions.sellingPct} onChange={flipDeck.assumptions.setSellingPct} suffix="%" /></Field>
-            <Field label="Carry per month" hint="interest, tax, ins, utils"><MoneyInput value={flipDeck.assumptions.carryPerMonth} onChange={flipDeck.assumptions.setCarryPerMonth} placeholder="1200" /></Field>
-            <Field label="Rehab pace" hint="work per month"><MoneyInput value={flipDeck.assumptions.rehabPerMonth} onChange={flipDeck.assumptions.setRehabPerMonth} placeholder="20000" /></Field>
-          </div>
-          <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2 rounded-md bg-white px-3 py-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Holding cost</span>
-            <span className="font-mono text-lg font-bold tabular-nums text-slate-800">{flipDeck.holdingCost > 0 ? usd(flipDeck.holdingCost) : "—"}</span>
-          </div>
-          <div className="mt-1 text-[10.5px] leading-snug text-slate-700">
-            {num(flipDeck.assumptions.holdingOverride) > 0
-              ? <>Your number, overriding the calculation. Clear it to go back.</>
-              : flipDeck.holdMonths > 0
-                ? <>{flipDeck.holdMonths.toFixed(1)} months at {usd(num(flipDeck.assumptions.carryPerMonth))}/mo. That is {(flipDeck.holdMonths - 3).toFixed(1)} months of work on {usd(repairs)} of repairs, plus 3 months to list, go under agreement and close.</>
-                : <>Set a repair number above and this calculates itself.</>}
-          </div>
-          <div className="mt-2">
-            <Field label="Or type a holding cost" hint="overrides the calculation"><MoneyInput value={flipDeck.assumptions.holdingOverride} onChange={flipDeck.assumptions.setHoldingOverride} placeholder={flipDeck.holdingCost > 0 ? String(flipDeck.holdingCost) : "optional"} /></Field>
-          </div>
-        </div>
-      )}
-      {deckCommon && flipDeck && (
-        <div className="mt-3">
-          <BuyerDeckButton openKey={deckOpenKey} onOpened={onDeckOpened}
-            label="Download buyer deck — Flip + BRRRR (.pptx)"
-            common={{ ...deckCommon, rent: rnt }}
-            generateOverride={async (form) => {
-              await generateDualDeck({
-                address: form.address,
-                subjectLine: deckCommon.subjectLine,
-                arv,
-                repairs,
-                asking: form.asking,
-                rent: form.rent,
-                photo: form.photo,
-                basis: { compCount: deckCommon.compCount, avgPpsf: deckCommon.avgPpsf, rent: form.rent },
-                rentAnalysis: deckCommon.rentAnalysis || null,
-                contact: form.contact,
-                flip: (() => {
-                  const fSell = flipDeck.sellingCost || 0;
-                  const fHold = flipDeck.holdingCost || 0;
-                  const fProfit = arv - buy - repairs - fSell - fHold;   // buyer's real flip profit at YOUR offer price
-                  return {
-                    profitStr: buy > 0 ? usd(fProfit) : "—",
-                    rows: [
-                      ["After-repair value (ARV)", usd(arv)],
-                      ["Estimated rehab", usd(repairs)],
-                      [`Selling costs (${flipDeck.sellingPct}% of ARV)`, usd(fSell)],
-                      ["Holding costs", usd(fHold)],
-                      ["Your purchase price", buy > 0 ? usd(buy) : "—"],
-                    ],
-                    bullets: [
-                      buy > 0 && fProfit > 0 ? `About ${usd(fProfit)} profit at your ${usd(buy)} purchase price` : null,
-                      arv > 0 ? `${usd(arv)} after-repair value` : null,
-                      repairs > 0 ? `Rehab scoped at about ${usd(repairs)}` : null,
-                      "Resell at retail once rehabbed",
-                    ],
-                    note: "",
-                  };
-                })(),
-                brrrr: {
-                  headlineStr: `${usd(trueCF)}/mo · DSCR ${dscr > 0 ? dscr.toFixed(2) : "—"}`,
-                  cocStr: coc === null ? "∞" : (cashLeftIn > 0 && coc ? coc.toFixed(1) + "%" : "—"),
-                  upsideBase: { cashIn: cashLeftIn, monthlyCF: trueCF, reservePct: num(reservePct) },
-                  returnStr: (() => {
-                    if (buy <= 0) return "";
-                    if (cashLeftIn <= 0) return "∞ cash-on-cash & ROI — all cash out";
-                    const parts = [];
-                    if (coc) parts.push(coc.toFixed(1) + "% cash-on-cash");
-                    if (totalRoi && totalReturn1 !== 0) parts.push(totalRoi.toFixed(1) + "% total ROI (yr 1)");
-                    return parts.join("  ·  ");
-                  })(),
-                  rows: [
-                    ["All-in (purchase + rehab)", usd(allIn)],
-                    [`Refi loan (ARV × ${num(ltv)}%)`, usd(refiLoan)],
-                    ["Loan term", `${num(term)} yr`],
-                    ["Cash left in deal", cashLeftIn <= 0 ? `${usd(-cashLeftIn)} back out` : usd(cashLeftIn)],
-                    ["Monthly rent", rnt > 0 ? usd(rnt) : "—"],
-                    ["New payment (PITIA)", usd(pitia)],
-                    [`Reserves (${num(reservePct)}% of rent)`, reserves > 0 ? usd(reserves) : "—"],
-                    ["DSCR", dscr > 0 ? dscr.toFixed(2) : "—"],
-                    ["Monthly cash flow", usd(trueCF)],
-                  ],
-                  bullets: [
-                    dscr >= 1.0 ? `Qualifies for a DSCR loan at ${dscr.toFixed(2)} — no income docs` : (dscr > 0 ? `DSCR ${dscr.toFixed(2)} — may need compensating factors` : null),
-                    cashLeftIn <= 0 ? "Full BRRRR — all capital comes back out at refi" : `Only ${usd(cashLeftIn)} left in after refi`,
-                    trueCF > 0 ? `${usd(trueCF)}/mo cash flow after reserves` : null,
-                    "Refinance, rent, and hold for long-term wealth",
-                  ],
-                  note: dNote,
-                  ...(() => { const ex = buildDealExtras({ loanAmt: refiLoan, rate: num(rate), term: num(term), arv, equity: arv - allIn, cashFlow: trueCF, cashToClose: Math.max(0, cashLeftIn), coc: coc || 0 }); return { projection: ex.projection, curve: ex.curve }; })(),
-                },
-              });
-            }}
-          />
-          <div className="mt-1 text-center text-[10px] text-slate-600">One deck, both exits — your buyer sees the flip play and the BRRRR play side by side.</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- shared: "wholesale this creative contract" panel ----------
-function WholesaleCompare({ arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, feeField, dealCost, costLabel, financingValue = 0, buyerCashIn = 0, annualCF = 0 }) {
-  const fee = num(wholesaleFee);                               // assignment fee — shared with the Cash/MAO tab's wholesale fee
-  const haveDeal = arv > 0 && dealCost > 0;
-  const equity = haveDeal ? arv - repairs - dealCost : 0;      // hard spread you created by locking it up creative
-  const finVal = Math.max(0, financingValue || 0);             // soft value of the below-market loan (PV)
-  const totalValue = equity + finVal;                          // what the deal is really worth to a creative buyer
-  const buyerKeeps = totalValue - fee;                        // value the assignee inherits after paying your fee
-  const buyerEquity = equity - fee;                           // hard equity the assignee inherits after your fee
-  const CUSHION = 5000;                                        // a little value we want to leave the buyer
-  // --- what the END BUYER earns: their cash in = this deal's cash to close + your fee ---
-  const buyerTotalCashIn = Math.max(0, buyerCashIn) + fee;
-  const buyerCoC = buyerTotalCashIn > 0 ? (annualCF / buyerTotalCashIn) * 100 : null;          // cash flow on their cash
-  const buyerRoi = buyerTotalCashIn > 0 ? ((annualCF + buyerEquity) / buyerTotalCashIn) * 100 : null; // + equity stepped into
-  const showBuyerReturns = haveDeal && buyerTotalCashIn > 0 && annualCF !== 0;
-
-  let tone = "default", note = "Lock in the deal numbers above, then enter the assignment fee you'd charge to hand this creative agreement to another investor.";
-  if (arv <= 0) { note = "Set the ARV up top to see what this creative deal could assign for."; }
-  else if (!haveDeal) { note = "Fill in this deal's price/basis above to see the value you've created and what it could assign for."; }
-  else if (totalValue <= 0) {
-    tone = "warn";
-    note = `Not much to assign here — there's no equity and the rate isn't below market, so there's little value to carve a fee from. The deal would have to sell on cash flow alone.`;
-  } else if (fee <= 0) {
-    tone = "default";
-    note = `You've created ${usd(totalValue)} of total value: ${usd(equity)} equity + ${usd(finVal)} from the below-market financing. Enter the fee you'd charge to assign it and you'll see what's left for the buyer.`;
-  } else if (buyerKeeps >= CUSHION) {
-    tone = "good";
-    note = `Assignable — ${usd(totalValue)} of total value (${usd(equity)} equity + ${usd(finVal)} from the cheap loan). Charge your ${usd(fee)} fee and the next investor still inherits ${usd(buyerKeeps)} in value plus the cash flow. The lower the rate, the more room you have here.`;
-  } else if (buyerKeeps > 0) {
-    tone = "warn";
-    note = `Tight — your ${usd(fee)} fee leaves the buyer only ${usd(buyerKeeps)} of value. They may still take it for the terms and cash flow, but don't get greedy or it won't move.`;
-  } else {
-    tone = "bad";
-    note = `Your ${usd(fee)} fee is more than the ${usd(totalValue)} of total value in the deal. A buyer would be paying you for a deal with no cushion left — trim the fee to leave them room.`;
-  }
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-1 flex items-center gap-2">
-        <RefreshCw className="h-4 w-4 text-slate-600" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">If you wholesaled this creative agreement</h3>
-      </div>
-      <p className="mb-3 text-[11px] text-slate-600">Assign this deal to another investor for a fee — they inherit the terms, you collect the spread. Value = equity + what the below-market loan is worth.</p>
-      <div className="mb-3">
-        <Field
-          label="Your assignment fee"
-          hint="shared across all tabs"
-          info="What you'd charge another investor to take over this creative agreement. This is the SAME number as 'Your wholesale fee' on the Cash / MAO tab — set it on any tab and it updates everywhere. It comes out of the total value you created — equity PLUS the present value of the below-market rate."
-        >
-          <MoneyInput value={feeField ? feeField.typed : wholesaleFee} onChange={feeField ? feeField.set : setWholesaleFee} placeholder={feeField && feeField.auto > 0 ? String(feeField.auto) : "Type your fee"} filled />
-        </Field>
-        {feeField && <FeeScaleNote f={feeField} />}
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Equity in the deal" value={haveDeal ? usd(equity) : "—"} tone={haveDeal ? (equity > 0 ? "good" : "warn") : "default"} sub="ARV − repairs − basis" />
-        <Stat label="Financing value" value={haveDeal ? usd(finVal) : "—"} tone={finVal > 0 ? "good" : "default"} sub="PV of the low rate" />
-        <Stat label="Total deal value" value={haveDeal ? usd(totalValue) : "—"} tone={totalValue > 0 ? "good" : "default"} big sub="equity + financing" />
-      </div>
-      {haveDeal && (
-        <div className="mt-2 text-[10px] text-slate-600">"Basis" is your cost to acquire ({costLabel.toLowerCase()}) — <b>not</b> your fee. Your fee comes out of the equity, leaving the buyer the rest.</div>
-      )}
-      {haveDeal && fee > 0 && (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Stat label="Buyer's equity after your fee" value={usd(buyerEquity)} tone={buyerEquity >= CUSHION ? "good" : buyerEquity > 0 ? "warn" : "bad"} sub="equity − your fee" />
-          <Stat label="Buyer keeps, all-in" value={usd(buyerKeeps)} tone={buyerKeeps >= CUSHION ? "good" : buyerKeeps > 0 ? "warn" : "bad"} sub="+ financing value" />
-        </div>
-      )}
-      {showBuyerReturns && (
-        <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What the end buyer earns</div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Stat label="Buyer's total cash in" value={usd(buyerTotalCashIn)} sub="cash to close + rehab + your fee" />
-            <Stat label="Buyer cash-on-cash" value={buyerCoC === null ? "—" : pct(buyerCoC)} tone={buyerCoC !== null && buyerCoC > 0 ? "good" : "warn"} sub="annual cash flow ÷ cash in" />
-            <Stat label="Buyer ROI — year 1" value={buyerRoi === null ? "—" : pct(buyerRoi)} tone={buyerRoi !== null && buyerRoi > 0 ? "good" : "warn"} sub="cash flow + equity stepped into" />
-          </div>
-          <div className="mt-2 text-[10px] text-slate-600">Buyer's total cash in is everything they sink in — cash to close + rehab (<b>{usd(Math.max(0, buyerCashIn))}</b>) + your <b>{usd(fee)}</b> fee. Cash-on-cash is the rent return on that full amount; ROI also counts the <b>{usd(buyerEquity)}</b> of equity they step into after your fee.</div>
-        </div>
-      )}
-      <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] ${tone === "good" ? "bg-emerald-50 text-emerald-700" : tone === "bad" ? "bg-rose-50 text-rose-700" : tone === "warn" ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-700"}`}>
-        {note}
-      </div>
-      <div className="mt-2 text-[10px] text-slate-600">Financing value is "soft" — realized over time as lower payments/higher cash flow, not cash in hand like equity. Adjust the rate sliders in Rate Savings below to see it move.</div>
-    </div>
-  );
-}
-
-// ---------- shared: rate-savings explorer ----------
-function RateSavings({ loanAmount, rate, setRate, term, setTerm, mkt, setMkt, dealPayment = 0 }) {
-  const [origTerm, setOrigTerm] = useState(30);
-  const currentYear = new Date().getFullYear();
-  const [rateStr, setRateStr] = useState(rate.toFixed(2));            // editable buffer for the rate input
-  const [yearStr, setYearStr] = useState(String(currentYear + term)); // editable buffer for the maturity-year input
-  // Keep the typed boxes in step when the rate or term changes somewhere else (the Offer Call, the
-  // other tab, the slider). A half-typed value that already means the same number is left alone.
-  useEffect(() => { const n = parseFloat(rateStr); if (!(Math.abs((isNaN(n) ? -1 : n) - rate) < 1e-9)) setRateStr(rate.toFixed(2)); }, [rate]);
-  useEffect(() => { const y = parseInt(yearStr, 10); if (y !== currentYear + term) setYearStr(String(currentYear + term)); }, [term]);
-  const P = loanAmount;
-  const effOrig = Math.max(term, origTerm);                 // original term can't be less than years left
-  const seasoned = Math.max(0, effOrig - term);             // years the seller has already paid down
-  const payDeal = pmt(P, rate, term);                       // financing-only P&I implied by the loan terms
-  const payNew = pmt(P, mkt, effOrig);                      // fresh market loan, same balance, full term
-  const intSubTo = Math.max(0, payDeal * term * 12 - P);    // interest left to pay on this loan
-  const intNew = Math.max(0, payNew * effOrig * 12 - P);    // interest on a brand-new loan
-  const intSaved = Math.max(0, intNew - intSubTo);          // total interest the buyer avoids
-  const intSameTerm = Math.max(0, pmt(P, mkt, term) * term * 12 - P); // interest on a market-rate loan over the SAME years left
-  const rateSaved = Math.max(0, intSameTerm - intSubTo);    // savings purely from the lower rate (same remaining term)
-  const seasoningSaved = Math.max(0, intNew - intSameTerm); // savings purely from the loan being seasoned (fewer yrs left)
-  const totalSaved = rateSaved + seasoningSaved;            // rate + seasoning; the two pieces always sum to this on screen
-  // Fixed payment comparison: use the REAL payment entered on the deal, don't re-derive it.
-  const haveRealPmt = dealPayment > 0;
-  const tiPortion = haveRealPmt ? Math.max(0, dealPayment - payDeal) : 0;  // taxes/insurance (+ any 2nd-lien) baked into the real payment
-  const newPmtFull = payNew + tiPortion;                                   // a new market loan, carrying the same taxes/insurance
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <TrendingDown className="h-4 w-4 text-emerald-500" />
-        <h3 className="text-xs font-bold uppercase tracking-widest text-slate-600">Rate + seasoning savings — what taking over this loan is worth</h3>
-      </div>
-      {P > 0 ? (
-        <div className="grid gap-5 md:grid-cols-2">
-          {/* sliders */}
-          <div className="space-y-4">
-            {/* type-it inputs: loan rate + maturity year — drive the same values as the sliders */}
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-700">Loan's rate</div>
-                  <PlainInput value={rateStr} onChange={(v) => { setRateStr(v); const n = parseFloat(v); if (!isNaN(n)) setRate(n); }} suffix="%" />
-                </div>
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-slate-700">Matures (year)</div>
-                  <PlainInput value={yearStr} onChange={(v) => { setYearStr(v); const yr = parseInt(v, 10); if (yr > currentYear) setTerm(Math.min(40, yr - currentYear)); }} />
-                </div>
-              </div>
-              <div className="mt-1.5 text-[10px] text-slate-600">Type the loan's rate and the year it pays off — or drag the sliders below. They stay in sync, and the savings update instantly.</div>
-            </div>
-            <div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Seller's rate — you inherit</span>
-                <span className="font-mono text-lg font-bold tabular-nums text-emerald-600">{rate.toFixed(2)}%</span>
-              </div>
-              <input type="range" min={0} max={12} step={0.125} value={rate} onChange={(e) => { const v = parseFloat(e.target.value); setRate(v); setRateStr(v.toFixed(2)); }} className="mt-1 w-full accent-emerald-600" />
-            </div>
-            <div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Original loan term</span>
-                <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{effOrig} yrs</span>
-              </div>
-              <input type="range" min={5} max={40} step={1} value={origTerm} onChange={(e) => setOrigTerm(parseInt(e.target.value))} className="mt-1 w-full accent-emerald-600" />
-            </div>
-            <div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Years left on the loan</span>
-                <span className="font-mono text-lg font-bold tabular-nums text-slate-900">{term} yrs</span>
-              </div>
-              <input type="range" min={1} max={40} step={1} value={term} onChange={(e) => { const v = parseInt(e.target.value); setTerm(v); setYearStr(String(currentYear + v)); }} className="mt-1 w-full accent-emerald-600" />
-              <div className="mt-1 text-[11px] text-emerald-700">Seller has already paid <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b>{seasoned > 0 ? " — past the interest-heavy years" : ""}.</div>
-            </div>
-            <div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">New-loan rate today — compare to</span>
-                <span className="font-mono text-sm font-bold tabular-nums text-slate-700">{mkt.toFixed(2)}%</span>
-              </div>
-              <input type="range" min={0} max={14} step={0.125} value={mkt} onChange={(e) => setMkt(parseFloat(e.target.value))} className="mt-1 w-full accent-slate-400" />
-            </div>
-            <div className="text-[11px] text-slate-600">Loan balance: <span className="font-mono text-slate-600">{usd(P)}</span> — pulled from this deal.</div>
-          </div>
-          {/* savings */}
-          <div className="space-y-3">
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-700/80">What this loan saves — held to maturity</div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <div className="rounded-lg bg-white/70 px-2.5 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-700">Rate savings</div>
-                  <div className="font-mono text-lg font-bold tabular-nums text-emerald-700">{usd(rateSaved)}</div>
-                  <div className="text-[10px] leading-tight text-slate-600">{rate.toFixed(2)}% vs {mkt.toFixed(2)}%, same {term} yrs left</div>
-                </div>
-                <div className="rounded-lg bg-white/70 px-2.5 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-700">Seasoning savings</div>
-                  <div className="font-mono text-lg font-bold tabular-nums text-emerald-700">{usd(seasoningSaved)}</div>
-                  <div className="text-[10px] leading-tight text-slate-600">{term} yrs left vs a fresh {effOrig}-yr loan</div>
-                </div>
-              </div>
-              <div className="mt-2 flex items-center justify-between rounded-lg bg-emerald-600 px-3 py-2 text-white">
-                <span className="text-[11px] font-bold uppercase tracking-wide">Total interest saved</span>
-                <span className="font-mono text-2xl font-extrabold tabular-nums">{usd(totalSaved)}</span>
-              </div>
-              <div className="mt-1 text-[10px] leading-tight text-slate-600">Rate savings <b>+</b> seasoning savings. Realized in full only if the loan is held to payoff — sell or refinance early and you capture the part up to that point.</div>
-            </div>
-            {/* side-by-side: take this loan vs new loan */}
-            <div className="overflow-hidden rounded-xl border border-slate-200 text-[12px]">
-              <div className="grid grid-cols-3 bg-slate-50 font-semibold text-slate-700">
-                <div className="px-3 py-1.5"></div>
-                <div className="px-2 py-1.5 text-center text-emerald-700">Take this loan</div>
-                <div className="px-2 py-1.5 text-center">Get a new loan</div>
-              </div>
-              {[
-                ["Rate", `${rate.toFixed(2)}%`, `${mkt.toFixed(2)}%`],
-                ["Years to pay", `${term} left`, `${effOrig} fresh`],
-                ...(haveRealPmt ? [["Payment", `${usd(dealPayment)}/mo`, `${usd(newPmtFull)}/mo`]] : []),
-                ["Total interest", usd(intSubTo), usd(intNew)],
-              ].map((r, i, arr) => (
-                <div key={r[0]} className={`grid grid-cols-3 ${i < arr.length - 1 ? "border-b border-slate-100" : ""}`}>
-                  <div className="px-3 py-1.5 text-slate-700">{r[0]}</div>
-                  <div className="px-2 py-1.5 text-center font-semibold tabular-nums text-emerald-700">{r[1]}</div>
-                  <div className="px-2 py-1.5 text-center tabular-nums text-slate-700">{r[2]}</div>
-                </div>
-              ))}
-            </div>
-            {haveRealPmt && (
-              <div className="text-[10px] text-slate-600">Payment row uses the <b>real payment from this deal</b> — fixed, it won't move with the sliders. The new-loan figure is a fresh-rate loan carrying the same taxes &amp; insurance; set "Years left" to the loan's actual remaining term for the most accurate new-loan number.</div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <Stat label="Monthly payment relief" value={usd(haveRealPmt ? Math.max(0, newPmtFull - dealPayment) : Math.max(0, payNew - payDeal))} tone="good" sub="lighter payment vs a new loan" />
-              <Stat label="Paid off sooner" value={seasoned > 0 ? `${seasoned} ${seasoned === 1 ? "yr" : "yrs"}` : "—"} tone={seasoned > 0 ? "good" : "default"} sub="free & clear earlier" />
-            </div>
-            <div className="rounded-lg bg-emerald-50/60 px-3 py-2 text-[11px] text-emerald-700">
-              {seasoned > 0
-                ? <>This loan is <b>{seasoned} of {effOrig} yrs</b> in — the seller already paid down the interest-heavy years. A fresh {effOrig}-yr loan at {mkt.toFixed(2)}% restarts that clock, so the buyer saves <b>{usd(rateSaved)}</b> from the lower rate <b>+</b> <b>{usd(seasoningSaved)}</b> from the seasoning = <b>{usd(totalSaved)}</b> in total interest, and owns it free &amp; clear <b>{seasoned} {seasoned === 1 ? "yr" : "yrs"}</b> sooner — if held to payoff.</>
-                : <>Set the original term, then drag <b>Years left</b> down to model a seasoned loan and watch the seasoning savings stack on top of the rate savings.</>}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
-          Enter the loan amount in this deal above, and the sliders will show what the low rate saves you over the life of the loan.
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ---------- SUB-TO ----------
-// Two ceilings that keep a creative deal from quietly becoming a bad one. Neither is a published
-// formula, they are working guardrails: (1) the cash you bring should come back out of cash flow
-// inside about two years, and (2) you should not spend more than half your day-one equity to get in.
-// Anything past those is buying equity rather than creating it, and that is a conversation for the
-// head of acquisitions, not a call a rep makes alone.
-const PAYBACK_GOOD = 18, PAYBACK_LIMIT = 24, EQUITY_SPEND_LIMIT = 0.5;
-const CashDiscipline = ({ cashIn, cashFlow, equity }) => {
-  if (cashIn <= 0) return null;
-  const months = cashFlow > 0 ? cashIn / cashFlow : null;
-  const share = equity > 0 ? cashIn / equity : null;
-  const paybackTone = months == null ? "bad" : months <= PAYBACK_GOOD ? "good" : months <= PAYBACK_LIMIT ? "warn" : "bad";
-  const shareTone = share == null ? "bad" : share <= EQUITY_SPEND_LIMIT ? "good" : share <= 0.75 ? "warn" : "bad";
-  const col = { good: "text-emerald-700", warn: "text-amber-700", bad: "text-red-700" };
-  const worst = [paybackTone, shareTone].includes("bad") ? "bad" : [paybackTone, shareTone].includes("warn") ? "warn" : "good";
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <SectionTitle>Cash discipline</SectionTitle>
-      <div className="mt-1 text-[11px] leading-snug text-slate-700">
-        Two checks on the money you bring to the table. Both are house rules, not bank rules.
-      </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-600">Payback</div>
-          <div className={`mt-0.5 font-mono text-lg font-bold ${col[paybackTone]}`}>
-            {months == null ? "never" : `${months.toFixed(1)} mo`}
-          </div>
-          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
-            {months == null
-              ? "No positive cash flow, so the cash you bring never comes back out of this property."
-              : `${usd(Math.round(cashIn))} in, ${usd(Math.round(cashFlow))}/mo out. Target is under ${PAYBACK_GOOD} months.`}
-          </div>
-        </div>
-        <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-600">Cash in vs equity captured</div>
-          <div className={`mt-0.5 font-mono text-lg font-bold ${col[shareTone]}`}>
-            {share == null ? "no equity" : `${Math.round(share * 100)}%`}
-          </div>
-          <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
-            {share == null
-              ? "No equity captured, so every dollar in is at risk with nothing underneath it."
-              : `Spending ${usd(Math.round(cashIn))} to capture ${usd(Math.round(equity))}. Stay under half.`}
-          </div>
-        </div>
-      </div>
-      <div className={`mt-3 rounded-lg px-3 py-2 text-[11.5px] font-semibold leading-snug ${
-        worst === "good" ? "bg-emerald-50 text-emerald-800" : worst === "warn" ? "bg-amber-50 text-amber-800" : "bg-red-50 text-red-800"
-      }`}>
-        {worst === "good"
-          ? "Clean entry. The cash you bring comes back reasonably fast and sits on real equity."
-          : worst === "warn"
-            ? "Workable but tight. Before you commit, try to move the cash down instead of the price up. Ask what they actually need at closing rather than what they want on paper."
-            : "Too much cash for what this returns. Do not commit on the call. Get the cash to seller down, or send it to the head of acquisitions."}
-      </div>
-    </div>
-  );
-};
-
-function SubToTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, callRate, stBal, setStBal, stPiti, setStPiti, stArrears, setStArrears, stCashSeller, setStCashSeller, stClosing, setStClosing, stRent, setStRent, stReservePct, setStReservePct } = props;
-  const bal = num(stBal), piti = num(stPiti), arrears = num(stArrears), cashSeller = num(stCashSeller), closing = num(stClosing), rent = num(stRent) || num(rentDefault);
-  const reserves = rent * (num(stReservePct) / 100);
-  const cashIn = cashSeller + arrears + closing + repairs;
-  const closeCash = cashSeller + arrears + closing + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
-  const cashFlow = rent - piti - reserves;
-  const equity = arv - (bal + cashSeller + arrears + repairs);
-  const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
-  const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  // Rate-savings inputs are deal values: the loan's rate is the call's rate (4% stands in until it is
-  // known), and the years left and market rate are shared with Hybrid.
-  const rsRate = callRate > 0 ? callRate : 4, setRsRate = props.setCallRate;
-  const rsTerm = num(props.loanYrsLeft) || 30, setRsTerm = (n) => props.setLoanYrsLeft(String(n));
-  const rsMkt = num(props.mktRate) || 7.5, setRsMkt = (n) => props.setMktRate(String(n));
-  const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
-  // Without the payment there is no cash flow to show. A blank PITI used to count as $0, which
-  // printed rent minus reserves as a big green cash flow number.
-  const graded = rent > 0 && piti > 0;
-  let status = "maybe", headline = piti > 0 ? "Enter rent to grade" : "Enter the PITI to grade", detail = piti > 0 ? "" : "The inherited payment is blank, so there is no cash flow to show yet.";
-  if (rent > 0 && piti > 0) {
-    if (cashFlow >= 200 && equity > 0) { status = "go"; headline = "STRONG sub-to"; detail = `${usd(cashFlow)}/mo cash flow and ${usd(equity)} captured equity over the loan.`; }
-    else if (cashFlow > 0) { status = "maybe"; headline = "WORKS — watch the margin"; detail = `${usd(cashFlow)}/mo after reserves. ${equity > 0 ? usd(equity) + " equity." : "Little/no equity — leaning on rate + cash flow."}`; }
-    else { status = "no"; headline = "NEGATIVE — pass or restructure"; detail = `${usd(cashFlow)}/mo after reserves. Lower entry, raise rent, or walk.`; }
-  }
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>Subject-to inputs</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Existing loan balance"><MoneyInput value={stBal} onChange={setStBal} /></Field>
-            <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
-            <Field label="Arrears / back pmts"><MoneyInput value={stArrears} onChange={setStArrears} /></Field>
-            <Field label="Cash to seller" hint="at closing · $10K max" info="Fills from the cash they need at closing in the Offer Call. Without that answer it uses their equity above the loan. Type a different number here to override it."><MoneyInput value={stCashSeller} onChange={setStCashSeller} /><DownCapNote amount={stCashSeller} what="to the seller at closing" /></Field>
-            <Field label="Closing costs"><MoneyInput value={stClosing} onChange={setStClosing} /></Field>
-            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={stRent} onChange={setStRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
-            <Field label="Reserves" hint="% of rent"><PlainInput value={stReservePct} onChange={setStReservePct} suffix="%" /></Field>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <Verdict status={status} headline={headline} detail={detail} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="Monthly cash flow" value={graded ? usd(cashFlow) : "—"} tone={graded ? (cashFlow > 0 ? "good" : "bad") : undefined} big sub={graded ? `rent − PITI − ${usd(reserves)} reserves` : piti > 0 ? "needs market rent" : "needs the PITI"} />
-            <Stat label="Equity captured" value={usd(equity)} tone={equity > 0 ? "good" : "warn"} big sub={repairs > 0 ? "ARV − loan − entry − rehab" : "ARV − loan − entry"} />
-            <Stat label="Total cash to close" value={usd(closeCash)} sub={num(wholesaleFee) > 0 ? "seller + arrears + closing + fee" : "seller + arrears + closing"} />
-            <Stat label="Cash-on-cash" value={graded ? pct(coc) : "—"} tone={graded ? (coc > 0 ? "good" : "bad") : undefined} sub={graded ? (repairs > 0 ? "annual · on cash in + rehab" : "annual · on cash in") : "needs cash flow"} />
-          </div>
-        </div>
-      </div>
-      {graded && <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />}
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee} feeField={props.feeField}
-        dealCost={bal + cashSeller + arrears} costLabel="Sub-to all-in (loan + entry)" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
-      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={piti} />
-      <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
-        common={{ ...deckCommon, contractDefault: closeCash + repairs, fee: 0 }}
-        priceLabel="Buyer's total cash in"
-        deal={{
-          type: "Subject-To",
-          loanSavings: computeLoanSavings({ P: bal, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: piti }),
-          headline: graded ? `Sub-To · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value` : `Sub-To · ${usd(finValue)} financing value`,
-          highlights: [
-            graded && cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
-            equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
-            finValue > 0 ? `${usd(finValue)} of value from the assumed below-market loan` : null,
-            "Take over the seller's existing financing — no new bank loan or qualifying",
-            rent > 0 ? `Rents for about ${usd(rent)}/mo` : null,
-          ],
-          rows: [
-            ["Existing loan balance", usd(bal)],
-            ["Inherited payment (PITI)", piti > 0 ? usd(piti) + "/mo" : "To be confirmed"],
-            ["Cash to seller", usd(cashSeller)],
-            ["Monthly cash flow", graded ? usd(cashFlow) : "To be confirmed"],
-            ["Equity captured", usd(equity)],
-            ["Financing value (low rate)", usd(finValue)],
-          ],
-          totalLabel: "Total deal value",
-          totalValue: usd(Math.max(0, equity) + finValue),
-          verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0, cashIn: graded ? closeCash + repairs : 0, reservePct: num(stReservePct) }),
-        }}
-      />
-      <TabEducation id="subto" />
-    </div>
-  );
-}
-
-// ---------- HYBRID ----------
-function HybridTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, callRate, hyPrice, setHyPrice, hyDown, setHyDown, hyBal, setHyBal, hyPiti, setHyPiti, hyRate, setHyRate, hyTerm, setHyTerm, hyClosing, setHyClosing, hyRent, setHyRent, hyReservePct, setHyReservePct } = props;
-  const price = num(hyPrice), down = num(hyDown), bal = num(hyBal), piti = num(hyPiti), rent = num(hyRent) || num(rentDefault), closing = num(hyClosing);
-  const note = Math.max(0, price - bal - down);
-  const notePay = pmt(note, num(hyRate), num(hyTerm));
-  const totalMonthly = piti + notePay;
-  const reserves = rent * (num(hyReservePct) / 100);
-  const cashFlow = rent - totalMonthly - reserves;
-  const cashIn = down + closing + repairs;
-  const closeCash = down + closing + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
-  const equity = arv - price - repairs;
-  const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
-  const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  // Same deal values as the Sub-To tab: the call's rate, the years left on the loan and the market rate.
-  const rsRate = callRate > 0 ? callRate : 4, setRsRate = props.setCallRate;
-  const rsTerm = num(props.loanYrsLeft) || 30, setRsTerm = (n) => props.setLoanYrsLeft(String(n));
-  const rsMkt = num(props.mktRate) || 7.5, setRsMkt = (n) => props.setMktRate(String(n));
-  const finValue = pvSavings(bal, rsRate, rsMkt, rsTerm);
-  const pitiMissing = bal > 0 && piti <= 0;   // a loan with no payment entered is unknown, not free
-  const graded = price > 0 && rent > 0 && !pitiMissing;
-  let status = "maybe", headline = pitiMissing ? "Enter the Sub-To PITI to grade" : "Enter price, loan & rent to grade", detail = pitiMissing ? "The inherited payment is blank, so there is no cash flow to show yet." : "";
-  if (graded) {
-    if (cashFlow >= 200 && equity >= 0) { status = "go"; headline = "STRONG hybrid"; detail = `Sub-to keeps the low-rate ${usd(bal)} loan clean; ${usd(note)} seller note on top. ${usd(cashFlow)}/mo.`; }
-    else if (cashFlow > 0) { status = "maybe"; headline = "WORKS — tune the note"; detail = `${usd(cashFlow)}/mo. Push note rate toward 0% or extend term to lift cash flow.`; }
-    else { status = "no"; headline = "NEGATIVE — restructure"; detail = `${usd(cashFlow)}/mo. Lower price, bigger sub-to portion, or longer/0% note.`; }
-  }
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>Hybrid (sub-to + seller note)</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Purchase price"><MoneyInput value={hyPrice} onChange={setHyPrice} /></Field>
-            <Field label="Down payment" hint="from cash needed · $10K max" info="Fills from the cash they need at closing in the Offer Call. Type a different number here to override it for this strategy."><MoneyInput value={hyDown} onChange={setHyDown} /><DownCapNote amount={hyDown} /></Field>
-            <Field label="Existing loan balance" hint="taken sub-to"><MoneyInput value={hyBal} onChange={setHyBal} /></Field>
-            <Field label="Seller's monthly payment" hint={num(props.pitiExtras) > 0 && num(props.stPay) > 0 ? `+ ${usd(props.pitiExtras)} T&I/HOA = ${usd(num(props.stPay) + num(props.pitiExtras))} PITI` : "same as the Offer Call"} info="The payment from the Offer Call. Change it here or there and both update. The math adds taxes and insurance when they are not in escrow, plus HOA dues, to get the full PITI."><MoneyInput value={props.stPay} onChange={props.setStPay} /></Field>
-            <Field label="Seller note rate" hint="0% ok"><PlainInput value={hyRate} onChange={setHyRate} suffix="%" /></Field>
-            <Field label="Seller note term"><PlainInput value={hyTerm} onChange={setHyTerm} suffix="yrs" /></Field>
-            <Field label="Closing costs"><MoneyInput value={hyClosing} onChange={setHyClosing} /></Field>
-            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={hyRent} onChange={setHyRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
-            <Field label="Reserves" hint="% of rent"><PlainInput value={hyReservePct} onChange={setHyReservePct} suffix="%" /></Field>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <Verdict status={status} headline={headline} detail={detail} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="Monthly cash flow" value={graded ? usd(cashFlow) : "—"} tone={graded ? (cashFlow > 0 ? "good" : "bad") : undefined} big sub={graded ? `rent − ${usd(totalMonthly)} debt − reserves` : pitiMissing ? "needs the Sub-To PITI" : "needs price and rent"} />
-            <Stat label="Seller note amount" value={usd(note)} sub="price − loan − down" />
-            <Stat label="Note payment" value={usd(notePay)} sub={`${num(hyRate)}% / ${num(hyTerm)}yr`} />
-            <Stat label="Total monthly debt" value={pitiMissing ? "—" : usd(totalMonthly)} sub={pitiMissing ? "needs the Sub-To PITI" : "PITI + note"} />
-            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
-            <Stat label="Cash-on-cash" value={graded ? pct(coc) : "—"} tone={graded ? (coc > 0 ? "good" : "bad") : undefined} sub={graded ? `${usd(closeCash + repairs)} in` : "needs cash flow"} />
-          </div>
-        </div>
-      </div>
-      {graded && <CashDiscipline cashIn={closeCash + repairs} cashFlow={cashFlow} equity={equity} />}
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee} feeField={props.feeField}
-        dealCost={price} costLabel="Hybrid purchase price" financingValue={finValue} buyerCashIn={cashIn} annualCF={graded ? cashFlow * 12 : 0} />
-      <RateSavings loanAmount={bal} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
-      <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
-        common={{ ...deckCommon, contractDefault: price }}
-        deal={{
-          type: "Hybrid",
-          loanSavings: computeLoanSavings({ P: bal, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: totalMonthly }),
-          headline: graded ? `Hybrid · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value` : `Hybrid · ${usd(finValue)} financing value`,
-          highlights: [
-            graded && cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
-            equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
-            finValue > 0 ? `${usd(finValue)} of value from the assumed low-rate first loan` : null,
-            "Low-rate loan taken subject-to, seller carries the rest — minimal cash in",
-            rent > 0 ? `Rents for about ${usd(rent)}/mo` : null,
-          ],
-          rows: [
-            ["Purchase price", usd(price)],
-            ["Sub-to loan (low rate)", usd(bal)],
-            ["Seller note", usd(note)],
-            ["Total monthly debt", usd(totalMonthly)],
-            ["Monthly cash flow", graded ? usd(cashFlow) : "To be confirmed"],
-            ["Equity captured", usd(equity)],
-          ],
-          totalLabel: "Total deal value",
-          totalValue: usd(Math.max(0, equity) + finValue),
-          verdict: detail,
-          ...buildDealExtras({ loanAmt: bal, rate: rsRate, term: rsTerm, arv, equity, cashFlow: graded ? cashFlow : 0, cashToClose: closeCash, coc: graded ? buyerCoc : 0, cashIn: graded ? closeCash + repairs : 0, reservePct: num(hyReservePct) }),
-        }}
-      />
-      <TabEducation id="hybrid" />
-    </div>
-  );
-}
-
-// ---------- SELLER FINANCE ----------
-function SellerFinanceTab(props) {
-  const { arv, repairs, underPct, overPct, wholesaleFee, setWholesaleFee, deckCommon, rentDefault, sfPrice, setSfPrice, sfDown, setSfDown, sfRate, setSfRate, sfAmort, setSfAmort, sfBalloon, setSfBalloon, sfTaxIns, setSfTaxIns, sfRent, setSfRent, sfReservePct, setSfReservePct } = props;
-  // Taxes + insurance are the deal's number (the Offer Call and BRRRR show the same one). Blank uses the ARV estimate.
-  const price = num(sfPrice), down = num(sfDown), taxIns = num(sfTaxIns) > 0 ? num(sfTaxIns) : num(props.taxInsEst), rent = num(sfRent) || num(rentDefault);
-  const loan = Math.max(0, price - down);
-  const pi = pmt(loan, num(sfRate), num(sfAmort));
-  const totalMonthly = pi + taxIns;
-  const reserves = rent * (num(sfReservePct) / 100);
-  const cashFlow = rent - totalMonthly - reserves;
-  const balloonYrs = num(sfBalloon);
-  const balloonBal = balloonYrs > 0 ? balanceAt(loan, num(sfRate), num(sfAmort), balloonYrs) : 0;
-  const totalInterest = pi * num(sfAmort) * 12 - loan;
-  const equity = arv - price - repairs;
-  const cashIn = down + repairs;
-  const closeCash = down + num(wholesaleFee);  // buyer's cash at closing: entry + your fee (rehab is paid after close)
-  const coc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0; // cash-on-cash on true cash in: entry + fee + rehab (matches the deck)
-  const buyerCoc = (closeCash + repairs) > 0 ? ((cashFlow * 12) / (closeCash + repairs)) * 100 : 0;  // buyer's coc on true total invested (cash to close + rehab)
-  // Seller-finance terms ARE the loan terms, so Rate Savings edits the note's rate and amortization directly.
-  const rsRate = num(sfRate), setRsRate = (n) => setSfRate(String(Math.round(n * 1000) / 1000));
-  const rsTerm = num(sfAmort) || 30, setRsTerm = (n) => setSfAmort(String(n));
-  const rsMkt = num(props.mktRate) || 7.5, setRsMkt = (n) => props.setMktRate(String(n));
-  const finValue = pvSavings(loan, rsRate, rsMkt, rsTerm);
-  let status = "maybe", headline = "Enter price & rent to grade", detail = "";
-  if (price > 0 && rent > 0) {
-    if (cashFlow >= 200) { status = "go"; headline = "STRONG seller-finance"; detail = `${usd(cashFlow)}/mo at ${num(sfRate)}% over ${num(sfAmort)}yr.${balloonYrs ? " Balloon " + usd(balloonBal) + " due yr " + balloonYrs + "." : " No balloon — clean."}`; }
-    else if (cashFlow > 0) { status = "maybe"; headline = "WORKS — push terms"; detail = `${usd(cashFlow)}/mo. Drive rate toward 0%, extend amortization, or kill the balloon.`; }
-    else { status = "no"; headline = "NEGATIVE — renegotiate terms"; detail = `${usd(cashFlow)}/mo. Price for their number only if the terms carry the cash flow.`; }
-  }
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>Seller financing inputs</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Purchase price"><MoneyInput value={sfPrice} onChange={setSfPrice} /></Field>
-            <Field label="Down payment" hint="from cash needed · $10K max" info="Fills from the cash they need at closing in the Offer Call. Type a different number here to override it for this strategy."><MoneyInput value={sfDown} onChange={setSfDown} /><DownCapNote amount={sfDown} /></Field>
-            <Field label="Interest rate" hint="0% ok"><PlainInput value={sfRate} onChange={setSfRate} suffix="%" /></Field>
-            <Field label="Amortization"><PlainInput value={sfAmort} onChange={setSfAmort} suffix="yrs" /></Field>
-            <Field label="Balloon" hint="0 = none"><PlainInput value={sfBalloon} onChange={setSfBalloon} suffix="yrs" /></Field>
-            <Field label="Taxes + insurance" hint={num(sfTaxIns) > 0 ? "monthly · same on every tab" : "monthly · estimated from the ARV"} info="The deal's taxes and insurance, the same number the Offer Call and the BRRRR panel use. Blank uses an estimate of about 1.5% of the ARV a year."><MoneyInput value={sfTaxIns} onChange={setSfTaxIns} placeholder={num(props.taxInsEst) > 0 ? String(Math.round(num(props.taxInsEst))) : ""} /></Field>
-            <Field label="Market rent (monthly)" hint={num(rentDefault) > 0 ? "same rent on every tab" : ""} info="The deal's market rent. Typing here changes it on every tab, the rent card and the buyer decks. Clear it to go back to the RentCast estimate."><MoneyInput value={sfRent} onChange={setSfRent} placeholder={num(rentDefault) > 0 ? String(Math.round(num(rentDefault))) : "Type the rent"} /></Field>
-            <Field label="Reserves" hint="% of rent"><PlainInput value={sfReservePct} onChange={setSfReservePct} suffix="%" /></Field>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <Verdict status={status} headline={headline} detail={detail} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Stat label="Monthly cash flow" value={usd(cashFlow)} tone={cashFlow > 0 ? "good" : "bad"} big sub={`rent − ${usd(totalMonthly)} − reserves`} />
-            <Stat label="Principal & interest" value={usd(pi)} big sub={`${usd(loan)} @ ${num(sfRate)}%`} />
-            <Stat label="Balloon balance" value={balloonYrs ? usd(balloonBal) : "None"} tone={balloonYrs ? "warn" : "good"} sub={balloonYrs ? `due year ${balloonYrs}` : "fully amortizing"} />
-            <Stat label="Total interest" value={usd(Math.max(0, totalInterest))} sub={num(sfRate) === 0 ? "0% — principal only" : "life of loan"} />
-            <Stat label="Equity captured" value={usd(equity)} tone={equity >= 0 ? "good" : "warn"} sub={repairs > 0 ? "ARV − price − rehab" : "ARV − price"} />
-            <Stat label="Cash-on-cash" value={pct(coc)} tone={coc > 0 ? "good" : "bad"} sub={repairs > 0 ? "down + fee + rehab" : "down + fee"} />
-          </div>
-        </div>
-      </div>
-      <WholesaleCompare arv={arv} repairs={repairs} underPct={underPct} overPct={overPct} wholesaleFee={wholesaleFee} setWholesaleFee={setWholesaleFee} feeField={props.feeField}
-        dealCost={price} costLabel="Seller-finance price" financingValue={finValue} buyerCashIn={cashIn} annualCF={cashFlow * 12} />
-      <RateSavings loanAmount={loan} rate={rsRate} setRate={setRsRate} term={rsTerm} setTerm={setRsTerm} mkt={rsMkt} setMkt={setRsMkt} dealPayment={totalMonthly} />
-      <BuyerDeckButton openKey={props.deckOpenKey} onOpened={props.onDeckOpened}
-        common={{ ...deckCommon, contractDefault: price }}
-        deal={{
-          type: "Seller Finance",
-          loanSavings: computeLoanSavings({ P: loan, rate: rsRate, term: rsTerm, mkt: rsMkt, dealPayment: totalMonthly }),
-          headline: `Seller Finance · ${usd(cashFlow)}/mo cash flow · ${usd(finValue)} financing value`,
-          highlights: [
-            cashFlow > 0 ? `Potential to make ${usd(cashFlow)}/mo in cash flow once renovated and rented` : null,
-            equity > 0 ? `${usd(equity)} in built-in equity below ARV` : null,
-            num(sfRate) < 7 ? `${usd(finValue)} of value from a ${num(sfRate)}% seller-financed rate vs the market` : null,
-            "Seller-financed — no bank, no qualifying, terms set with the seller",
-            rent > 0 ? `Rents for about ${usd(rent)}/mo` : null,
-          ],
-          rows: [
-            ["Purchase price", usd(price)],
-            ["Down payment", usd(down)],
-            ["Interest rate", `${num(sfRate)}%`],
-            ["Monthly P&I", usd(pi)],
-            ["Monthly cash flow", usd(cashFlow)],
-            ["Equity captured", usd(equity)],
-          ],
-          totalLabel: "Total deal value",
-          totalValue: usd(Math.max(0, equity) + finValue),
-          verdict: detail,
-          ...buildDealExtras({ loanAmt: loan, rate: rsRate, term: rsTerm, arv, equity, cashFlow, cashToClose: closeCash, coc: buyerCoc, cashIn: closeCash + repairs, reservePct: num(sfReservePct) }),
-        }}
-      />
-      <TabEducation id="sf" />
-    </div>
-  );
-}
-
-// ---------- NOVATION (your sheet: As-Is × 0.95 × 0.92 − profit = MAO) ----------
-function NovationTab(props) {
-  const { repairs, novAsIs, setNovAsIs, novCommission, setNovCommission, novClosing, setNovClosing, novProfit, setNovProfit, novRepairs, setNovRepairs } = props;
-  // YLHB's novation sheet, step by step (per B, Sep 29 2026):
-  //   As-Is value − commissions (% of value) − closing costs ($) − desired profit − estimated repairs = MAO
-  // Replaces the old As-Is × 95% × (100 − 8)% − profit.
-  // Blank uses the As-Is formula's average of the online values on the Cash tab, so the two never disagree
-  // unless someone types a different value here on purpose.
-  const asIsTyped = num(novAsIs) > 0;
-  const asIs = asIsTyped ? num(novAsIs) : num(props.asIsAvg);
-  const commPct = num(novCommission);
-  const commission = asIs * (commPct / 100);
-  const closing = num(novClosing);
-  const profit = num(novProfit);
-  const repairTyped = String(novRepairs ?? "").trim() !== "";   // novRepairs IS the deal's typed repair number
-  const rep = num(repairs);                                       // the same repair number every screen uses
-  const afterComm = asIs - commission;
-  const afterClosing = afterComm - closing;
-  const afterProfit = afterClosing - profit;
-  const mao = afterProfit - rep;
-  let status = "maybe", headline = "Enter the As-Is value to grade", detail = "";
-  if (asIs > 0) {
-    if (mao > 0) { status = "go"; headline = "Novation MAO ready"; detail = `Offer up to ${usd(mao)} to net your ${usd(profit)} target.`; }
-    else { status = "no"; headline = "Costs, profit and repairs are more than the value"; detail = "Lower the profit target, tighten the repairs, or reconsider the deal."; }
-  }
-  const steps = [
-    ["As-Is value", asIs, null],
-    [`Minus ${commPct}% commissions`, afterComm, commission],
-    [`Minus closing costs (${usd(closing)})`, afterClosing, closing],
-    [`Minus desired profit (${usd(profit)})`, afterProfit, profit],
-    [`Minus estimated repairs (${usd(rep)})`, mao, rep],
-  ];
-  return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-2">
-        <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-        <div className="text-xs text-amber-900">
-          Runs your novation sheet: As-Is value, minus {commPct}% commissions, minus {usd(closing)} closing costs, minus your desired profit, minus estimated repairs.
-        </div>
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <SectionTitle>Novation inputs</SectionTitle>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2"><Field label="As-Is value" hint={asIsTyped ? "typed here" : num(props.asIsAvg) > 0 ? "from the As-Is formula on the Cash tab" : "or fill the As-Is formula on the Cash tab"}><MoneyInput value={novAsIs} onChange={setNovAsIs} placeholder={num(props.asIsAvg) > 0 ? String(Math.round(num(props.asIsAvg))) : "270000"} /></Field></div>
-            <Field label="Commissions" hint="% of the value"><PlainInput value={novCommission} onChange={setNovCommission} suffix="%" /></Field>
-            <Field label="Closing costs"><MoneyInput value={novClosing} onChange={setNovClosing} /></Field>
-            <Field label="Desired profit"><MoneyInput value={novProfit} onChange={setNovProfit} /></Field>
-            <Field label="Estimated repairs" hint={repairTyped ? "the deal's number · same everywhere" : "from the deal · typing changes it everywhere"}>
-              <MoneyInput value={novRepairs} onChange={setNovRepairs} placeholder={num(repairs) > 0 ? String(Math.round(num(repairs))) : "0"} />
-            </Field>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <Verdict status={status} headline={headline} detail={detail} />
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            {steps.map(([label, running, minus], i) => (
-              <div key={i} className="flex items-center justify-between border-b border-slate-100 px-4 py-2 text-sm">
-                <span className="text-slate-700">{label}</span>
-                <span className="font-mono text-slate-800">{asIs > 0 ? usd(running) : "—"}</span>
-              </div>
-            ))}
-            <div className={`flex items-center justify-between px-4 py-2.5 ${asIs > 0 && mao > 0 ? "bg-emerald-50" : asIs > 0 ? "bg-rose-50" : "bg-slate-50"}`}>
-              <span className="text-sm font-bold text-slate-900">Novation Max Allowable Offer</span>
-              <span className={`font-mono text-lg font-bold ${asIs > 0 && mao > 0 ? "text-emerald-700" : asIs > 0 ? "text-rose-700" : "text-slate-600"}`}>{asIs > 0 ? usd(mao) : "—"}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      <TabEducation id="nov" />
-    </div>
-  );
+// Downloadable one-page report.
+function downloadReport(d, a, wit) {
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const row = (k, v) => `<tr><td>${esc(k)}</td><td class="n">${esc(v)}</td></tr>`;
+  const name = d.name || d.address || "Co-living deal";
+  const rents = [...(["coliving", "hybrid"].includes(d.model) ? d.rooms.map((r, i) => `Room ${i + 1}: ${fmt$(num(r.rent))}${r.owner && d.dealType === "hack" ? " (owner)" : ""}`) : []),
+    ...(["private", "hybrid"].includes(d.model) ? d.units.map((u, i) => `Unit ${i + 1}: ${fmt$(num(u.rent))}${u.owner && d.dealType === "hack" ? " (owner)" : ""}`) : [])].join(", ");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} | Co-Living Deal Analysis</title>
+<style>body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px}
+h1{font-size:22px;margin:8px 0 2px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#475569;margin:22px 0 6px;border-bottom:2px solid #6cbb4a;padding-bottom:4px}
+table{width:100%;border-collapse:collapse;font-size:13px}td{padding:5px 4px;border-bottom:1px solid #e2e8f0}td.n{text-align:right;font-family:ui-monospace,Menlo,monospace}
+.v{border:2px solid #6cbb4a;border-radius:10px;padding:10px 12px;margin-top:10px}.muted{color:#64748b;font-size:11px;margin-top:24px}</style></head><body>
+<img src="${location.origin}/academy-logo.png" alt="Hobknob Co-Living Academy" style="height:52px">
+<h1>${esc(name)}</h1><div>${esc(d.address)} · ${esc(DEAL_TYPES[d.dealType])} · ${esc({ coliving: "Co-Living", private: "Private units", hybrid: "Hybrid" }[d.model])}</div>
+<div class="v"><b>${esc(a.verdict.label)}</b><br>${esc(a.verdict.note)}</div>
+<h2>Results</h2><table>
+${row("Monthly cash flow", fmt$(a.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${row("Cash-on-cash", pct(a.coc))}
+${a.paybackMonths ? row("Payback", `${Math.ceil(a.paybackMonths)} months`) : ""}${a.owns ? row("Cost per rentable room", fmt$(a.costPerRoom)) : ""}
+${a.dscr ? row("Lender DSCR", a.dscr.toFixed(2)) : ""}${a.breakEvenOcc != null ? row("Break-even occupancy", pct(a.breakEvenOcc)) : ""}
+${a.hack ? row("Your monthly housing cost", fmt$(Math.max(0, a.hack.yourCost))) : ""}</table>
+<h2>Monthly</h2><table>
+${row("Rent at 100%", fmt$(a.grossRent))}${row(`Income at ${pct(a.occ * 100)} occupancy`, fmt$(a.effectiveIncome))}
+${a.leaseRent ? row("Lease", `-${fmt$(a.leaseRent)}`) : ""}${a.taxesMo ? row("Taxes", `-${fmt$(a.taxesMo)}`) : ""}${a.insMo ? row("Insurance", `-${fmt$(a.insMo)}`) : ""}
+${a.opexLines.filter((l) => l.amt).map((l) => row(l.label, `-${fmt$(l.amt)}`)).join("")}${a.mgmt ? row("Management", `-${fmt$(a.mgmt)}`) : ""}
+${row("Net operating income", fmt$(a.noi))}${a.debtService ? row("Debt payments", `-${fmt$(a.debtService)}`) : ""}${row("Cash flow", fmt$(a.cashFlow))}</table>
+<h2>Cash needed</h2><table>${a.cashInLines.map((l) => row(l.label, fmt$(l.amt))).join("")}${row("Total", fmt$(a.cashIn))}</table>
+<h2>Rents</h2><div style="font-size:13px">${esc(rents || "none entered")}</div>
+${a.five ? `<h2>5-year return</h2><table>${row("Cash flow", fmt$(a.five.cashflow5))}${row("Loan paid down", fmt$(a.five.paydown))}${row("Appreciation", fmt$(a.five.appreciation))}${row("Depreciation tax savings", fmt$(a.five.depreciationSavings))}${row("Total", fmt$(a.five.total))}</table>` : ""}
+${wit ? `<h2>What it takes</h2><div style="font-size:13px">${wit.rentNeeded != null ? `Average rent needed: ${fmt$(wit.rentNeeded)}. ` : ""}${wit.maxPrice != null ? `Most you can pay: ${fmt$(wit.maxPrice)}. ` : ""}${wit.maxLease != null ? `Most you can lease it for: ${fmt$(wit.maxLease)}/mo.` : ""}</div>` : ""}
+${d.notes ? `<h2>Notes</h2><div style="font-size:13px;white-space:pre-wrap">${esc(d.notes)}</div>` : ""}
+<p class="muted">Prepared with the Hobknob Co-Living Academy Deal Analyzer on ${new Date().toLocaleDateString()}. For education only. These are estimates, not guarantees, and real results vary. Not financial, legal or tax advice. Verify every number before you commit.</p>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "deal"}-analysis.html`;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
