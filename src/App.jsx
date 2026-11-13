@@ -151,7 +151,7 @@ function Gate({ onUnlock }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
-        <img src="/academy-logo.png" alt="Hobknob Co-Living Academy" className="mx-auto h-16 w-auto" />
+        <img src="/academy-logo.png" alt="Hobknob Co-Living Academy" className="mx-auto h-20 w-auto" />
         <h1 className="mt-4 text-lg font-bold text-slate-900">Co-Living Deal Analyzer</h1>
         <p className="mt-1 text-[13px] text-slate-600">For Hobknob Co-Living Academy students. Enter the passcode from your course.</p>
         <div className="relative mt-4">
@@ -257,7 +257,7 @@ function Analyzer({ onLock }) {
       <header className="z-20 border-b border-slate-200 bg-white/95 backdrop-blur lg:sticky lg:top-0">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-2.5">
           <div className="flex items-center gap-3">
-            <img src="/academy-logo.png" alt="Hobknob Co-Living Academy" className="h-8 w-auto sm:h-10" />
+            <img src="/academy-logo.png" alt="Hobknob Co-Living Academy" className="h-10 w-auto sm:h-14" />
             <span className="hidden border-l border-slate-200 pl-3 text-sm font-bold text-slate-800 sm:inline">Co-Living Deal Analyzer</span>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -632,7 +632,7 @@ function Analyzer({ onLock }) {
           )}
 
           <p className="px-1 text-[11px] leading-snug text-slate-500">For education only. These are estimates, not guarantees, and real results vary. This is not financial, legal or tax advice. Verify every number with your lender, title company, insurance agent, CPA and local codes before you commit.</p>
-          <button onClick={onLock} className="px-1 text-[11px] text-slate-400 underline">Lock the analyzer</button>
+          <button onClick={onLock} className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-slate-300 bg-white px-3 py-2.5 text-sm font-bold text-slate-700 transition hover:border-slate-500 hover:bg-slate-50"><Lock className="h-4 w-4" />Lock the analyzer</button>
         </aside>
       </main>
     </div>
