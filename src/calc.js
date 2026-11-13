@@ -264,17 +264,31 @@ export function analyze(d) {
 
 // Long-term plan after hard money: refinance into a DSCR loan, refinance with a private lender,
 // or pay it off in cash. DSCR ranges checked Nov 2026 (lender guides): 7% to 8% rates, 70% to 75%
-// of value for cash-out, 2% to 5% closing costs, 3 to 6 months owned before the new value is used.
+// of value for cash-out, 75% to 80% for rate and term, cash-out rates about 0.25% to 0.5% higher than
+// rate and term, 2% to 5% closing costs, 3 to 6 months owned before the new value is used.
+// Rate and term: the new loan only pays off the old loan and the closing costs, so no cash comes out.
+// Brian: with rate and term you usually get a little back at closing, usually under $1,000.
 export function refiPlan(d, a) {
   if (!a || !a.hard) return null;
   const payoff = a.hard.balloon;
   const value = num(d.arv) > 0 ? num(d.arv) : a.price + a.reno;
   const type = d.refiType || "dscr";
   let newLoan = 0, costs = 0, payment = 0, rate = 0, years = 0, io = false;
+  let kind = "cashout", capped = false;
   if (type === "dscr") {
-    newLoan = value * Math.min(100, Math.max(0, num(d.refiLtv ?? 75))) / 100;
-    costs = newLoan * num(d.refiCostPct ?? 3) / 100;
-    rate = num(d.refiRate ?? 7.5); years = num(d.refiYears ?? 30) || 30;
+    kind = d.refiKind === "rateterm" ? "rateterm" : "cashout";
+    const costPct = num(d.refiCostPct ?? 3) / 100;
+    years = num(d.refiYears ?? 30) || 30;
+    if (kind === "rateterm") {
+      const maxLoan = value * Math.min(100, Math.max(0, num(d.rtLtv ?? 80))) / 100;
+      const needed = costPct < 1 ? payoff / (1 - costPct) : payoff;   // pays off the old loan plus its own closing costs
+      newLoan = Math.min(needed, maxLoan); capped = needed > maxLoan + 0.5;
+      rate = num(d.rtRate ?? 7.25);
+    } else {
+      newLoan = value * Math.min(100, Math.max(0, num(d.refiLtv ?? 75))) / 100;
+      rate = num(d.refiRate ?? 7.5);
+    }
+    costs = newLoan * costPct;
     payment = pmt(newLoan, rate, years);
   } else if (type === "private") {
     newLoan = String(d.pmAmount ?? "").trim() !== "" ? num(d.pmAmount) : payoff;
@@ -287,7 +301,7 @@ export function refiPlan(d, a) {
   const pitia = payment + a.taxesMo + a.insMo + num((d.expenses || {}).hoa);
   const tradRent = num(d.wholeHouseRent);
   return {
-    type, payoff, value, newLoan, costs, payment, rate, years, io, cashToClose, cashFlow, cashLeftIn,
+    type, kind, capped, payoff, value, newLoan, costs, payment, rate, years, io, cashToClose, cashFlow, cashLeftIn,
     coc: cashLeftIn > 0 ? (cashFlow * 12 / cashLeftIn) * 100 : null,
     dscr: type === "dscr" && pitia > 0 && tradRent > 0 ? tradRent / pitia : null,
     ltv: value > 0 ? (newLoan / value) * 100 : null,

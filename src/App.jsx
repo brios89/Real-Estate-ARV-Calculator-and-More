@@ -40,7 +40,7 @@ const newDeal = () => ({
   appreciation: 3, landPct: 20, taxRate: 24, targetCoc: 15, currentHousing: "", notes: "",
   docs: { ownerName: "", ownerPhone: "", ownerEmail: "", contractor: "" },
   lender: "bank", hmPurchasePct: 90, hmRehabPct: 100, hmRate: 12, hmPoints: 2, hmMonths: 12, hmRollCosts: false,
-  refiType: "dscr", refiLtv: 75, refiRate: 7.5, refiYears: 30, refiCostPct: 3, pmAmount: "", pmRate: 10, pmYears: 30, pmIO: false,
+  refiType: "dscr", refiKind: "cashout", rtLtv: 80, rtRate: 7.25, refiLtv: 75, refiRate: 7.5, refiYears: 30, refiCostPct: 3, pmAmount: "", pmRate: 10, pmYears: 30, pmIO: false,
 });
 
 // A saved deal from an older version may name a deal type that no longer exists. Fall back to Buy & Convert.
@@ -452,9 +452,22 @@ function Analyzer({ onLock }) {
                     <div className="text-[13px] font-bold text-slate-800">Long-term plan: how you pay off the hard money</div>
                     <div className="mt-2"><Chips value={d.refiType || "dscr"} onChange={(v) => set("refiType", v)} opts={[["dscr", "Refinance with a DSCR loan"], ["private", "Private money lender"], ["cash", "Pay it off in cash"]]} /></div>
                     {refi.type === "dscr" && (
-                      <div className="mt-3 grid gap-3 sm:grid-cols-4">
-                        <Field label="Loan to value" hint="typical 70-75%" tip="DSCR lenders lend a share of the appraised value. For cash-out, most stop at 70% to 75%."><Num value={d.refiLtv} onChange={(v) => set("refiLtv", v)} suffix="%" /></Field>
-                        <Field label="Interest rate" hint="typical 7-8%"><Num value={d.refiRate} onChange={(v) => set("refiRate", v)} suffix="%" /></Field>
+                      <div className="mt-3">
+                        <Chips value={d.refiKind || "cashout"} onChange={(v) => set("refiKind", v)} opts={[["cashout", "Cash-out refinance"], ["rateterm", "Rate and term refinance"]]} />
+                        <p className="mt-1.5 text-[11.5px] text-slate-600">{refi.kind === "rateterm"
+                          ? "The new loan just pays off the hard money and the closing costs, at a lower rate. You usually get a little money back at closing, usually under $1,000."
+                          : "The new loan is a share of the appraised value. Anything left after paying off the hard money comes back to you, at a slightly higher rate."}</p>
+                      </div>
+                    )}
+                    {refi.type === "dscr" && (
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <Field label="After-repair value" hint="same as above" tip="The DSCR lender's appraisal. The new loan is a share of this value. It is the same number as the after-repair value above, so changing it here changes it there."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                        {refi.kind === "rateterm"
+                          ? <Field label="Max loan to value" hint="typical 75-80%" tip="For rate and term, most DSCR lenders go up to 75% to 80% of the appraised value. The loan is only as big as the payoff needs, up to this limit."><Num value={d.rtLtv} onChange={(v) => set("rtLtv", v)} suffix="%" /></Field>
+                          : <Field label="Loan to value" hint="typical 70-75%" tip="DSCR lenders lend a share of the appraised value. For cash-out, most stop at 70% to 75%."><Num value={d.refiLtv} onChange={(v) => set("refiLtv", v)} suffix="%" /></Field>}
+                        {refi.kind === "rateterm"
+                          ? <Field label="Interest rate" hint="usually a bit lower" tip="Lender guides show cash-out rates run about 0.25% to 0.5% higher than rate and term."><Num value={d.rtRate} onChange={(v) => set("rtRate", v)} suffix="%" /></Field>
+                          : <Field label="Interest rate" hint="typical 7-8%"><Num value={d.refiRate} onChange={(v) => set("refiRate", v)} suffix="%" /></Field>}
                         <Field label="Loan term"><Num value={d.refiYears} onChange={(v) => set("refiYears", v)} suffix="yrs" /></Field>
                         <Field label="Closing costs" hint="typical 2-5%" tip="As a share of the new loan."><Num value={d.refiCostPct} onChange={(v) => set("refiCostPct", v)} suffix="%" /></Field>
                       </div>
@@ -472,13 +485,14 @@ function Analyzer({ onLock }) {
                     )}
                     {refi.type === "cash" && <p className="mt-3 text-[12px] text-slate-700">You pay off the {fmt$(refi.payoff)} hard money loan with your own cash. No loan payment after that.</p>}
                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
+                      {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.type === "dscr" ? (num(d.arv) > 0 ? `${pct(refi.ltv)} of the ${fmt$(refi.value)} value` : "enter the after-repair value") : refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
                       <Stat label={refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
                       <Stat label="Monthly cash flow" value={fmt$(refi.cashFlow)} sub="after the payoff" tone={refi.cashFlow > 0 ? "good" : "bad"} />
-                      <Stat label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? "All cash out" : pct(refi.coc)} sub={refi.cashLeftIn <= 0 ? `${fmt$(Math.abs(refi.cashLeftIn))} more than you put in` : `on ${fmt$(refi.cashLeftIn)} left in the deal`} tone={refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />
+                      <Stat label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? "All cash out" : pct(refi.coc)} sub={refi.cashLeftIn <= 0 ? `${fmt$(Math.abs(refi.cashLeftIn))} more than you put in${refi.cashFlow <= 0 ? ", but it loses money every month" : ""}` : `on ${fmt$(refi.cashLeftIn)} left in the deal`} tone={refi.cashFlow <= 0 ? "bad" : refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />
                     </div>
                     {refi.type === "dscr" && (
                       <div className="mt-2 space-y-1.5 text-[12px] leading-snug">
+                        {refi.kind === "rateterm" && refi.capped && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">The payoff is more than {pct(num(d.rtLtv))} of the value, so the new loan is capped at {fmt$(refi.newLoan)}. You would bring {fmt$(refi.cashToClose)} to close.</div>}
                         {refi.dscr == null && <div className="text-slate-600">Enter the whole-house rent in step 3 to see the DSCR this lender will check.</div>}
                         {refi.dscr != null && <div className={refi.dscr >= TARGETS.dscrMin ? "text-emerald-700" : "rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900"}>Lender DSCR on the new loan: <b>{refi.dscr.toFixed(2)}</b>{refi.dscr >= TARGETS.dscrMin ? "." : `. Most DSCR lenders want 1.0 to 1.25. Below that they may lend less or charge more, so the new loan could be smaller.`}</div>}
                         {num(d.arv) <= 0 && <div className="text-slate-600">Enter the after-repair value above. The new loan is based on what the house appraises for.</div>}
@@ -693,12 +707,12 @@ function Analyzer({ onLock }) {
 
           {refi && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">After the hard money ({{ dscr: "DSCR refinance", private: "private lender", cash: "paid off in cash" }[refi.type]})</div>
+              <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">After the hard money ({refi.type === "dscr" ? (refi.kind === "rateterm" ? "rate and term refinance" : "cash-out refinance") : { private: "private lender", cash: "paid off in cash" }[refi.type]})</div>
               <Row label={refi.type === "cash" ? "Cash to pay off the loan" : refi.cashToClose >= 0 ? "Cash to close the refinance" : "Cash back at refinance"} value={fmt$(Math.abs(refi.cashToClose))} />
               {refi.payment > 0 && <Row label="New loan payment" value={`-${fmt$(refi.payment)}`} />}
               <Row label="Monthly cash flow" value={fmt$(refi.cashFlow)} strong />
               <Row label="Cash left in the deal" value={fmt$(refi.cashLeftIn)} />
-              <Row label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? "All cash out" : pct(refi.coc)} muted />
+              <Row label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? "All cash out" : "All cash out, losing money monthly") : pct(refi.coc)} muted />
             </div>
           )}
 
