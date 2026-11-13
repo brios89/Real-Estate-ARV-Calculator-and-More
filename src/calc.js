@@ -189,7 +189,11 @@ export function analyze(d) {
   const annualCF = cashFlow * 12;
   const coc = cashIn > 0 ? (annualCF / cashIn) * 100 : null;
   const pitia = pAndI + mi + notePay + taxesMo + insMo + num(exp.hoa);
-  const dscr = pitia > 0 ? effectiveIncome / pitia : null;   // lender style: rent / PITIA
+  // Lender DSCR. Most lenders qualify on traditional rent (what the house rents for to one tenant),
+  // not room rents. Brian knows of only one lender that counts by-the-room income, and a few that
+  // count short-term rental income. So the main DSCR uses the traditional rent the student enters.
+  const dscrRoom = pitia > 0 ? effectiveIncome / pitia : null;
+  const dscr = pitia > 0 && num(d.wholeHouseRent) > 0 ? num(d.wholeHouseRent) / pitia : null;
   const allIn = price + reno;
   const capRate = allIn > 0 ? ((noi * 12) / allIn) * 100 : null;
   const costPerRoom = rentableCount > 0 ? allIn / rentableCount : null;
@@ -248,8 +252,40 @@ export function analyze(d) {
     type, owns, occ, rentableCount, rentedCount, grossRent, grossRoomRent, grossUnitRent, otherIncome, effectiveIncome,
     price, reno, closing, loan, down, pAndI, mi, notePay, sellerNote, debtService, taxesMo, insMo,
     opexLines, mgmt, opex, utilities, noi, cashFlow, annualCF, furn, furnishing, holding, holdingMonthly, months,
-    cashIn, cashInLines, coc, dscr, capRate, costPerRoom, breakEvenOcc, paybackMonths, cfPerRoom, premium, five,
+    cashIn, cashInLines, coc, dscr, dscrRoom, capRate, costPerRoom, breakEvenOcc, paybackMonths, cfPerRoom, premium, five,
     balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller, hard, pointsCash, closingCash,
+  };
+}
+
+// Long-term plan after hard money: refinance into a DSCR loan, refinance with a private lender,
+// or pay it off in cash. DSCR ranges checked Nov 2026 (lender guides): 7% to 8% rates, 70% to 75%
+// of value for cash-out, 2% to 5% closing costs, 3 to 6 months owned before the new value is used.
+export function refiPlan(d, a) {
+  if (!a || !a.hard) return null;
+  const payoff = a.hard.balloon;
+  const value = num(d.arv) > 0 ? num(d.arv) : a.price + a.reno;
+  const type = d.refiType || "dscr";
+  let newLoan = 0, costs = 0, payment = 0, rate = 0, years = 0, io = false;
+  if (type === "dscr") {
+    newLoan = value * Math.min(100, Math.max(0, num(d.refiLtv ?? 75))) / 100;
+    costs = newLoan * num(d.refiCostPct ?? 3) / 100;
+    rate = num(d.refiRate ?? 7.5); years = num(d.refiYears ?? 30) || 30;
+    payment = pmt(newLoan, rate, years);
+  } else if (type === "private") {
+    newLoan = String(d.pmAmount ?? "").trim() !== "" ? num(d.pmAmount) : payoff;
+    rate = num(d.pmRate ?? 10); years = num(d.pmYears ?? 30) || 30; io = !!d.pmIO;
+    payment = io ? newLoan * rate / 100 / 12 : pmt(newLoan, rate, years);
+  }
+  const cashToClose = payoff + costs - newLoan;           // above 0 = you bring cash, below 0 = cash back to you
+  const cashFlow = a.noi - payment;
+  const cashLeftIn = a.cashIn + cashToClose;
+  const pitia = payment + a.taxesMo + a.insMo + num((d.expenses || {}).hoa);
+  const tradRent = num(d.wholeHouseRent);
+  return {
+    type, payoff, value, newLoan, costs, payment, rate, years, io, cashToClose, cashFlow, cashLeftIn,
+    coc: cashLeftIn > 0 ? (cashFlow * 12 / cashLeftIn) * 100 : null,
+    dscr: type === "dscr" && pitia > 0 && tradRent > 0 ? tradRent / pitia : null,
+    ltv: value > 0 ? (newLoan / value) * 100 : null,
   };
 }
 
