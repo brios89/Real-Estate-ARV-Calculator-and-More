@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Home, Handshake, BedDouble, Info, Save, FilePlus2, FolderOpen, Download, Lock, Trash2,
-  CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers,
+  CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers, FileText, ClipboardList, Calculator,
 } from "lucide-react";
 import {
   analyze, whatItTakes, num, fmt$, pct, EXPENSE_ITEMS, CAPEX_ITEMS, FURNISH_RATES, MGMT_PER_ROOM, TARGETS, DEAL_TYPES,
 } from "./calc.js";
+import { buildScope, buildPunch, buildRehab, openPrintable, projectFacts } from "./docs.js";
 
 // Hobknob Co-Living Academy Deal Analyzer. Students type the property facts, the app does the rest.
 // No property-data APIs: nothing here bills anyone per lookup.
@@ -37,6 +38,7 @@ const newDeal = () => ({
   capex: {}, monthsToRent: 1, otherUpfront: "",
   expenses: Object.fromEntries(EXPENSE_ITEMS.map(([k, , v]) => [k, v])), mgmtPerRoom: MGMT_PER_ROOM.toFixed(2), selfManage: false,
   appreciation: 3, landPct: 20, taxRate: 24, targetCoc: 15, currentHousing: "", notes: "",
+  docs: { ownerName: "", ownerPhone: "", ownerEmail: "", contractor: "" },
 });
 
 // A saved deal from an older version may name a deal type that no longer exists. Fall back to Buy & Convert.
@@ -532,6 +534,8 @@ function Analyzer({ onLock }) {
             </Card>
           )}
 
+          <ContractorDocs d={d} setIn={setIn} />
+
           <Card title="Notes"><textarea className={`${inputCls} min-h-[80px]`} value={d.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Zoning, HOA rules, lender, contractor quotes, questions to ask..." /></Card>
 
           <Checklist type={type} />
@@ -631,6 +635,39 @@ function Analyzer({ onLock }) {
         </aside>
       </main>
     </div>
+  );
+}
+
+// Printable contractor documents, filled in from this deal.
+function ContractorDocs({ d, setIn }) {
+  const f = projectFacts(d);
+  const docs = d.docs || {};
+  const items = [
+    ["scope", FileText, "Scope of Work", "Every job your contractor will do, room by room, who buys the materials, payment schedule and signatures.", () => buildScope(d)],
+    ["punch", ClipboardList, "Punch List", `A room-by-room walkthrough for the end of the job. Built for ${f.rooms ? `${f.rooms} bedrooms` : f.units ? `${f.units} units` : "your rooms"} and ${f.bathCount} bathroom${f.bathCount === 1 ? "" : "s"}.`, () => buildPunch(d)],
+    ["rehab", Calculator, "Rehab Estimate", "Take it to the walkthrough. Typical cost ranges, space for quantities and totals, plus your renovation budget from step 5.", () => buildRehab(d)],
+  ];
+  return (
+    <Card title="Contractor documents" sub="Print these for your walkthrough and your contractor. They fill in with this deal's address, bedrooms, bathrooms and the renovation items you entered. Each one opens ready to print or save as a PDF.">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Your name"><Text value={docs.ownerName} onChange={(v) => setIn("docs", "ownerName", v)} placeholder="Name or company" /></Field>
+        <Field label="Contractor" hint="optional"><Text value={docs.contractor} onChange={(v) => setIn("docs", "contractor", v)} placeholder="Contractor or company" /></Field>
+        <Field label="Your phone"><Text value={docs.ownerPhone} onChange={(v) => setIn("docs", "ownerPhone", v)} placeholder="(502) 555-0100" /></Field>
+        <Field label="Your email"><Text value={docs.ownerEmail} onChange={(v) => setIn("docs", "ownerEmail", v)} placeholder="you@email.com" /></Field>
+      </div>
+      {!d.address && <div className="mt-2 text-[12px] text-amber-700">Add the property address in step 2 so it prints on every page.</div>}
+      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        {items.map(([key, Icon, title, desc, build]) => (
+          <button key={key} type="button" onClick={() => openPrintable(build(), `${key}.html`)}
+            className="flex flex-col items-start rounded-xl border-2 border-slate-200 bg-white p-3 text-left transition hover:border-emerald-600">
+            <span className="flex items-center gap-2 text-sm font-bold text-slate-900"><Icon className="h-4 w-4 text-emerald-700" />{title}</span>
+            <span className="mt-1 text-[11.5px] leading-snug text-slate-600">{desc}</span>
+            <span className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-bold text-emerald-700"><Download className="h-3.5 w-3.5" />Open to print</span>
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] leading-snug text-slate-500">These are templates to start from, not legal contracts. Have a local attorney review any contract before you sign it, and confirm code requirements with your building department.</p>
+    </Card>
   );
 }
 

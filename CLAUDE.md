@@ -17,6 +17,7 @@ A deal analyzer for Academy students. Students type the property facts and rents
 ## Architecture
 - `src/calc.js`: all deal math as pure functions (`analyze`, `whatItTakes`). Defaults come from Brian's Deal Analyzer sheet. Test math here first.
 - `src/App.jsx`: the whole UI. Saved deals and the autosaved draft live in the student's browser (localStorage keys `academy.deals.v1`, `academy.draft.v1`).
+- `src/docs.js`: printable contractor documents (Scope of Work, Punch List, Rehab Estimate) built from the deal. Started from Brian's sample forms, corrected and expanded for co-living. Cost ranges are national ballparks (Nov 2026). Never invent a range. Use "Get local bids" when none was verified. Never print the student's budget on the Scope of Work.
 - `api/auth.js`: passcode check only.
 - Deploy: Vercel auto-deploys the GitHub repo.
 
