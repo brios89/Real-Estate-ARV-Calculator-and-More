@@ -139,6 +139,15 @@ const Row = ({ label, value, strong, muted }) => (
 // year. With no cash left in the deal the return is infinite, shown as the infinity sign.
 const INF = "\u221E";
 const INF_BIG = <span className="font-sans text-[1.7em] font-bold leading-none">{INF}</span>;
+// Cash-on-cash after the hard money is paid off. Same card in step 6 and in the results column.
+const RefiCocStat = ({ refi, big }) => {
+  const back = refi.cashLeftIn <= -1 ? ` plus ${fmt$(Math.abs(refi.cashLeftIn))}` : "";
+  return <Stat label="Cash-on-cash" big={big} value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? INF_BIG : "--") : pct(refi.coc)}
+    sub={refi.cashLeftIn <= 0
+      ? (refi.cashFlow > 0 ? `Infinite return. You got back all your cash${back}, so the cash flow is pure return.` : `You got back all your cash${back}, but it loses money every month.`)
+      : refi.coc >= 100 ? `Yes, over 100% is possible. On ${fmt$(refi.cashLeftIn)} left in, the cash flow pays it back within ${Math.max(1, Math.ceil(refi.cashLeftIn / refi.cashFlow))} months.` : `on ${fmt$(refi.cashLeftIn)} left in the deal`}
+    tone={refi.cashFlow <= 0 ? "bad" : refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />;
+};
 function cocView(coc, cashIn, cashFlow, monthsBack) {
   if (cashIn <= 0) {
     if (cashFlow > 0) return { value: INF_BIG, sub: "Infinite return. None of your own cash is left in the deal, so every dollar of cash flow is pure return.", tone: "good" };
@@ -423,8 +432,71 @@ function Analyzer({ onLock }) {
             </div>
           </Card>
 
-          {/* 4. Acquisition */}
-          <Card n="4" title={type === "creative" ? "The creative terms" : type === "hack" ? "Buying it to live in" : "Buying it"}>
+          {/* 4. Setup costs */}
+          <Card n="4" title="Getting it ready" sub="Renovation, furnishing and the time it takes to fill the rooms.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Months until rented" tip="How long until the rooms are filled. The house costs money every month before then: the loan, taxes, insurance and about half the utilities."><Num value={d.monthsToRent} onChange={(v) => set("monthsToRent", v)} /></Field>
+              <Field label="Other upfront costs" tip="Permits, inspections, photos, listing fees, LLC setup."><Money value={d.otherUpfront} onChange={(v) => set("otherUpfront", v)} /></Field>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200">
+              <button type="button" onClick={() => setShowCapex((s) => !s)} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                <span className="text-[13px] font-bold text-slate-800">Renovation and conversion <span className="font-mono text-slate-600">{fmt$(a.reno)}</span></span>
+                {showCapex ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+              </button>
+              {showCapex && (
+                <div className="grid gap-2 border-t border-slate-100 p-3 sm:grid-cols-2">
+                  {CAPEX_ITEMS.map(([k, l]) => <Field key={k} label={l}><Money value={d.capex[k] ?? ""} onChange={(v) => setIn("capex", k, v)} /></Field>)}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 rounded-xl border border-slate-200">
+              <button type="button" onClick={() => setShowFurnish((s) => !s)} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
+                <span className="text-[13px] font-bold text-slate-800">Furnishing and setup <span className="font-mono text-slate-600">{fmt$(a.furnishing)}</span>{num(d.furnishOverride) > 0 && <span className="ml-1 text-[11px] font-normal text-slate-500">(your number)</span>}</span>
+                {showFurnish ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+              </button>
+              {showFurnish && (
+                <div className="border-t border-slate-100 p-3">
+                  <p className="mb-2 text-[12px] text-slate-600">Hobknob's furnishing costs per room (as of 10/01/2025), appliances not included. Blank counts come from the property. Hobknob shops for decor at TJ Maxx, HomeGoods, Burlington and Goodwill, and for furniture on Facebook Marketplace, Amazon (beds), Wayfair, Walmart and Restore.</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {[["bedrooms", "Bedrooms", FURNISH_RATES.bedroom], ["bathrooms", "Bathrooms", FURNISH_RATES.bathroom], ["kitchens", "Kitchens", FURNISH_RATES.kitchen], ["laundry", "Laundry rooms", FURNISH_RATES.laundry],
+                      ["living", "Living rooms", FURNISH_RATES.living], ["dining", "Dining rooms", FURNISH_RATES.dining], ["sqft", "Sq ft (misc.)", FURNISH_RATES.perSqft]].map(([k, l, rate]) => (
+                      <Field key={k} label={l} hint={k === "sqft" ? "$0.70/sf" : `$${rate.toLocaleString()} each`}><Num value={d.furnish[k]} onChange={(v) => setIn("furnish", k, v)} placeholder={String(furnAuto[k] || 0)} /></Field>
+                    ))}
+                  </div>
+                  <div className="mt-2"><Check checked={d.furnish.hire} onChange={(v) => setIn("furnish", "hire", v)}>Hire someone to set it up (adds about $3 per sq ft)</Check></div>
+                  <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+                    {a.furn.lines.filter((l) => l.qty > 0).map((l) => <Row key={l.label} label={`${l.label} (${l.qty.toLocaleString()} x $${l.rate.toLocaleString()})`} value={fmt$(l.cost)} />)}
+                    {a.furn.hireExtra > 0 && <Row label="Setup labor" value={fmt$(a.furn.hireExtra)} />}
+                    <Row label="Estimate" value={fmt$(a.furn.total)} strong />
+                  </div>
+                  <Field label="Or use your own number" hint="overrides the estimate" className="mt-3 sm:w-64"><Money value={d.furnishOverride} onChange={(v) => set("furnishOverride", v)} placeholder="optional" /></Field>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* 5. Expenses */}
+          <Card n="5" title="Monthly operating costs" sub="Pre-filled with Hobknob's 12-month averages for a 5-bedroom co-living home. Change any of them to match your house and market.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              {EXPENSE_ITEMS.filter(([k]) => k !== "hoa" || model === "private").map(([k, l]) => (
+                <Field key={k} label={l} hint={k === "hoa" ? "private units only" : undefined}><Money value={d.expenses[k]} onChange={(v) => setIn("expenses", k, v)} /></Field>
+              ))}
+              <Field label="Management per room / unit" hint={d.selfManage ? "self-managed" : `x ${a.rentedCount} = ${fmt$(a.mgmt)}`} tip="Hobknob budgets $61.50 per room or unit per month. Keep it in even if you self-manage, so the deal still works the day you hire it out.">
+                <Money value={d.selfManage ? "0" : d.mgmtPerRoom} onChange={(v) => set("mgmtPerRoom", v)} />
+              </Field>
+            </div>
+            <div className="mt-3"><Check checked={d.selfManage} onChange={(v) => set("selfManage", v)}>I will manage it myself (management at $0)</Check></div>
+            {model === "private" ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"><b>If there is an HOA, read its rules before you make an offer.</b> Many HOAs do not allow leases shorter than 12 months, and some do not allow renting at all. A mid-term rental may not be allowed.</div>
+            ) : (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"><b>HOA homes are usually not a fit for co-living.</b> In Brian's experience, about 99% of HOAs do not allow renting by the room, so HOA dues are left out here. If this house has an HOA, read the rules before you go any further.</div>
+            )}
+          </Card>
+
+          {/* 6. Acquisition */}
+          <Card n="6" title={type === "creative" ? "The creative terms" : type === "hack" ? "Buying it to live in" : "Buying it"}>
             {type === "buy" && (
               <div className="mb-3">
                 <Field label="How are you paying for it?">
@@ -449,7 +521,7 @@ function Analyzer({ onLock }) {
                   <div className="sm:col-span-3">
                     <Check checked={num(d.hmPurchasePct) === 100 && num(d.hmRehabPct) === 100 && !!d.hmRollCosts}
                       onChange={(v) => setD((p) => (v ? { ...p, hmPurchasePct: 100, hmRehabPct: 100, hmRollCosts: true } : { ...p, hmPurchasePct: 90, hmRehabPct: 100, hmRollCosts: false }))}>
-                      <b>No money in:</b> the lender covers 100% of the purchase, the rehab, closing costs and points. Furnishing and the months before it rents are set just below.
+                      <b>No money in:</b> the lender covers 100% of the purchase, the rehab, closing costs and points. Furnishing and the months before it rents are set in step 4.
                     </Check>
                   </div>
                 </div>
@@ -522,15 +594,12 @@ function Analyzer({ onLock }) {
                     {refi.missingValue ? (
                       <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] leading-snug text-rose-900">Enter the after-repair value above. A DSCR lender sizes the new loan on what the house appraises for, so there is no refinance number without it.</div>
                     ) : (
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className={`mt-3 grid grid-cols-2 gap-2 ${refi.type === "dscr" ? "sm:grid-cols-3 xl:grid-cols-5" : "sm:grid-cols-4"}`}>
+                      {refi.type === "dscr" && <Stat label="After-repair value" value={fmt$(refi.value)} sub="what the lender's appraisal is based on" />}
                       {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.type === "dscr" ? (num(d.arv) > 0 ? `${pct(refi.ltv)} of the ${fmt$(refi.value)} value` : "enter the after-repair value") : refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
                       <Stat label={refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
                       <Stat label="Monthly cash flow" value={fmt$(refi.cashFlow)} sub="after the payoff" tone={refi.cashFlow > 0 ? "good" : "bad"} />
-                      <Stat label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? INF_BIG : "--") : pct(refi.coc)}
-                        sub={refi.cashLeftIn <= 0
-                          ? (refi.cashFlow > 0 ? `Infinite return. You got back all your cash plus ${fmt$(Math.abs(refi.cashLeftIn))}, so the cash flow is pure return.` : `You got back all your cash plus ${fmt$(Math.abs(refi.cashLeftIn))}, but it loses money every month.`)
-                          : refi.coc >= 100 ? `Yes, over 100% is possible. On ${fmt$(refi.cashLeftIn)} left in, the cash flow pays it back within ${Math.max(1, Math.ceil(refi.cashLeftIn / refi.cashFlow))} months.` : `on ${fmt$(refi.cashLeftIn)} left in the deal`}
-                        tone={refi.cashFlow <= 0 ? "bad" : refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />
+                      <RefiCocStat refi={refi} />
                     </div>
                     )}
                     {refi.type === "dscr" && !refi.missingValue && (
@@ -622,69 +691,6 @@ function Analyzer({ onLock }) {
             )}
           </Card>
 
-          {/* 5. Setup costs */}
-          <Card n="5" title="Getting it ready" sub="Renovation, furnishing and the time it takes to fill the rooms.">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Months until rented" tip="How long until the rooms are filled. The house costs money every month before then: the loan, taxes, insurance and about half the utilities."><Num value={d.monthsToRent} onChange={(v) => set("monthsToRent", v)} /></Field>
-              <Field label="Other upfront costs" tip="Permits, inspections, photos, listing fees, LLC setup."><Money value={d.otherUpfront} onChange={(v) => set("otherUpfront", v)} /></Field>
-            </div>
-
-            <div className="mt-4 rounded-xl border border-slate-200">
-              <button type="button" onClick={() => setShowCapex((s) => !s)} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
-                <span className="text-[13px] font-bold text-slate-800">Renovation and conversion <span className="font-mono text-slate-600">{fmt$(a.reno)}</span></span>
-                {showCapex ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
-              </button>
-              {showCapex && (
-                <div className="grid gap-2 border-t border-slate-100 p-3 sm:grid-cols-2">
-                  {CAPEX_ITEMS.map(([k, l]) => <Field key={k} label={l}><Money value={d.capex[k] ?? ""} onChange={(v) => setIn("capex", k, v)} /></Field>)}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-3 rounded-xl border border-slate-200">
-              <button type="button" onClick={() => setShowFurnish((s) => !s)} className="flex w-full items-center justify-between px-3 py-2.5 text-left">
-                <span className="text-[13px] font-bold text-slate-800">Furnishing and setup <span className="font-mono text-slate-600">{fmt$(a.furnishing)}</span>{num(d.furnishOverride) > 0 && <span className="ml-1 text-[11px] font-normal text-slate-500">(your number)</span>}</span>
-                {showFurnish ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
-              </button>
-              {showFurnish && (
-                <div className="border-t border-slate-100 p-3">
-                  <p className="mb-2 text-[12px] text-slate-600">Hobknob's furnishing costs per room (as of 10/01/2025), appliances not included. Blank counts come from the property. Hobknob shops for decor at TJ Maxx, HomeGoods, Burlington and Goodwill, and for furniture on Facebook Marketplace, Amazon (beds), Wayfair, Walmart and Restore.</p>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {[["bedrooms", "Bedrooms", FURNISH_RATES.bedroom], ["bathrooms", "Bathrooms", FURNISH_RATES.bathroom], ["kitchens", "Kitchens", FURNISH_RATES.kitchen], ["laundry", "Laundry rooms", FURNISH_RATES.laundry],
-                      ["living", "Living rooms", FURNISH_RATES.living], ["dining", "Dining rooms", FURNISH_RATES.dining], ["sqft", "Sq ft (misc.)", FURNISH_RATES.perSqft]].map(([k, l, rate]) => (
-                      <Field key={k} label={l} hint={k === "sqft" ? "$0.70/sf" : `$${rate.toLocaleString()} each`}><Num value={d.furnish[k]} onChange={(v) => setIn("furnish", k, v)} placeholder={String(furnAuto[k] || 0)} /></Field>
-                    ))}
-                  </div>
-                  <div className="mt-2"><Check checked={d.furnish.hire} onChange={(v) => setIn("furnish", "hire", v)}>Hire someone to set it up (adds about $3 per sq ft)</Check></div>
-                  <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
-                    {a.furn.lines.filter((l) => l.qty > 0).map((l) => <Row key={l.label} label={`${l.label} (${l.qty.toLocaleString()} x $${l.rate.toLocaleString()})`} value={fmt$(l.cost)} />)}
-                    {a.furn.hireExtra > 0 && <Row label="Setup labor" value={fmt$(a.furn.hireExtra)} />}
-                    <Row label="Estimate" value={fmt$(a.furn.total)} strong />
-                  </div>
-                  <Field label="Or use your own number" hint="overrides the estimate" className="mt-3 sm:w-64"><Money value={d.furnishOverride} onChange={(v) => set("furnishOverride", v)} placeholder="optional" /></Field>
-                </div>
-              )}
-            </div>
-          </Card>
-
-          {/* 6. Expenses */}
-          <Card n="6" title="Monthly operating costs" sub="Pre-filled with Hobknob's 12-month averages for a 5-bedroom co-living home. Change any of them to match your house and market.">
-            <div className="grid gap-3 sm:grid-cols-3">
-              {EXPENSE_ITEMS.filter(([k]) => k !== "hoa" || model === "private").map(([k, l]) => (
-                <Field key={k} label={l} hint={k === "hoa" ? "private units only" : undefined}><Money value={d.expenses[k]} onChange={(v) => setIn("expenses", k, v)} /></Field>
-              ))}
-              <Field label="Management per room / unit" hint={d.selfManage ? "self-managed" : `x ${a.rentedCount} = ${fmt$(a.mgmt)}`} tip="Hobknob budgets $61.50 per room or unit per month. Keep it in even if you self-manage, so the deal still works the day you hire it out.">
-                <Money value={d.selfManage ? "0" : d.mgmtPerRoom} onChange={(v) => set("mgmtPerRoom", v)} />
-              </Field>
-            </div>
-            <div className="mt-3"><Check checked={d.selfManage} onChange={(v) => set("selfManage", v)}>I will manage it myself (management at $0)</Check></div>
-            {model === "private" ? (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"><b>If there is an HOA, read its rules before you make an offer.</b> Many HOAs do not allow leases shorter than 12 months, and some do not allow renting at all. A mid-term rental may not be allowed.</div>
-            ) : (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"><b>HOA homes are usually not a fit for co-living.</b> In Brian's experience, about 99% of HOAs do not allow renting by the room, so HOA dues are left out here. If this house has an HOA, read the rules before you go any further.</div>
-            )}
-          </Card>
-
           {/* 7. Long-term (ownership) */}
           {a.five && (
             <Card n="7" title="5-year assumptions" sub="For the 5-year return. Talk to your CPA about your own tax picture.">
@@ -721,16 +727,16 @@ function Analyzer({ onLock }) {
             {a.hard ? (() => {
               // Hard money lenders do not use DSCR. The DSCR that matters is the long-term DSCR loan, sized on the after-repair value.
               const rentWord = model === "private" ? "traditional" : "whole-house";
-              const v = !(arvNum > 0) ? { value: "--", sub: "Enter the after-repair value in step 4. The refinance loan, and its DSCR, are based on it.", tone: "bad" }
+              const v = !(arvNum > 0) ? { value: "--", sub: "Enter the after-repair value in step 6. The refinance loan, and its DSCR, are based on it.", tone: "bad" }
                 : !refi || refi.type !== "dscr" ? { value: "--", sub: "Hard money lenders do not use DSCR. It only applies if your long-term plan is a DSCR loan.", tone: "default" }
                 : refi.dscr == null ? { value: "--", sub: `Enter the ${rentWord} rent in step 3 to see the DSCR on your refinance.`, tone: "default" }
                 : refi.cashToClose >= 1 ? { value: refi.dscr.toFixed(2), sub: `On a ${fmt$(refi.newLoan)} DSCR refinance, which does not pay off the ${fmt$(refi.payoff)} you owe. You would bring ${fmt$(refi.cashToClose)} to close. A smaller loan makes the DSCR look better than the deal is.`, tone: "bad" }
                 : { value: refi.dscr.toFixed(2), sub: `On the ${fmt$(refi.newLoan)} DSCR refinance: ${rentWord} rent / new payment with taxes and insurance. Most want ${TARGETS.dscrMin}+.`, tone: refi.dscr >= TARGETS.dscrMin ? "good" : "warn" };
               return <Stat label="Lender DSCR (refinance)" value={v.value} sub={v.sub} tone={v.tone} />;
             })() : <Stat label="Lender DSCR" value={!(arvNum > 0) && bankLoan ? "--" : a.dscr ? a.dscr.toFixed(2) : "--"}
-              sub={!(arvNum > 0) && bankLoan ? "Enter the after-repair value in step 4. Lenders size the loan on what the house is worth." : a.dscr ? `${model === "private" ? "traditional" : "whole-house"} rent / loan payment with taxes and insurance. Most want ${TARGETS.dscrMin}+${a.dscrRoom ? `. Using your furnished rents: ${a.dscrRoom.toFixed(2)}` : ""}` : `Enter the ${model === "private" ? "traditional" : "whole-house"} rent in step 3. Most lenders use that, not room rents.`}
+              sub={!(arvNum > 0) && bankLoan ? "Enter the after-repair value in step 6. Lenders size the loan on what the house is worth." : a.dscr ? `${model === "private" ? "traditional" : "whole-house"} rent / loan payment with taxes and insurance. Most want ${TARGETS.dscrMin}+${a.dscrRoom ? `. Using your furnished rents: ${a.dscrRoom.toFixed(2)}` : ""}` : `Enter the ${model === "private" ? "traditional" : "whole-house"} rent in step 3. Most lenders use that, not room rents.`}
               tone={loanTooBig || (!(arvNum > 0) && bankLoan) ? "bad" : a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
-            {loanTooBig && <div className="col-span-2 -mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] leading-snug text-rose-900">The DSCR only compares rent to the payment. It does not check value. At the after-repair value you entered, a lender would not make this loan. See step 4.</div>}
+            {loanTooBig && <div className="col-span-2 -mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] leading-snug text-rose-900">The DSCR only compares rent to the payment. It does not check value. At the after-repair value you entered, a lender would not make this loan. See step 6.</div>}
             <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
             {type === "hack" && (() => { const v = a.rentedCount ? cocView(a.coc, a.cashIn, a.cashFlow, a.paybackMonths) : { value: pct(a.coc), sub: "yearly cash flow / cash in" }; return <Stat label="Cash-on-cash" value={v.value} sub={v.sub} />; })()}
             {type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
@@ -759,13 +765,15 @@ function Analyzer({ onLock }) {
           </div>
 
           {refi && !refi.missingValue && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">After the hard money ({refi.type === "dscr" ? (refi.kind === "rateterm" ? "rate and term refinance" : "cash-out refinance") : { private: "private lender", cash: "paid off in cash" }[refi.type]})</div>
-              <Row label={refi.type === "cash" ? "Cash to pay off the loan" : refi.cashToClose >= 0 ? "Cash to close the refinance" : "Cash back at refinance"} value={fmt$(Math.abs(refi.cashToClose))} />
-              {refi.payment > 0 && <Row label="New loan payment" value={`-${fmt$(refi.payment)}`} />}
-              <Row label="Monthly cash flow" value={fmt$(refi.cashFlow)} strong />
-              <Row label="Cash left in the deal" value={fmt$(refi.cashLeftIn)} />
-              <Row label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? `${INF} (all your cash back)` : "-- (losing money monthly)") : pct(refi.coc)} muted />
+            <div>
+              <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">After the hard money ({refi.type === "dscr" ? (refi.kind === "rateterm" ? "rate and term refinance" : "cash-out refinance") : { private: "private lender", cash: "paid off in cash" }[refi.type]})</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Stat label="Monthly cash flow" big value={fmt$(refi.cashFlow)} sub={a.rentedCount ? `${fmt$(refi.cashFlow / a.rentedCount)} per room` : "after the payoff"} tone={refi.cashFlow > 0 ? "good" : "bad"} />
+                <RefiCocStat refi={refi} big />
+                <Stat label={refi.type === "cash" ? "Cash to pay it off" : refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.type === "cash" ? "your cash, no new loan" : refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
+                <Stat label="Cash left in the deal" value={fmt$(Math.max(0, refi.cashLeftIn))} sub={refi.cashLeftIn <= 0 ? "all your cash is back out" : "your cash still in the house"} />
+                {refi.payment > 0 && <Stat label="New loan payment" value={fmt$(refi.payment)} sub={refi.io ? "per month, interest only" : `per month, ${refi.years} years`} />}
+              </div>
             </div>
           )}
 
@@ -939,7 +947,7 @@ function AddressBar({ d, set }) {
               </a>
             ))}
           </div>
-          <p className="mt-2 text-[11.5px] leading-snug text-slate-600">Get the bedrooms, bathrooms and square feet from Zillow or Redfin and type them into step 2. County records show last year's property taxes. Divide by 12 and enter it in step 4 with the "use $" button.</p>
+          <p className="mt-2 text-[11.5px] leading-snug text-slate-600">Get the bedrooms, bathrooms and square feet from Zillow or Redfin and type them into step 2. County records show last year's property taxes. Divide by 12 and enter it in step 6 with the "use $" button.</p>
         </div>
       )}
     </section>
@@ -953,7 +961,7 @@ function ContractorDocs({ d, setIn }) {
   const items = [
     ["scope", FileText, "Scope of Work", "Every job your contractor will do, room by room, who buys the materials, payment schedule and signatures.", () => buildScope(d)],
     ["punch", ClipboardList, "Punch List", `A room-by-room walkthrough for the end of the job. Built for ${f.rooms ? `${f.rooms} bedrooms` : f.units ? `${f.units} units` : "your rooms"} and ${f.bathCount} bathroom${f.bathCount === 1 ? "" : "s"}.`, () => buildPunch(d)],
-    ["rehab", Calculator, "Rehab Estimate", "Take it to the walkthrough. Typical cost ranges, space for quantities and totals, plus your renovation budget from step 5.", () => buildRehab(d)],
+    ["rehab", Calculator, "Rehab Estimate", "Take it to the walkthrough. Typical cost ranges, space for quantities and totals, plus your renovation budget from step 4.", () => buildRehab(d)],
   ];
   return (
     <Card title="Contractor documents" sub="Print these for your walkthrough and your contractor. They fill in with this deal's address, bedrooms, bathrooms and the renovation items you entered. Each one opens ready to print or save as a PDF.">
