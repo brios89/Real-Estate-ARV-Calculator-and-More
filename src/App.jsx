@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Home, Handshake, BedDouble, Info, Save, FilePlus2, FolderOpen, Download, Lock, Trash2,
-  CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers, FileText, ClipboardList, Calculator,
+  CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers, FileText, ClipboardList, Calculator, MapPin, Search, ExternalLink, Loader2,
 } from "lucide-react";
 import {
   analyze, whatItTakes, num, fmt$, pct, EXPENSE_ITEMS, CAPEX_ITEMS, FURNISH_RATES, MGMT_PER_ROOM, TARGETS, DEAL_TYPES,
@@ -306,6 +306,8 @@ function Analyzer({ onLock }) {
 
       <main className="mx-auto grid max-w-7xl gap-5 px-4 pb-24 pt-5 lg:grid-cols-[minmax(0,1fr)_380px] lg:pb-5">
         <div className="space-y-5">
+          <AddressBar d={d} set={set} />
+
           {/* 1. Deal type */}
           <Card n="1" title="What kind of deal is it?" sub="Pick how you are getting control of the house, then how you will rent it.">
             <div className="grid gap-2 sm:grid-cols-3">
@@ -334,7 +336,6 @@ function Analyzer({ onLock }) {
           <Card n="2" title="The property" sub="The facts as it sits today, and what it will be once it is set up.">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Deal name" hint="for your saved deals"><Text value={d.name} onChange={(v) => set("name", v)} placeholder="Oak St 5-bed" /></Field>
-              <Field label="Address"><Text value={d.address} onChange={(v) => set("address", v)} placeholder="123 Main St, Louisville, KY" /></Field>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Field label="Bedrooms now"><Num value={d.beds} onChange={(v) => set("beds", v)} /></Field>
@@ -638,6 +639,72 @@ function Analyzer({ onLock }) {
   );
 }
 
+// Address line at the top. Free U.S. Census check (standardized address, county, map pin) plus one-tap
+// links to the public sites where students find beds, baths, sq ft and taxes. No paid data service.
+const gsearch = (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+function AddressBar({ d, set }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const addr = (d.address || "").trim();
+  const lk = d.lookup && d.lookup.q === addr ? d.lookup : null;
+  const lookUp = async () => {
+    if (!addr) return;
+    setBusy(true); setErr("");
+    try {
+      const r = await fetch(`/api/address?q=${encodeURIComponent(addr)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(j.error || "Address lookup failed. Try again in a minute.");
+      else set("lookup", { q: addr, ...j });
+    } catch { setErr("Could not reach the address service. Check your connection."); }
+    setBusy(false);
+  };
+  const links = addr ? [
+    ["Zillow", gsearch(`${addr} zillow`)],
+    ["Redfin", gsearch(`${addr} redfin`)],
+    ["Realtor.com", gsearch(`${addr} realtor.com`)],
+    ["Google Maps", `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`],
+    ...(lk?.found && lk.lat != null ? [["Street View", `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lk.lat},${lk.lng}`]] : []),
+    ["County property records", gsearch(`${lk?.county ? `${lk.county} ${lk.state} ` : ""}property records ${addr}`)],
+  ] : [];
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <label className="block">
+        <span className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700"><MapPin className="h-3.5 w-3.5" />Property address</span>
+        <div className="flex gap-2">
+          <input className={`${inputCls} flex-1`} value={d.address ?? ""} placeholder="123 Main St, Louisville, KY 40203"
+            onChange={(e) => set("address", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookUp(); } }} />
+          <button type="button" onClick={lookUp} disabled={!addr || busy}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white disabled:opacity-50" style={{ background: BRAND }}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}Look up
+          </button>
+        </div>
+      </label>
+      {err && <div className="mt-2 text-[12px] text-rose-600">{err}</div>}
+      {lk && lk.found && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-slate-700">
+          <span className="inline-flex items-center gap-1 font-semibold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Address found</span>
+          {lk.county && <span>{lk.county}, {lk.state}</span>}
+          <span className="text-slate-500">Official match: {lk.matched}</span>
+        </div>
+      )}
+      {lk && !lk.found && <div className="mt-2 text-[12px] text-amber-700">The Census address service could not match this address. Check the spelling and include the city and state. You can still use the links below.</div>}
+      {links.length > 0 && (
+        <div className="mt-3">
+          <div className="flex flex-wrap gap-1.5">
+            {links.map(([label, href]) => (
+              <a key={label} href={href} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-emerald-600 hover:text-emerald-700">
+                {label}<ExternalLink className="h-3 w-3" />
+              </a>
+            ))}
+          </div>
+          <p className="mt-2 text-[11.5px] leading-snug text-slate-600">Get the bedrooms, bathrooms and square feet from Zillow or Redfin and type them into step 2. County records show last year's property taxes. Divide by 12 and enter it in step 4 with the "use $" button.</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // Printable contractor documents, filled in from this deal.
 function ContractorDocs({ d, setIn }) {
   const f = projectFacts(d);
@@ -655,7 +722,7 @@ function ContractorDocs({ d, setIn }) {
         <Field label="Your phone"><Text value={docs.ownerPhone} onChange={(v) => setIn("docs", "ownerPhone", v)} placeholder="(502) 555-0100" /></Field>
         <Field label="Your email"><Text value={docs.ownerEmail} onChange={(v) => setIn("docs", "ownerEmail", v)} placeholder="you@email.com" /></Field>
       </div>
-      {!d.address && <div className="mt-2 text-[12px] text-amber-700">Add the property address in step 2 so it prints on every page.</div>}
+      {!d.address && <div className="mt-2 text-[12px] text-amber-700">Add the property address at the top so it prints on every page.</div>}
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
         {items.map(([key, Icon, title, desc, build]) => (
           <button key={key} type="button" onClick={() => openPrintable(build(), `${key}.html`)}
