@@ -39,6 +39,7 @@ const newDeal = () => ({
   expenses: Object.fromEntries(EXPENSE_ITEMS.map(([k, , v]) => [k, v])), mgmtPerRoom: MGMT_PER_ROOM.toFixed(2), selfManage: false,
   appreciation: 3, landPct: 20, taxRate: 24, targetCoc: 15, currentHousing: "", notes: "",
   docs: { ownerName: "", ownerPhone: "", ownerEmail: "", contractor: "" },
+  lender: "bank", hmPurchasePct: 90, hmRehabPct: 100, hmRate: 12, hmPoints: 2, hmMonths: 12, hmRollCosts: false,
 });
 
 // A saved deal from an older version may name a deal type that no longer exists. Fall back to Buy & Convert.
@@ -229,7 +230,9 @@ function Analyzer({ onLock }) {
     furnish: { ...furnEff, hire: d.furnish.hire },
     // A Sub-To payment includes taxes and insurance only when the student says it does.
     stEscrowed: d.stEscrowed !== false,
-  }), [d, showRooms, showUnits, JSON.stringify(furnEff)]);
+    // HOA only counts for private units. Brian: about 99% of HOAs do not allow renting by the room.
+    expenses: model === "private" ? d.expenses : { ...d.expenses, hoa: 0 },
+  }), [d, model, showRooms, showUnits, JSON.stringify(furnEff)]);
   const a = useMemo(() => analyze(deal), [deal]);
   const wit = useMemo(() => whatItTakes(deal, type === "hack" ? null : num(d.targetCoc) || 15), [deal, type, d.targetCoc]);
   const witBreakeven = useMemo(() => (type === "hack" ? null : whatItTakes(deal, null)), [deal, type]);
@@ -399,7 +402,42 @@ function Analyzer({ onLock }) {
 
           {/* 4. Acquisition */}
           <Card n="4" title={type === "creative" ? "The creative terms" : type === "hack" ? "Buying it to live in" : "Buying it"}>
-            {(type === "buy" || type === "hack") && (
+            {type === "buy" && (
+              <div className="mb-3">
+                <Field label="How are you paying for it?">
+                  <Chips value={d.lender || "bank"} onChange={(v) => set("lender", v)} opts={[["bank", "Bank or DSCR loan"], ["hard", "Hard money / private lender"]]} />
+                </Field>
+              </div>
+            )}
+            {type === "buy" && d.lender === "hard" && (
+              <div>
+                <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-[12.5px] leading-snug text-amber-900">
+                  <b>Most private and hard money lenders want you to have skin in the game.</b> Lender guides show most ask for 10% to 30% of the purchase price from you, plus cash for points and closing. Lending 100% of the deal is the exception, not the rule. Use the "no money in" view as a best case, not your plan.
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Field label="Purchase price"><Money value={d.price} onChange={(v) => set("price", v)} /></Field>
+                  <Field label="Purchase the lender covers" hint="typical 80-90%"><Num value={d.hmPurchasePct} onChange={(v) => set("hmPurchasePct", v)} suffix="%" /></Field>
+                  <Field label="Rehab the lender covers" hint="often 100%"><Num value={d.hmRehabPct} onChange={(v) => set("hmRehabPct", v)} suffix="%" /></Field>
+                  <Field label="Interest rate" hint="typical 9-15%" tip="Hard money is usually interest only. You pay just the interest each month and the whole loan at the end."><Num value={d.hmRate} onChange={(v) => set("hmRate", v)} suffix="%" /></Field>
+                  <Field label="Points" hint="typical 1-5" tip="An upfront fee. 1 point = 1% of the loan."><Num value={d.hmPoints} onChange={(v) => set("hmPoints", v)} suffix="pts" /></Field>
+                  <Field label="Loan length" hint="typical 6-24"><Num value={d.hmMonths} onChange={(v) => set("hmMonths", v)} suffix="mo" /></Field>
+                  <Field label="Closing costs" tip="Verify with your title company."><Money value={d.closing} onChange={(v) => set("closing", v)} /></Field>
+                  <Field label="After-repair value" tip="What it will be worth once converted. Most hard money lenders cap the loan at 70% to 75% of this number."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                  <div className="sm:col-span-3"><Check checked={d.hmRollCosts} onChange={(v) => set("hmRollCosts", v)}>The lender also covers closing costs and points (rolled into the loan)</Check></div>
+                </div>
+                <button type="button" onClick={() => setD((p) => ({ ...p, hmPurchasePct: 100, hmRehabPct: 100, hmRollCosts: true }))}
+                  className="mt-3 rounded-lg border-2 border-emerald-600 bg-white px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-50">Show it with no money in</button>
+                <span className="ml-2 text-[11.5px] text-slate-600">Lender covers 100% of the purchase, the rehab, closing and points. Furnishing and the months before it rents still take cash, unless you fund them another way.</span>
+                {a.hard && (
+                  <div className="mt-3 space-y-1.5 text-[12px] leading-snug">
+                    {a.hard.loanToArv != null && a.hard.loanToArv > 75 && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">This loan is {pct(a.hard.loanToArv)} of the after-repair value. Most hard money lenders stop at 70% to 75%, so expect to bring the difference.</div>}
+                    {a.hard.loanToArv == null && <div className="text-slate-600">Enter the after-repair value to check the loan against the 70% to 75% limit most lenders use.</div>}
+                    {a.loan > 0 && <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800">The whole loan, <b>{fmt$(a.hard.balloon)}</b>, is due in {a.hard.termMonths} months. Before you buy, know how you will pay it off, usually by refinancing into a long-term loan like a DSCR loan once the rooms are rented.</div>}
+                  </div>
+                )}
+              </div>
+            )}
+            {(type === "hack" || (type === "buy" && d.lender !== "hard")) && (
               <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="Purchase price"><Money value={d.price} onChange={(v) => set("price", v)} /></Field>
                 {type === "buy"
@@ -516,12 +554,19 @@ function Analyzer({ onLock }) {
           {/* 6. Expenses */}
           <Card n="6" title="Monthly operating costs" sub="Pre-filled with Hobknob's 12-month averages for a 5-bedroom co-living home. Change any of them to match your house and market.">
             <div className="grid gap-3 sm:grid-cols-3">
-              {EXPENSE_ITEMS.map(([k, l]) => <Field key={k} label={l}><Money value={d.expenses[k]} onChange={(v) => setIn("expenses", k, v)} /></Field>)}
+              {EXPENSE_ITEMS.filter(([k]) => k !== "hoa" || model === "private").map(([k, l]) => (
+                <Field key={k} label={l} hint={k === "hoa" ? "private units only" : undefined}><Money value={d.expenses[k]} onChange={(v) => setIn("expenses", k, v)} /></Field>
+              ))}
               <Field label="Management per room / unit" hint={d.selfManage ? "self-managed" : `x ${a.rentedCount} = ${fmt$(a.mgmt)}`} tip="Hobknob budgets $61.50 per room or unit per month. Keep it in even if you self-manage, so the deal still works the day you hire it out.">
                 <Money value={d.selfManage ? "0" : d.mgmtPerRoom} onChange={(v) => set("mgmtPerRoom", v)} />
               </Field>
             </div>
             <div className="mt-3"><Check checked={d.selfManage} onChange={(v) => set("selfManage", v)}>I will manage it myself (management at $0)</Check></div>
+            {model === "private" ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"><b>If there is an HOA, read its rules before you make an offer.</b> Many HOAs do not allow leases shorter than 12 months, and some do not allow renting at all. A mid-term rental may not be allowed.</div>
+            ) : (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"><b>HOA homes are usually not a fit for co-living.</b> In Brian's experience, about 99% of HOAs do not allow renting by the room, so HOA dues are left out here. If this house has an HOA, read the rules before you go any further.</div>
+            )}
           </Card>
 
           {/* 7. Long-term (ownership) */}
@@ -553,7 +598,7 @@ function Analyzer({ onLock }) {
             <Stat label="Monthly cash flow" value={fmt$(a.cashFlow)} tone={a.cashFlow > 0 ? "good" : a.rentedCount ? "bad" : "default"} big sub={a.cfPerRoom != null ? `${fmt$(a.cfPerRoom)} per room` : null} />
             {type === "hack"
                 ? <Stat label="Your housing cost" value={a.hack.yourCost <= 0 ? "$0" : fmt$(a.hack.yourCost)} big sub={a.hack.yourCost <= 0 ? `and you are paid ${fmt$(-a.hack.yourCost)}` : "per month to live there"} tone={a.hack.yourCost <= 0 ? "good" : "warn"} />
-                : <Stat label="Cash-on-cash" value={pct(a.coc)} big sub="yearly cash flow / cash in" tone={a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default"} />}
+                : <Stat label="Cash-on-cash" value={a.cashIn <= 0 && a.rentedCount ? "No cash in" : pct(a.coc)} big sub="yearly cash flow / cash in" tone={(a.cashIn <= 0 && a.cashFlow > 0) || a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default"} />}
             <Stat label="Cash needed" value={fmt$(a.cashIn)} sub="to buy, set up and fill it" />
             <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />
             {<Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"} sub={`rent / loan payment with taxes, insurance, HOA. Most want ${TARGETS.dscrMin}+`} tone={a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
@@ -571,7 +616,7 @@ function Analyzer({ onLock }) {
             <Row label="Operating costs" value={`-${fmt$(a.opex - a.mgmt)}`} />
             {a.mgmt > 0 && <Row label="Management" value={`-${fmt$(a.mgmt)}`} />}
             <Row label="Net operating income" value={fmt$(a.noi)} strong />
-            {a.pAndI > 0 && <Row label={type === "creative" && d.creativeMode === "subto" ? "Their loan payment" : "Loan payment (P&I)"} value={`-${fmt$(a.pAndI)}`} />}
+            {a.pAndI > 0 && <Row label={type === "creative" && d.creativeMode === "subto" ? "Their loan payment" : a.hard ? "Hard money interest (interest only)" : "Loan payment (P&I)"} value={`-${fmt$(a.pAndI)}`} />}
             {a.mi > 0 && <Row label="Mortgage insurance" value={`-${fmt$(a.mi)}`} />}
             {a.notePay > 0 && <Row label="Seller carry note" value={`-${fmt$(a.notePay)}`} />}
             <Row label="Cash flow" value={fmt$(a.cashFlow)} strong />

@@ -12,12 +12,14 @@ A deal analyzer for Academy students. Students type the property facts and rents
 - No rental arbitrage. Brian does not teach it and has never done it, so it was removed on purpose. Do not add it back.
 - Management default: $61.50 per rented room or unit per month (`MGMT_PER_ROOM`).
 - Rental models: Co-Living by the room, Private units, Hybrid.
+- HOA dues only count for Private units. For co-living and hybrid the HOA field is hidden and left out of the math, because in Brian's experience about 99% of HOAs do not allow renting by the room. Private units show a caution that many HOAs ban leases under 12 months or renting at all.
+- Buy & Convert has a "Hard money / private lender" option (interest only, points, short term). Defaults: 90% of purchase, 100% of rehab, 12%, 2 points, 12 months. The "no money in" view must always carry the skin-in-the-game warning. No 5-year view for hard money because the loan comes due.
 - Access: a student passcode checked by `api/auth.js` against the `ACADEMY_PASSCODE` env var in Vercel. It fails closed when the variable is missing.
 
 ## Architecture
 - `src/calc.js`: all deal math as pure functions (`analyze`, `whatItTakes`). Defaults come from Brian's Deal Analyzer sheet. Test math here first.
 - `src/App.jsx`: the whole UI. Saved deals and the autosaved draft live in the student's browser (localStorage keys `academy.deals.v1`, `academy.draft.v1`).
-- `src/docs.js`: printable contractor documents (Scope of Work, Punch List, Rehab Estimate) built from the deal. Started from Brian's sample forms, corrected and expanded for co-living. Cost ranges are national ballparks (Nov 2026). Never invent a range. Use "Get local bids" when none was verified. Never print the student's budget on the Scope of Work.
+- `src/docs.js`: printable, editable contractor documents (type over any text, click boxes to check, download as HTML that keeps edits or as a Word .doc) (Scope of Work, Punch List, Rehab Estimate) built from the deal. Started from Brian's sample forms, corrected and expanded for co-living. Cost ranges are national ballparks (Nov 2026). Never invent a range. Use "Get local bids" when none was verified. Never print the student's budget on the Scope of Work.
 - `api/auth.js`: passcode check only.
 - Deploy: Vercel auto-deploys the GitHub repo.
 

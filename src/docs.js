@@ -9,7 +9,9 @@
 import { num, fmt$, CAPEX_ITEMS, DEAL_TYPES } from "./calc.js";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const BOX = "&#9744;";
+// Clickable check boxes. Plain symbols (not form inputs) so they survive printing and the Word download.
+const BOX = '<span class="cb" contenteditable="false" title="Click to check">&#9744;</span>';
+const BOXED = '<span class="cb" contenteditable="false" title="Click to uncheck">&#9746;</span>';
 
 // ---------- facts every document shares ----------
 export function projectFacts(d) {
@@ -63,6 +65,10 @@ tr{break-inside:avoid}
 .facts td{border:1px solid #cbd5e1;font-size:11px}
 .facts td.k{width:18%;background:#f8fafc;font-weight:600}
 .box{width:22px;text-align:center;font-size:13px}
+.cb{cursor:pointer;user-select:none;font-size:14px}
+.hint{width:100%;text-align:center;color:#cbd5e1;font:12px -apple-system,"Segoe UI",Arial,sans-serif}
+[contenteditable="true"]:focus{outline:none}
+[contenteditable="true"] td:hover,[contenteditable="true"] li:hover,[contenteditable="true"] p:hover{background:#fffbea}
 .blank{height:22px}
 .w{color:#64748b;font-size:9.5px}
 .tip{border:1px solid #bfe3b0;background:#f3faf0;border-radius:6px;padding:8px 10px;font-size:11px;margin:8px 0}
@@ -73,7 +79,7 @@ tr{break-inside:avoid}
 .num{text-align:right;white-space:nowrap}
 .tot td{font-weight:700;background:#f8fafc}
 @page{size:letter;margin:.45in}
-@media print{body{background:#fff}.bar{display:none}.page{box-shadow:none;margin:0;max-width:none;padding:0}}
+@media print{body{background:#fff}.bar{display:none}[contenteditable="true"] td:hover,[contenteditable="true"] li:hover,[contenteditable="true"] p:hover{background:none}.page{box-shadow:none;margin:0;max-width:none;padding:0}}
 @media (max-width:640px){.page{padding:18px 12px;margin:0;overflow-x:auto}.head{flex-direction:column}}
 `;
 
@@ -92,8 +98,8 @@ function shell({ title, fileName, facts, intro, body }) {
   ].filter(Boolean).join(" &middot; ");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} | ${esc(facts.name)}</title><style>${CSS}</style></head><body>
-<div class="bar"><button class="p" onclick="window.print()">Print or save as PDF</button><a class="s" id="dl" download="${esc(fileName)}">Download</a></div>
-<div class="page">
+<div class="bar" data-file="${esc(fileName)}"><button class="p" onclick="window.print()">Print or save as PDF</button><button class="s" id="dlh">Download (keeps your edits)</button><button class="s" id="dlw">Download for Word</button><div class="hint">Click any text to type over it. Click a box to check it. Blank rows and cells are yours to fill in.</div></div>
+<div class="page" contenteditable="true" spellcheck="true">
 <div class="head"><div><h1>${esc(title)}</h1><p class="sub">${esc(facts.modelLabel)}${facts.dealType ? ` &middot; ${esc(facts.dealType)}` : ""}${summary ? ` &middot; ${summary}` : ""}</p></div>
 <img src="${location.origin}/academy-logo.png" alt="Hobknob Co-Living Academy"></div>
 <table class="facts"><tbody>${factRows.map(([k, v], i) => (i % 2 === 0 ? "<tr>" : "") + `<td class="k">${k}</td><td>${k === "Project" || k === "Address" ? esc(v) || "&nbsp;" : v}</td>` + (i % 2 === 1 ? "</tr>" : "")).join("")}
@@ -102,7 +108,20 @@ ${intro || ""}
 ${body}
 <div class="foot">Prepared with the Hobknob Co-Living Academy Deal Analyzer. This is a template and a starting point, not legal advice or a guarantee of cost or results. Have a local attorney review any contract before you sign it, and confirm code requirements with your local building department.</div>
 </div>
-<script>try{document.getElementById("dl").href=location.href}catch(e){}</script>
+<script>
+(function(){
+  var name=(document.querySelector(".bar")||{}).getAttribute?document.querySelector(".bar").getAttribute("data-file"):"document.html";
+  document.addEventListener("click",function(e){var c=e.target.closest&&e.target.closest(".cb");if(!c)return;e.preventDefault();c.innerHTML=c.textContent==="\u2610"?"&#9746;":"&#9744;";c.title=c.textContent==="\u2610"?"Click to check":"Click to uncheck";});
+  function save(data,type,file){var b=new Blob([data],{type:type});var u=URL.createObjectURL(b);var a=document.createElement("a");a.href=u;a.download=file;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},4000);}
+  document.getElementById("dlh").addEventListener("click",function(){save("<!doctype html>"+document.documentElement.outerHTML,"text/html",name);});
+  document.getElementById("dlw").addEventListener("click",function(){
+    var page=document.querySelector(".page").cloneNode(true);page.removeAttribute("contenteditable");page.querySelectorAll("table").forEach(function(t){t.setAttribute("border","1");t.setAttribute("cellspacing","0");t.setAttribute("cellpadding","4");t.style.borderCollapse="collapse";});page.querySelectorAll(".cb").forEach(function(c){c.removeAttribute("contenteditable");});
+    var css=document.querySelector("style").textContent;
+    var doc='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>'+document.title+'</title><style>'+css+' .page{box-shadow:none;margin:0;padding:0} p,li{margin:0 0 3pt} ul{margin-top:2pt;margin-bottom:4pt} td,th{border:1px solid #94a3b8}</style></head><body>'+page.outerHTML+'</body></html>';
+    save("\ufeff"+doc,"application/msword",name.replace(/[.]html$/,".doc"));
+  });
+})();
+</script>
 </body></html>`;
 }
 
@@ -243,7 +262,7 @@ export function buildScope(d) {
   const sections = SOW_SECTIONS(f).map(([title, items]) => `
 <h2>${esc(title)}</h2>
 <table><thead><tr><th class="box">&#10003;</th><th>Work item</th><th style="width:96px">Material by</th><th style="width:32%">Notes, quantities, locations</th></tr></thead><tbody>
-${items.map(([text, by]) => `<tr><td class="box">${checked(title, text) ? "&#9746;" : BOX}</td><td>${esc(text)}</td><td class="w">${BOX} Owner ${by === "O" ? "(typ.)" : ""}<br>${BOX} Contractor ${by === "C" ? "(typ.)" : ""}</td><td></td></tr>`).join("")}
+${items.map(([text, by]) => `<tr><td class="box">${checked(title, text) ? BOXED : BOX}</td><td>${esc(text)}</td><td class="w">${BOX} Owner ${by === "O" ? "(typ.)" : ""}<br>${BOX} Contractor ${by === "C" ? "(typ.)" : ""}</td><td></td></tr>`).join("")}
 <tr><td class="box">${BOX}</td><td class="blank"></td><td class="w">${BOX} Owner<br>${BOX} Contractor</td><td></td></tr>
 <tr><td class="box">${BOX}</td><td class="blank"></td><td class="w">${BOX} Owner<br>${BOX} Contractor</td><td></td></tr>
 </tbody></table>`).join("");

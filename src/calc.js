@@ -102,7 +102,31 @@ export function analyze(d) {
   const closing = num(d.closing);
   let loan = 0, pAndI = 0, mi = 0, sellerNote = 0, notePay = 0, down = 0, upfrontSeller = 0, loanRate = 0, loanYears = 0, balloonYears = 0;
   let financedReno = false;
-  if (type === "buy" || type === "hack") {
+  // Hard money / private lender (Buy & Convert only): short-term, interest-only, lender may cover
+  // part or all of the purchase and rehab. Typical 2026 terms (lender guides): 9% to 15% interest,
+  // 1 to 5 points, 6 to 24 months, 85% to 90% of cost, capped at 70% to 75% of after-repair value.
+  let hard = null, closingCash = closing, pointsCash = 0, renoCashHard = null;
+  if (type === "buy" && d.lender === "hard") {
+    const clamp = (v) => Math.min(100, Math.max(0, num(v))) / 100;
+    const pp = clamp(d.hmPurchasePct ?? 90), rp = clamp(d.hmRehabPct ?? 100);
+    const rate = num(d.hmRate ?? 12), pts = num(d.hmPoints ?? 2), termMonths = num(d.hmMonths ?? 12) || 12;
+    const roll = !!d.hmRollCosts;
+    const baseLoan = price * pp + reno * rp + (roll ? closing : 0);
+    const points = (baseLoan * pts) / 100;
+    loan = baseLoan + (roll ? points : 0);
+    pAndI = (loan * rate) / 100 / 12;      // interest only
+    down = price * (1 - pp);
+    renoCashHard = reno * (1 - rp);
+    closingCash = roll ? 0 : closing;
+    pointsCash = roll ? 0 : points;
+    loanRate = rate; loanYears = 0;
+    const arv = num(d.arv);
+    hard = {
+      rate, pts, points, termMonths, roll, balloon: loan,
+      loanToCost: price + reno > 0 ? ((price * pp + reno * rp) / (price + reno)) * 100 : null,
+      loanToArv: arv > 0 ? (loan / arv) * 100 : null,
+    };
+  } else if (type === "buy" || type === "hack") {
     const ltv = Math.min(100, Math.max(0, num(type === "hack" ? (d.hackLtv ?? 96.5) : (d.ltv ?? 80)))) / 100;
     financedReno = !!d.financeReno;
     const base = price + (financedReno ? reno : 0);
@@ -152,12 +176,12 @@ export function analyze(d) {
   // Carrying cost while the home fills: the loan, taxes and insurance, HOA, lawn, and about half the utilities.
   const holdingMonthly = debtService + taxesMo + insMo + num(exp.hoa) + num(exp.lawn) + utilities / 2;
   const holding = months * holdingMonthly;
-  const renoCash = financedReno ? 0 : reno;
+  const renoCash = renoCashHard != null ? renoCashHard : financedReno ? 0 : reno;
   const otherUpfront = num(d.otherUpfront);
-  const cashIn = down + closing + furnishing + renoCash + holding + upfrontSeller + otherUpfront;
+  const cashIn = down + closingCash + pointsCash + furnishing + renoCash + holding + upfrontSeller + otherUpfront;
   const cashInLines = [
-    ["Down payment", down], ["Cash to seller + arrears", upfrontSeller],
-    ["Closing costs", closing], ["Renovation / conversion", renoCash], ["Furnishing and setup", furnishing],
+    [hard ? "Purchase not covered by the lender" : "Down payment", down], ["Cash to seller + arrears", upfrontSeller],
+    ["Closing costs", closingCash], ["Lender points", pointsCash], [hard ? "Rehab not covered by the lender" : "Renovation / conversion", renoCash], ["Furnishing and setup", furnishing],
     [`Holding cost (${months} mo until rented)`, holding], ["Other upfront", otherUpfront],
   ].filter(([, v]) => Math.abs(v) > 0.5).map(([label, amt]) => ({ label, amt }));
 
@@ -183,7 +207,7 @@ export function analyze(d) {
 
   // 5-year view (ownership only).
   let five = null;
-  {
+  if (!hard) {
     const yrs = 5, appr = num(d.appreciation ?? 3) / 100;
     const value0 = num(d.arv) > 0 ? num(d.arv) : allIn;
     const appreciation = value0 * (Math.pow(1 + appr, yrs) - 1);
@@ -211,6 +235,7 @@ export function analyze(d) {
         ? { tone: "solid", label: "Cheaper than your rent now", note: `Living there costs about ${fmt$(hack.yourCost)} a month, ${fmt$(hack.current - hack.yourCost)} less than you pay now.` }
         : { tone: "thin", label: "Costs more than you pay now", note: hack.current > 0 ? `Living there costs about ${fmt$(hack.yourCost)} a month, more than the ${fmt$(hack.current)} you pay now.` : `Living there costs about ${fmt$(hack.yourCost)} a month. Enter what you pay for housing now to compare.` };
   } else if (cashFlow <= 0) verdict = { tone: "pass", label: "Pass at these numbers", note: "It loses money every month. Lower the price, raise the rents, or cut costs." };
+  else if (cashIn <= 0) verdict = { tone: "strong", label: "No money left in the deal", note: `It cash flows about ${fmt$(cashFlow)} a month with none of your own cash in. Check that a lender will really fund it this way.` };
   else {
     const c = coc ?? 0;
     verdict = c >= TARGETS.cocStrong ? { tone: "strong", label: "Strong deal", note: `${pct(c)} cash-on-cash.` }
@@ -224,7 +249,7 @@ export function analyze(d) {
     price, reno, closing, loan, down, pAndI, mi, notePay, sellerNote, debtService, taxesMo, insMo,
     opexLines, mgmt, opex, utilities, noi, cashFlow, annualCF, furn, furnishing, holding, holdingMonthly, months,
     cashIn, cashInLines, coc, dscr, capRate, costPerRoom, breakEvenOcc, paybackMonths, cfPerRoom, premium, five,
-    balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller,
+    balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller, hard, pointsCash, closingCash,
   };
 }
 
