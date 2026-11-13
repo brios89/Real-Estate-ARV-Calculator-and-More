@@ -232,6 +232,11 @@ export function analyze(d) {
   // Verdict.
   let verdict;
   if (rentedCount === 0 || grossRent <= 0) verdict = { tone: "none", label: "Add your rooms and rents", note: "Enter the rentable bedrooms (or units) and what each one rents for." };
+  // Buy & Convert and House Hack need a value: lenders lend on what the house is worth (Brian, Nov 2026).
+  else if ((type === "buy" || type === "hack") && !(num(d.arv) > 0)) verdict = { tone: "none", label: "Add the after-repair value", note: "Lenders lend based on what the house is worth once it is done. Enter it in step 4 to see the verdict." };
+  // A bank, DSCR or FHA loan bigger than lenders allow for the value is not a real loan.
+  else if (!hard && (type === "buy" || type === "hack") && loan > (num(d.arv) * (type === "hack" ? 96.5 : 80)) / 100)
+    verdict = { tone: "pass", label: "Loan is bigger than the value allows", note: `Lenders lend up to about ${type === "hack" ? "96.5%" : "75% to 80%"} of what the house is worth. At ${fmt$(num(d.arv))}, this loan would not happen. Check the after-repair value or plan to bring more cash.` };
   else if (type === "hack") {
     verdict = hack.yourCost <= 0
       ? { tone: "strong", label: "You live for free", note: `The other rooms cover every cost and pay you about ${fmt$(Math.abs(hack.yourCost))} a month.` }

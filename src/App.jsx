@@ -236,6 +236,13 @@ function Analyzer({ onLock }) {
   }), [d, model, showRooms, showUnits, JSON.stringify(furnEff)]);
   const a = useMemo(() => analyze(deal), [deal]);
   const refi = useMemo(() => refiPlan(deal, a), [deal, a]);
+  // Value check for bank, DSCR and FHA loans. A lender only lends a share of what the house is worth
+  // (DSCR lenders about 75% to 80%, FHA up to 96.5%), so a loan bigger than that is not a real loan.
+  const arvNum = num(d.arv);
+  const bankLoan = (type === "buy" && d.lender !== "hard") || type === "hack";
+  const valueCap = type === "hack" ? 96.5 : 80;
+  const loanTooBig = bankLoan && arvNum > 0 && a.loan > (arvNum * valueCap) / 100;
+  const valueLow = bankLoan && arvNum > 0 && arvNum < a.price + a.reno;
   const wit = useMemo(() => whatItTakes(deal, type === "hack" ? null : num(d.targetCoc) || 15), [deal, type, d.targetCoc]);
   const witBreakeven = useMemo(() => (type === "hack" ? null : whatItTakes(deal, null)), [deal, type]);
 
@@ -424,7 +431,7 @@ function Analyzer({ onLock }) {
                   <Field label="Points" hint="typical 1-5" tip="An upfront fee. 1 point = 1% of the loan."><Num value={d.hmPoints} onChange={(v) => set("hmPoints", v)} suffix="pts" /></Field>
                   <Field label="Loan length" hint="typical 6-24"><Num value={d.hmMonths} onChange={(v) => set("hmMonths", v)} suffix="mo" /></Field>
                   <Field label="Closing costs" tip="Verify with your title company."><Money value={d.closing} onChange={(v) => set("closing", v)} /></Field>
-                  <Field label="After-repair value" tip="What it will be worth once converted. Most hard money lenders cap the loan at 70% to 75% of this number."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                  <Field label="After-repair value" hint="required" tip="What it will be worth once converted. Most hard money lenders cap the loan at 70% to 75% of this number, and the refinance is based on it."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
                   <div className="sm:col-span-3">
                     <Check checked={num(d.hmPurchasePct) === 100 && num(d.hmRehabPct) === 100 && !!d.hmRollCosts}
                       onChange={(v) => setD((p) => (v ? { ...p, hmPurchasePct: 100, hmRehabPct: 100, hmRollCosts: true } : { ...p, hmPurchasePct: 90, hmRehabPct: 100, hmRollCosts: false }))}>
@@ -435,7 +442,7 @@ function Analyzer({ onLock }) {
                 {a.hard && (
                   <div className="mt-3 space-y-1.5 text-[12px] leading-snug">
                     {a.hard.loanToArv != null && a.hard.loanToArv > 75 && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">This loan is {pct(a.hard.loanToArv)} of the after-repair value. Most hard money lenders stop at 70% to 75%, so expect to bring the difference.</div>}
-                    {a.hard.loanToArv == null && <div className="text-slate-600">Enter the after-repair value to check the loan against the 70% to 75% limit most lenders use.</div>}
+                    {a.hard.loanToArv == null && <div className="text-rose-700">Enter the after-repair value. It is required, because hard money lenders limit the loan to 70% to 75% of it.</div>}
                     {a.loan > 0 && <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800">The whole loan, <b>{fmt$(a.hard.balloon)}</b>, is due in {a.hard.termMonths} months. Before you buy, know how you will pay it off. Pick your long-term plan below.</div>}
                     {a.loan > 0 && num(d.monthsToRent) >= a.hard.termMonths && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">The loan comes due before the rooms are rented ({num(d.monthsToRent)} months to rent, {a.hard.termMonths}-month loan). Refinance lenders usually want the home rented first. Ask for a longer loan or plan for more time.</div>}
                   </div>
@@ -492,7 +499,15 @@ function Analyzer({ onLock }) {
                 <Field label="Interest rate"><Num value={d.rate} onChange={(v) => set("rate", v)} suffix="%" /></Field>
                 <Field label="Loan term"><Num value={d.term} onChange={(v) => set("term", v)} suffix="yrs" /></Field>
                 {type === "hack" && <Field label="Mortgage insurance" hint="% of loan per year" tip="FHA charges a yearly mortgage insurance premium, commonly 0.55% of the loan for most borrowers. Confirm your number with your lender."><Num value={d.miPct} onChange={(v) => set("miPct", v)} suffix="%" /></Field>}
-                <Field label="After-repair value" hint="optional" tip="What it will be worth once converted. Used for the 5-year appreciation. Blank uses price plus renovation."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                <Field label="After-repair value" hint="required" tip="What it will be worth once converted. Lenders lend based on this value. It also drives the 5-year appreciation and the loan check. Look at recent sales of similar homes nearby."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                {bankLoan && !(arvNum > 0) && <div className="sm:col-span-3 text-[12px] text-rose-700">Enter the after-repair value. It is required, because lenders lend based on what the house is worth.</div>}
+                {(loanTooBig || valueLow) && (
+                  <div className="sm:col-span-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] leading-snug text-rose-900">
+                    {loanTooBig
+                      ? <>A {fmt$(a.loan)} loan is {pct((a.loan / arvNum) * 100)} of the {fmt$(arvNum)} value you entered. Lenders only lend up to about {type === "hack" ? "96.5%" : "75% to 80%"} of what the house appraises for, so this loan would not happen. Check the after-repair value, or plan to bring more cash.</>
+                      : <>The after-repair value ({fmt$(arvNum)}) is less than the price plus renovation ({fmt$(a.price + a.reno)}). Double-check it. If that is really what it is worth, you are paying more than it will appraise for.</>}
+                  </div>
+                )}
                 <div className="sm:col-span-3"><Check checked={d.financeReno} onChange={(v) => set("financeReno", v)}>The lender finances the renovation too (rolled into the loan)</Check></div>
                 {type === "hack" && <Field label="What you pay for housing now" hint="monthly" className="sm:col-span-1"><Money value={d.currentHousing} onChange={(v) => set("currentHousing", v)} /></Field>}
               </div>
@@ -648,7 +663,8 @@ function Analyzer({ onLock }) {
             <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />
             {<Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"}
               sub={a.dscr ? `${model === "private" ? "traditional" : "whole-house"} rent / loan payment with taxes and insurance. Most want ${TARGETS.dscrMin}+${a.dscrRoom ? `. Using your furnished rents: ${a.dscrRoom.toFixed(2)}` : ""}` : `Enter the ${model === "private" ? "traditional" : "whole-house"} rent in step 3. Most lenders use that, not room rents.`}
-              tone={a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
+              tone={loanTooBig ? "bad" : a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
+            {loanTooBig && <div className="col-span-2 -mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] leading-snug text-rose-900">The DSCR only compares rent to the payment. It does not check value. At the after-repair value you entered, a lender would not make this loan. See step 4.</div>}
             <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
             {type === "hack" && <Stat label="Cash-on-cash" value={pct(a.coc)} sub="yearly cash flow / cash in" />}
             {type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
