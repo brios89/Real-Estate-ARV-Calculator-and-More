@@ -134,6 +134,19 @@ const Row = ({ label, value, strong, muted }) => (
   </div>
 );
 
+// Cash-on-cash in plain English. Over 100% is real: the cash flow pays back all the cash in within a
+// year. With no cash left in the deal the return is infinite, shown as the infinity sign.
+const INF = "\u221E";
+const INF_BIG = <span className="font-sans text-[1.7em] font-bold leading-none">{INF}</span>;
+function cocView(coc, cashIn, cashFlow, monthsBack) {
+  if (cashIn <= 0) {
+    if (cashFlow > 0) return { value: INF_BIG, sub: "Infinite return. None of your own cash is left in the deal, so every dollar of cash flow is pure return.", tone: "good" };
+    return { value: "--", sub: "No cash in, but it loses money every month.", tone: "bad" };
+  }
+  if (coc != null && coc >= 100) return { value: pct(coc), sub: `Yes, over 100% is possible. The cash flow pays back all ${fmt$(cashIn)} you put in within ${Math.max(1, Math.ceil(monthsBack))} months.`, tone: "good" };
+  return { value: pct(coc), sub: "yearly cash flow / cash in", tone: null };
+}
+
 // ---------- passcode gate ----------
 function Gate({ onUnlock }) {
   const [code, setCode] = useState("");
@@ -488,7 +501,11 @@ function Analyzer({ onLock }) {
                       {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.type === "dscr" ? (num(d.arv) > 0 ? `${pct(refi.ltv)} of the ${fmt$(refi.value)} value` : "enter the after-repair value") : refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
                       <Stat label={refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
                       <Stat label="Monthly cash flow" value={fmt$(refi.cashFlow)} sub="after the payoff" tone={refi.cashFlow > 0 ? "good" : "bad"} />
-                      <Stat label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? "All cash out" : pct(refi.coc)} sub={refi.cashLeftIn <= 0 ? `${fmt$(Math.abs(refi.cashLeftIn))} more than you put in${refi.cashFlow <= 0 ? ", but it loses money every month" : ""}` : `on ${fmt$(refi.cashLeftIn)} left in the deal`} tone={refi.cashFlow <= 0 ? "bad" : refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />
+                      <Stat label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? INF_BIG : "--") : pct(refi.coc)}
+                        sub={refi.cashLeftIn <= 0
+                          ? (refi.cashFlow > 0 ? `Infinite return. You got back all your cash plus ${fmt$(Math.abs(refi.cashLeftIn))}, so the cash flow is pure return.` : `You got back all your cash plus ${fmt$(Math.abs(refi.cashLeftIn))}, but it loses money every month.`)
+                          : refi.coc >= 100 ? `Yes, over 100% is possible. On ${fmt$(refi.cashLeftIn)} left in, the cash flow pays it back within ${Math.max(1, Math.ceil(refi.cashLeftIn / refi.cashFlow))} months.` : `on ${fmt$(refi.cashLeftIn)} left in the deal`}
+                        tone={refi.cashFlow <= 0 ? "bad" : refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />
                     </div>
                     {refi.type === "dscr" && (
                       <div className="mt-2 space-y-1.5 text-[12px] leading-snug">
@@ -672,7 +689,8 @@ function Analyzer({ onLock }) {
             <Stat label="Monthly cash flow" value={fmt$(a.cashFlow)} tone={a.cashFlow > 0 ? "good" : a.rentedCount ? "bad" : "default"} big sub={a.cfPerRoom != null ? `${fmt$(a.cfPerRoom)} per room` : null} />
             {type === "hack"
                 ? <Stat label="Your housing cost" value={a.hack.yourCost <= 0 ? "$0" : fmt$(a.hack.yourCost)} big sub={a.hack.yourCost <= 0 ? `and you are paid ${fmt$(-a.hack.yourCost)}` : "per month to live there"} tone={a.hack.yourCost <= 0 ? "good" : "warn"} />
-                : <Stat label="Cash-on-cash" value={a.cashIn <= 0 && a.rentedCount ? "No cash in" : pct(a.coc)} big sub="yearly cash flow / cash in" tone={(a.cashIn <= 0 && a.cashFlow > 0) || a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default"} />}
+                : (() => { const v = a.rentedCount ? cocView(a.coc, a.cashIn, a.cashFlow, a.paybackMonths) : { value: pct(a.coc), sub: "yearly cash flow / cash in", tone: null };
+                    return <Stat label="Cash-on-cash" value={v.value} big sub={v.sub} tone={v.tone || (a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default")} />; })()}
             <Stat label="Cash needed" value={fmt$(a.cashIn)} sub="to buy, set up and fill it" />
             <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />
             {<Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"}
@@ -680,7 +698,7 @@ function Analyzer({ onLock }) {
               tone={loanTooBig ? "bad" : a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
             {loanTooBig && <div className="col-span-2 -mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] leading-snug text-rose-900">The DSCR only compares rent to the payment. It does not check value. At the after-repair value you entered, a lender would not make this loan. See step 4.</div>}
             <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
-            {type === "hack" && <Stat label="Cash-on-cash" value={pct(a.coc)} sub="yearly cash flow / cash in" />}
+            {type === "hack" && (() => { const v = a.rentedCount ? cocView(a.coc, a.cashIn, a.cashFlow, a.paybackMonths) : { value: pct(a.coc), sub: "yearly cash flow / cash in" }; return <Stat label="Cash-on-cash" value={v.value} sub={v.sub} />; })()}
             {type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
           </div>
 
@@ -712,7 +730,7 @@ function Analyzer({ onLock }) {
               {refi.payment > 0 && <Row label="New loan payment" value={`-${fmt$(refi.payment)}`} />}
               <Row label="Monthly cash flow" value={fmt$(refi.cashFlow)} strong />
               <Row label="Cash left in the deal" value={fmt$(refi.cashLeftIn)} />
-              <Row label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? "All cash out" : "All cash out, losing money monthly") : pct(refi.coc)} muted />
+              <Row label="Cash-on-cash" value={refi.cashLeftIn <= 0 ? (refi.cashFlow > 0 ? `${INF} (all your cash back)` : "-- (losing money monthly)") : pct(refi.coc)} muted />
             </div>
           )}
 
@@ -969,7 +987,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:5px 4px;bord
 <h1>${esc(name)}</h1><div>${esc(d.address)} · ${esc(DEAL_TYPES[d.dealType])} · ${esc({ coliving: "Co-Living", private: "Private units", hybrid: "Hybrid" }[d.model])}</div>
 <div class="v"><b>${esc(a.verdict.label)}</b><br>${esc(a.verdict.note)}</div>
 <h2>Results</h2><table>
-${row("Monthly cash flow", fmt$(a.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${row("Cash-on-cash", pct(a.coc))}
+${row("Monthly cash flow", fmt$(a.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${row("Cash-on-cash", a.cashIn <= 0 && a.cashFlow > 0 ? "\u221E (no cash left in the deal)" : pct(a.coc))}
 ${row("Cost per rentable room", fmt$(a.costPerRoom))}
 ${a.dscr ? row("Lender DSCR (traditional rent)", a.dscr.toFixed(2)) : ""}${a.dscrRoom ? row("DSCR using furnished rents (few lenders count this)", a.dscrRoom.toFixed(2)) : ""}${a.breakEvenOcc != null ? row("Break-even occupancy", pct(a.breakEvenOcc)) : ""}
 ${a.hack ? row("Your monthly housing cost", fmt$(Math.max(0, a.hack.yourCost))) : ""}</table>

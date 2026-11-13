@@ -244,10 +244,10 @@ export function analyze(d) {
         ? { tone: "solid", label: "Cheaper than your rent now", note: `Living there costs about ${fmt$(hack.yourCost)} a month, ${fmt$(hack.current - hack.yourCost)} less than you pay now.` }
         : { tone: "thin", label: "Costs more than you pay now", note: hack.current > 0 ? `Living there costs about ${fmt$(hack.yourCost)} a month, more than the ${fmt$(hack.current)} you pay now.` : `Living there costs about ${fmt$(hack.yourCost)} a month. Enter what you pay for housing now to compare.` };
   } else if (cashFlow <= 0) verdict = { tone: "pass", label: "Pass at these numbers", note: "It loses money every month. Lower the price, raise the rents, or cut costs." };
-  else if (cashIn <= 0) verdict = { tone: "strong", label: "No money left in the deal", note: `It cash flows about ${fmt$(cashFlow)} a month with none of your own cash in. Check that a lender will really fund it this way.` };
+  else if (cashIn <= 0) verdict = { tone: "strong", label: "No money left in the deal", note: `Infinite cash-on-cash: it cash flows about ${fmt$(cashFlow)} a month with none of your own cash in. Check that a lender will really fund it this way.` };
   else {
     const c = coc ?? 0;
-    verdict = c >= TARGETS.cocStrong ? { tone: "strong", label: "Strong deal", note: `${pct(c)} cash-on-cash.` }
+    verdict = c >= TARGETS.cocStrong ? { tone: "strong", label: "Strong deal", note: `${pct(c)} cash-on-cash.${c >= 100 ? " Over 100% means the cash flow pays back all the cash you put in within a year." : ""}` }
       : c >= TARGETS.cocSolid ? { tone: "solid", label: "Solid deal", note: `${pct(c)} cash-on-cash.` }
         : c >= TARGETS.cocThin ? { tone: "thin", label: "Thin", note: `${pct(c)} cash-on-cash. It works, but there is not much room for a vacancy or a repair.` }
           : { tone: "pass", label: "Pass at these numbers", note: `${pct(c)} cash-on-cash is too low for the work co-living takes.` };
