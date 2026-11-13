@@ -40,6 +40,7 @@ const newDeal = () => ({
   appreciation: 3, landPct: 20, taxRate: 24, targetCoc: 15, currentHousing: "", notes: "",
   docs: { ownerName: "", ownerPhone: "", ownerEmail: "", contractor: "" },
   lender: "bank", hmPurchasePct: 90, hmRehabPct: 100, hmRate: 12, hmPoints: 2, hmMonths: 12, hmRollCosts: false,
+  hmSetupFunding: "cash", slAmount: "", slRate: 10, slYears: 5, slIO: false, slPayAtRefi: true,
   refiType: "dscr", refiKind: "cashout", rtLtv: 80, rtRate: 7.25, refiLtv: 75, refiRate: 7.5, refiYears: 30, refiCostPct: 3, pmAmount: "", pmRate: 10, pmYears: 30, pmIO: false,
 });
 
@@ -448,9 +449,29 @@ function Analyzer({ onLock }) {
                   <div className="sm:col-span-3">
                     <Check checked={num(d.hmPurchasePct) === 100 && num(d.hmRehabPct) === 100 && !!d.hmRollCosts}
                       onChange={(v) => setD((p) => (v ? { ...p, hmPurchasePct: 100, hmRehabPct: 100, hmRollCosts: true } : { ...p, hmPurchasePct: 90, hmRehabPct: 100, hmRollCosts: false }))}>
-                      <b>No money in:</b> the lender covers 100% of the purchase, the rehab, closing costs and points. Furnishing and the months before it rents still take cash, unless you fund them another way.
+                      <b>No money in:</b> the lender covers 100% of the purchase, the rehab, closing costs and points. Furnishing and the months before it rents are set just below.
                     </Check>
                   </div>
+                </div>
+                <div className="mt-4 rounded-xl border border-slate-200 p-3">
+                  <div className="text-[13px] font-bold text-slate-800">Furnishing and holding costs <span className="font-mono font-semibold text-slate-600">{fmt$(a.furnishing + a.holding)}</span></div>
+                  <p className="mt-0.5 text-[11.5px] text-slate-600">Furnishing ({fmt$(a.furnishing)}) plus the costs while the rooms fill ({fmt$(a.holding)} for {num(d.monthsToRent)} months). How will you pay for them?</p>
+                  <div className="mt-2"><Chips value={d.hmSetupFunding || "cash"} onChange={(v) => set("hmSetupFunding", v)} opts={[["cash", "I pay them in cash"], ["roll", "Add them to the hard money loan"], ["separate", "A separate loan"]]} /></div>
+                  {(d.hmSetupFunding || "cash") === "roll" && <p className="mt-2 text-[12px] leading-snug text-slate-700">The hard money loan grows by {fmt$(a.setupFinanced)}, and the lender charges interest and points on it too. Many hard money lenders only fund the purchase and the rehab, so ask yours before you count on this.</p>}
+                  {d.hmSetupFunding === "separate" && (
+                    <div className="mt-3">
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <Field label="Loan amount" hint="blank = all of it"><Money value={d.slAmount} onChange={(v) => set("slAmount", v)} placeholder={String(Math.round(a.furnishing + a.holding))} /></Field>
+                        <Field label="Interest rate" hint="your lender's terms"><Num value={d.slRate} onChange={(v) => set("slRate", v)} suffix="%" /></Field>
+                        <Field label="Paid back over"><Num value={d.slYears} onChange={(v) => set("slYears", v)} suffix="yrs" /></Field>
+                      </div>
+                      <div className="mt-2 space-y-1.5">
+                        <Check checked={d.slIO} onChange={(v) => set("slIO", v)}>Interest only (no principal paid down each month)</Check>
+                        <Check checked={d.slPayAtRefi !== false} onChange={(v) => set("slPayAtRefi", v)}>Pay this loan off with the long-term plan below</Check>
+                      </div>
+                      {a.setupLoan && <p className="mt-2 text-[12px] text-slate-700">Payment: <b>{fmt$(a.setupLoan.payment)}</b> a month on {fmt$(a.setupLoan.amount)}. This could be a personal loan, a credit line, a partner or a second private lender. Put in their real terms.</p>}
+                    </div>
+                  )}
                 </div>
                 {a.hard && (
                   <div className="mt-3 space-y-1.5 text-[12px] leading-snug">
@@ -496,7 +517,8 @@ function Analyzer({ onLock }) {
                         <p className="mt-1 text-[11.5px] text-slate-600">Private money terms are whatever you and the lender agree to. Put their real numbers in here.</p>
                       </div>
                     )}
-                    {refi.type === "cash" && <p className="mt-3 text-[12px] text-slate-700">You pay off the {fmt$(refi.payoff)} hard money loan with your own cash. No loan payment after that.</p>}
+                    {refi.type === "cash" && <p className="mt-3 text-[12px] text-slate-700">You pay off the {fmt$(refi.payoff)} you owe with your own cash. No loan payment after that.</p>}
+                    {a.setupLoan && <p className="mt-2 text-[11.5px] text-slate-600">{a.setupLoan.payAtRefi ? `The payoff includes about ${fmt$(a.setupLoan.balanceAtRefi)} left on the furnishing and holding loan.` : `The furnishing and holding loan keeps going, so its ${fmt$(a.setupLoan.payment)} payment is taken out of the cash flow below.`}</p>}
                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.type === "dscr" ? (num(d.arv) > 0 ? `${pct(refi.ltv)} of the ${fmt$(refi.value)} value` : "enter the after-repair value") : refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
                       <Stat label={refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
@@ -714,6 +736,7 @@ function Analyzer({ onLock }) {
             {a.pAndI > 0 && <Row label={type === "creative" && d.creativeMode === "subto" ? "Their loan payment" : a.hard ? "Hard money interest (interest only)" : "Loan payment (P&I)"} value={`-${fmt$(a.pAndI)}`} />}
             {a.mi > 0 && <Row label="Mortgage insurance" value={`-${fmt$(a.mi)}`} />}
             {a.notePay > 0 && <Row label="Seller carry note" value={`-${fmt$(a.notePay)}`} />}
+            {a.setupLoan && <Row label="Furnishing and holding loan" value={`-${fmt$(a.setupLoan.payment)}`} />}
             <Row label="Cash flow" value={fmt$(a.cashFlow)} strong />
           </div>
 

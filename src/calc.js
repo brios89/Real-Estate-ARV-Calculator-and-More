@@ -77,7 +77,24 @@ export const DEAL_TYPES = {
 };
 
 // The whole analysis. `d` is the deal as the student entered it (strings or numbers).
+// Furnishing and holding can be paid in cash, added to the hard money loan, or covered by a separate
+// loan. Financing them changes the payment, which changes the holding cost, so analyze() settles the
+// amount over a few passes (it converges fast because a few months of interest is small).
 export function analyze(d) {
+  const mode = d && d.dealType === "buy" && d.lender === "hard" ? (d.hmSetupFunding || "cash") : "cash";
+  const needsLoop = mode === "roll" || (mode === "separate" && String(d.slAmount ?? "").trim() === "");
+  if (!needsLoop) return analyzeCore(d, mode === "separate" ? num(d.slAmount) : 0, mode);
+  let x = 0, r = null;
+  for (let i = 0; i < 12; i++) {
+    r = analyzeCore(d, x, mode);
+    const next = r.furnishing + r.holding;
+    if (Math.abs(next - x) < 0.01) break;
+    x = next;
+  }
+  return analyzeCore(d, x, mode);
+}
+
+function analyzeCore(d, setupAmount, setupMode) {
   const type = DEAL_TYPES[d.dealType] ? d.dealType : "buy";
   const owns = true; // every deal type in the Academy owns or controls title
   const occ = Math.min(100, Math.max(0, num(d.occupancy ?? 95))) / 100;
@@ -111,7 +128,7 @@ export function analyze(d) {
     const pp = clamp(d.hmPurchasePct ?? 90), rp = clamp(d.hmRehabPct ?? 100);
     const rate = num(d.hmRate ?? 12), pts = num(d.hmPoints ?? 2), termMonths = num(d.hmMonths ?? 12) || 12;
     const roll = !!d.hmRollCosts;
-    const baseLoan = price * pp + reno * rp + (roll ? closing : 0);
+    const baseLoan = price * pp + reno * rp + (roll ? closing : 0) + (setupMode === "roll" ? setupAmount : 0);
     const points = (baseLoan * pts) / 100;
     loan = baseLoan + (roll ? points : 0);
     pAndI = (loan * rate) / 100 / 12;      // interest only
@@ -151,7 +168,16 @@ export function analyze(d) {
       pAndI = pmt(loan, loanRate, loanYears);
     }
   }
-  const debtService = pAndI + mi + notePay;
+  // Separate loan for furnishing and holding (hard money deals only).
+  let setupLoan = null;
+  if (hard && setupMode === "separate" && setupAmount > 0) {
+    const r = num(d.slRate ?? 10), yrs = num(d.slYears ?? 5) || 5, io = !!d.slIO;
+    const payment = io ? (setupAmount * r) / 100 / 12 : pmt(setupAmount, r, yrs);
+    const balanceAtRefi = io ? setupAmount : balanceAfter(setupAmount, r, yrs, hard.termMonths);
+    setupLoan = { amount: setupAmount, rate: r, years: yrs, io, payment, balanceAtRefi, payAtRefi: d.slPayAtRefi !== false };
+  }
+  if (hard) hard.setupMode = setupMode;
+  const debtService = pAndI + mi + notePay + (setupLoan ? setupLoan.payment : 0);
 
   // Taxes and insurance (ownership only). A Sub-To payment that already includes them is not double counted.
   const escrowedSubto = type === "creative" && (d.creativeMode || "subto") === "subto" && d.stEscrowed !== false;
@@ -178,11 +204,15 @@ export function analyze(d) {
   const holding = months * holdingMonthly;
   const renoCash = renoCashHard != null ? renoCashHard : financedReno ? 0 : reno;
   const otherUpfront = num(d.otherUpfront);
-  const cashIn = down + closingCash + pointsCash + furnishing + renoCash + holding + upfrontSeller + otherUpfront;
+  // Furnishing and holding paid by a loan come off the cash needed.
+  const setupFinanced = setupMode === "roll" ? Math.min(setupAmount, furnishing + holding) : setupLoan ? setupLoan.amount : 0;
+  const cashInRaw = down + closingCash + pointsCash + furnishing + renoCash + holding + upfrontSeller + otherUpfront - setupFinanced;
+  const cashIn = Math.abs(cashInRaw) < 1 ? 0 : cashInRaw;   // pennies left over from rounding count as zero
   const cashInLines = [
     [hard ? "Purchase not covered by the lender" : "Down payment", down], ["Cash to seller + arrears", upfrontSeller],
     ["Closing costs", closingCash], ["Lender points", pointsCash], [hard ? "Rehab not covered by the lender" : "Renovation / conversion", renoCash], ["Furnishing and setup", furnishing],
     [`Holding cost (${months} mo until rented)`, holding], ["Other upfront", otherUpfront],
+    [setupMode === "roll" ? "Furnishing and holding in the hard money loan" : "Furnishing and holding from the separate loan", -setupFinanced],
   ].filter(([, v]) => Math.abs(v) > 0.5).map(([label, amt]) => ({ label, amt }));
 
   // ---- Returns ----
@@ -258,7 +288,7 @@ export function analyze(d) {
     price, reno, closing, loan, down, pAndI, mi, notePay, sellerNote, debtService, taxesMo, insMo,
     opexLines, mgmt, opex, utilities, noi, cashFlow, annualCF, furn, furnishing, holding, holdingMonthly, months,
     cashIn, cashInLines, coc, dscr, dscrRoom, capRate, costPerRoom, breakEvenOcc, paybackMonths, cfPerRoom, premium, five,
-    balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller, hard, pointsCash, closingCash,
+    balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller, hard, pointsCash, closingCash, setupLoan, setupFinanced,
   };
 }
 
@@ -270,7 +300,8 @@ export function analyze(d) {
 // Brian: with rate and term you usually get a little back at closing, usually under $1,000.
 export function refiPlan(d, a) {
   if (!a || !a.hard) return null;
-  const payoff = a.hard.balloon;
+  const sl = a.setupLoan;
+  const payoff = a.hard.balloon + (sl && sl.payAtRefi ? sl.balanceAtRefi : 0);
   const value = num(d.arv) > 0 ? num(d.arv) : a.price + a.reno;
   const type = d.refiType || "dscr";
   let newLoan = 0, costs = 0, payment = 0, rate = 0, years = 0, io = false;
@@ -296,7 +327,7 @@ export function refiPlan(d, a) {
     payment = io ? newLoan * rate / 100 / 12 : pmt(newLoan, rate, years);
   }
   const cashToClose = payoff + costs - newLoan;           // above 0 = you bring cash, below 0 = cash back to you
-  const cashFlow = a.noi - payment;
+  const cashFlow = a.noi - payment - (sl && !sl.payAtRefi ? sl.payment : 0);
   const cashLeftIn = a.cashIn + cashToClose;
   const pitia = payment + a.taxesMo + a.insMo + num((d.expenses || {}).hoa);
   const tradRent = num(d.wholeHouseRent);
