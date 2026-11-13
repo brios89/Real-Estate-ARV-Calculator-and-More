@@ -81,6 +81,40 @@ export const DEAL_TYPES = {
 // loan. Financing them changes the payment, which changes the holding cost, so analyze() settles the
 // amount over a few passes (it converges fast because a few months of interest is small).
 export function analyze(d) {
+  return withFinal(d, analyzeSetup(d));
+}
+
+// Hard money is a bridge. Once the long-term plan pays it off, the headline numbers (cash flow,
+// cash-on-cash, break-even, verdict) are the final ones (Brian, Nov 2026). The hard money months
+// stay in a.hardPhase. Without an ARV for a DSCR refinance there is no final picture yet.
+function withFinal(d, a) {
+  const own = { cashFlow: a.cashFlow, coc: a.coc, cashIn: a.cashIn, cfPerRoom: a.cfPerRoom, breakEvenOcc: a.breakEvenOcc, paybackMonths: a.paybackMonths, isFinal: false };
+  a.headline = own;
+  if (!a.hard) return a;
+  const r = refiPlan(d, a);
+  if (!r || r.missingValue) return a;
+  const debt = r.payment + (a.setupLoan && !a.setupLoan.payAtRefi ? a.setupLoan.payment : 0);
+  const left = Math.abs(r.cashLeftIn) < 1 ? 0 : r.cashLeftIn;
+  const f = {
+    cashFlow: r.cashFlow, coc: left > 0 ? (r.cashFlow * 12 / left) * 100 : null, cashIn: left,
+    cfPerRoom: a.rentedCount > 0 ? r.cashFlow / a.rentedCount : null,
+    breakEvenOcc: a.grossRent > 0 ? Math.max(0, ((a.opex + a.taxesMo + a.insMo + debt - a.otherIncome) / a.grossRent) * 100) : null,
+    paybackMonths: r.cashFlow > 0 && left > 0 ? left / r.cashFlow : null, isFinal: true, refi: r,
+  };
+  a.hardPhase = { ...own, verdict: a.verdict };
+  a.headline = f;
+  if (a.verdict.byCash) {
+    const v = cashVerdict(f.cashFlow, f.cashIn, f.coc);
+    const after = r.type === "cash" ? "After you pay off the hard money" : "After the hard money is paid off";
+    const note = f.cashFlow > 0 && f.cashIn <= 0
+      ? `${after}, none of your own cash is left in the deal and it cash flows about ${fmt$(f.cashFlow)} a month. That is an infinite cash-on-cash. Check that the lender will really refinance it this way.`
+      : `${after}: ${v.note.charAt(0).toLowerCase()}${v.note.slice(1)}`;
+    a.verdict = { ...v, byCash: true, note };
+  }
+  return a;
+}
+
+function analyzeSetup(d) {
   const mode = d && d.dealType === "buy" && d.lender === "hard" ? (d.hmSetupFunding || "cash") : "cash";
   const needsLoop = mode === "roll" || (mode === "separate" && String(d.slAmount ?? "").trim() === "");
   if (!needsLoop) return analyzeCore(d, mode === "separate" ? num(d.slAmount) : 0, mode);
@@ -276,15 +310,7 @@ function analyzeCore(d, setupAmount, setupMode) {
       : hack.current > 0 && hack.yourCost < hack.current
         ? { tone: "solid", label: "Cheaper than your rent now", note: `Living there costs about ${fmt$(hack.yourCost)} a month, ${fmt$(hack.current - hack.yourCost)} less than you pay now.` }
         : { tone: "thin", label: "Costs more than you pay now", note: hack.current > 0 ? `Living there costs about ${fmt$(hack.yourCost)} a month, more than the ${fmt$(hack.current)} you pay now.` : `Living there costs about ${fmt$(hack.yourCost)} a month. Enter what you pay for housing now to compare.` };
-  } else if (cashFlow <= 0) verdict = { tone: "pass", label: "Pass at these numbers", note: "It loses money every month. Lower the price, raise the rents, or cut costs." };
-  else if (cashIn <= 0) verdict = { tone: "strong", label: "No money left in the deal", note: `Infinite cash-on-cash: it cash flows about ${fmt$(cashFlow)} a month with none of your own cash in. Check that a lender will really fund it this way.` };
-  else {
-    const c = coc ?? 0;
-    verdict = c >= TARGETS.cocStrong ? { tone: "strong", label: "Strong deal", note: `${pct(c)} cash-on-cash.${c >= 100 ? " Over 100% means the cash flow pays back all the cash you put in within a year." : ""}` }
-      : c >= TARGETS.cocSolid ? { tone: "solid", label: "Solid deal", note: `${pct(c)} cash-on-cash.` }
-        : c >= TARGETS.cocThin ? { tone: "thin", label: "Thin", note: `${pct(c)} cash-on-cash. It works, but there is not much room for a vacancy or a repair.` }
-          : { tone: "pass", label: "Pass at these numbers", note: `${pct(c)} cash-on-cash is too low for the work co-living takes.` };
-  }
+  } else verdict = { ...cashVerdict(cashFlow, cashIn, coc), byCash: true };
 
   return {
     type, owns, occ, rentableCount, rentedCount, grossRent, grossRoomRent, grossUnitRent, otherIncome, effectiveIncome,
@@ -293,6 +319,17 @@ function analyzeCore(d, setupAmount, setupMode) {
     cashIn, cashInLines, coc, dscr, dscrRoom, capRate, costPerRoom, breakEvenOcc, paybackMonths, cfPerRoom, premium, five,
     balloonDue, hack, verdict, perRoomMgmt, financedReno, upfrontSeller, hard, pointsCash, closingCash, setupLoan, setupFinanced,
   };
+}
+
+// Verdict from cash flow and cash-on-cash. Shared by the normal view and the after-the-payoff view.
+function cashVerdict(cashFlow, cashIn, coc) {
+  if (cashFlow <= 0) return { tone: "pass", label: "Pass at these numbers", note: "It loses money every month. Lower the price, raise the rents, or cut costs." };
+  if (cashIn <= 0) return { tone: "strong", label: "No money left in the deal", note: `Infinite cash-on-cash: it cash flows about ${fmt$(cashFlow)} a month with none of your own cash in. Check that a lender will really fund it this way.` };
+  const c = coc ?? 0;
+  return c >= TARGETS.cocStrong ? { tone: "strong", label: "Strong deal", note: `${pct(c)} cash-on-cash.${c >= 100 ? " Over 100% means the cash flow pays back all the cash you put in within a year." : ""}` }
+    : c >= TARGETS.cocSolid ? { tone: "solid", label: "Solid deal", note: `${pct(c)} cash-on-cash.` }
+      : c >= TARGETS.cocThin ? { tone: "thin", label: "Thin", note: `${pct(c)} cash-on-cash. It works, but there is not much room for a vacancy or a repair.` }
+        : { tone: "pass", label: "Pass at these numbers", note: `${pct(c)} cash-on-cash is too low for the work co-living takes.` };
 }
 
 // Long-term plan after hard money: refinance into a DSCR loan, refinance with a private lender,
@@ -337,6 +374,7 @@ export function refiPlan(d, a) {
   const tradRent = num(d.wholeHouseRent);
   return {
     missingValue: type === "dscr" && !(value > 0),
+    pitia, taxesIns: a.taxesMo + a.insMo + num((d.expenses || {}).hoa),
     type, kind, capped, payoff, value, newLoan, costs, payment, rate, years, io, cashToClose, cashFlow, cashLeftIn,
     coc: cashLeftIn > 0 ? (cashFlow * 12 / cashLeftIn) * 100 : null,
     dscr: type === "dscr" && pitia > 0 && tradRent > 0 ? tradRent / pitia : null,
@@ -356,7 +394,7 @@ const solve = (lo, hi, f, increasing = true) => {
 export function whatItTakes(d, targetCoc) {
   const base = analyze(d);
   if (base.rentedCount === 0) return null;
-  const hits = (a) => (targetCoc == null ? a.cashFlow >= 0 : a.coc != null && a.coc >= targetCoc);
+  const hits = (a) => (targetCoc == null ? a.headline.cashFlow >= 0 : a.headline.coc != null && a.headline.coc >= targetCoc);
   // 1) Average rent per room/unit needed (scales every rent by the same factor).
   const scale = solve(0, 10, (k) => hits(analyze({ ...d, rooms: (d.rooms || []).map((r) => ({ ...r, rent: num(r.rent) * k })), units: (d.units || []).map((u) => ({ ...u, rent: num(u.rent) * k })) })));
   const avgNow = base.rentedCount > 0 ? base.grossRent / base.rentedCount : 0;

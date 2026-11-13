@@ -72,6 +72,16 @@ const Field = ({ label, hint, tip, children, className = "" }) => (
     {children}
   </label>
 );
+// A figured number shown in a field slot (not typed in).
+const Shown = ({ label, hint, value }) => (
+  <div>
+    <span className="mb-1 flex items-center justify-between gap-2">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">{label}</span>
+      {hint && <span className="text-[10.5px] text-slate-500">{hint}</span>}
+    </span>
+    <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm font-bold tabular-nums text-slate-900">{value}</div>
+  </div>
+);
 const inputCls = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100";
 const Money = ({ value, onChange, placeholder = "0" }) => (
   <div className="relative">
@@ -259,6 +269,9 @@ function Analyzer({ onLock }) {
   }), [d, model, showRooms, showUnits, JSON.stringify(furnEff)]);
   const a = useMemo(() => analyze(deal), [deal]);
   const refi = useMemo(() => refiPlan(deal, a), [deal, a]);
+  // The final picture on a hard money deal: after the long-term plan pays off the hard money. Needs the ARV for a DSCR refinance.
+  const finalRefi = a.hard && refi && !refi.missingValue ? refi : null;
+  const h = a.headline;   // headline numbers: the final ones once the hard money is paid off
   // Value check for bank, DSCR and FHA loans. A lender only lends a share of what the house is worth
   // (DSCR lenders about 75% to 80%, FHA up to 96.5%), so a loan bigger than that is not a real loan.
   const arvNum = num(d.arv);
@@ -334,8 +347,8 @@ function Analyzer({ onLock }) {
           <span className="block text-[11px] text-slate-600">Tap for the full results</span>
         </span>
         <span className="shrink-0 text-right font-mono tabular-nums">
-          <span className={`block text-base font-bold ${a.cashFlow > 0 ? "text-emerald-700" : a.rentedCount ? "text-rose-600" : "text-slate-900"}`}>{fmt$(a.cashFlow)}/mo</span>
-          <span className="block text-[11px] text-slate-600">{type === "hack" ? (a.hack.yourCost <= 0 ? "you live free" : `${fmt$(a.hack.yourCost)} to live there`) : `${pct(a.coc)} cash-on-cash`}</span>
+          <span className={`block text-base font-bold ${h.cashFlow > 0 ? "text-emerald-700" : a.rentedCount ? "text-rose-600" : "text-slate-900"}`}>{fmt$(h.cashFlow)}/mo</span>
+          <span className="block text-[11px] text-slate-600">{type === "hack" ? (a.hack.yourCost <= 0 ? "you live free" : `${fmt$(a.hack.yourCost)} to live there`) : (h.cashIn <= 0 && h.cashFlow > 0 ? `${INF} cash-on-cash` : `${pct(h.coc)} cash-on-cash`)}</span>
         </span>
       </a>
 
@@ -518,6 +531,7 @@ function Analyzer({ onLock }) {
                   <Field label="Loan length" hint="typical 6-24"><Num value={d.hmMonths} onChange={(v) => set("hmMonths", v)} suffix="mo" /></Field>
                   <Field label="Closing costs" tip="Verify with your title company."><Money value={d.closing} onChange={(v) => set("closing", v)} /></Field>
                   <Field label="After-repair value" hint="required" tip="What it will be worth once converted. Most hard money lenders cap the loan at 70% to 75% of this number, and the refinance is based on it."><Money value={d.arv} onChange={(v) => set("arv", v)} /></Field>
+                  <Shown label="Hard money payment" hint="interest only" value={a.hard ? fmt$(a.pAndI) : "--"} />
                   <div className="sm:col-span-3">
                     <Check checked={num(d.hmPurchasePct) === 100 && num(d.hmRehabPct) === 100 && !!d.hmRollCosts}
                       onChange={(v) => setD((p) => (v ? { ...p, hmPurchasePct: 100, hmRehabPct: 100, hmRollCosts: true } : { ...p, hmPurchasePct: 90, hmRehabPct: 100, hmRollCosts: false }))}>
@@ -576,6 +590,7 @@ function Analyzer({ onLock }) {
                           : <Field label="Interest rate" hint="typical 7-8%"><Num value={d.refiRate} onChange={(v) => set("refiRate", v)} suffix="%" /></Field>}
                         <Field label="Loan term"><Num value={d.refiYears} onChange={(v) => set("refiYears", v)} suffix="yrs" /></Field>
                         <Field label="Closing costs" hint="typical 2-5%" tip="As a share of the new loan."><Num value={d.refiCostPct} onChange={(v) => set("refiCostPct", v)} suffix="%" /></Field>
+                        <Shown label="New loan payment" hint={a.hard ? `hard money: ${fmt$(a.pAndI)}` : undefined} value={refi.missingValue ? "--" : fmt$(refi.payment)} />
                       </div>
                     )}
                     {refi.type === "private" && (
@@ -594,9 +609,10 @@ function Analyzer({ onLock }) {
                     {refi.missingValue ? (
                       <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] leading-snug text-rose-900">Enter the after-repair value above. A DSCR lender sizes the new loan on what the house appraises for, so there is no refinance number without it.</div>
                     ) : (
-                    <div className={`mt-3 grid grid-cols-2 gap-2 ${refi.type === "dscr" ? "sm:grid-cols-3 xl:grid-cols-5" : "sm:grid-cols-4"}`}>
+                    <div className={`mt-3 grid grid-cols-2 gap-2 ${refi.type === "private" ? "sm:grid-cols-3 xl:grid-cols-5" : "sm:grid-cols-3"}`}>
                       {refi.type === "dscr" && <Stat label="After-repair value" value={fmt$(refi.value)} sub="what the lender's appraisal is based on" />}
                       {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.type === "dscr" ? (num(d.arv) > 0 ? `${pct(refi.ltv)} of the ${fmt$(refi.value)} value` : "enter the after-repair value") : refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
+                      {refi.type !== "cash" && <Stat label="Total monthly payment" value={fmt$(refi.pitia)} sub={`${fmt$(refi.payment)} loan${refi.io ? " (interest only)" : ""} + ${fmt$(refi.taxesIns)} ${model === "private" && num(d.expenses?.hoa) > 0 ? "taxes, insurance and HOA" : "taxes and insurance"}`} />}
                       <Stat label={refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
                       <Stat label="Monthly cash flow" value={fmt$(refi.cashFlow)} sub="after the payoff" tone={refi.cashFlow > 0 ? "good" : "bad"} />
                       <RefiCocStat refi={refi} />
@@ -717,13 +733,15 @@ function Analyzer({ onLock }) {
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <Stat label="Monthly cash flow" value={fmt$(a.cashFlow)} tone={a.cashFlow > 0 ? "good" : a.rentedCount ? "bad" : "default"} big sub={a.cfPerRoom != null ? `${fmt$(a.cfPerRoom)} per room` : null} />
+            <Stat label="Monthly cash flow" value={fmt$(h.cashFlow)} tone={h.cashFlow > 0 ? "good" : a.rentedCount ? "bad" : "default"} big sub={h.cfPerRoom != null ? `${fmt$(h.cfPerRoom)} per room${h.isFinal ? ", after the hard money is paid off" : ""}` : null} />
             {type === "hack"
                 ? <Stat label="Your housing cost" value={a.hack.yourCost <= 0 ? "$0" : fmt$(a.hack.yourCost)} big sub={a.hack.yourCost <= 0 ? `and you are paid ${fmt$(-a.hack.yourCost)}` : "per month to live there"} tone={a.hack.yourCost <= 0 ? "good" : "warn"} />
-                : (() => { const v = a.rentedCount ? cocView(a.coc, a.cashIn, a.cashFlow, a.paybackMonths) : { value: pct(a.coc), sub: "yearly cash flow / cash in", tone: null };
-                    return <Stat label="Cash-on-cash" value={v.value} big sub={v.sub} tone={v.tone || (a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default")} />; })()}
+                : (() => { const v = a.rentedCount ? cocView(h.coc, h.cashIn, h.cashFlow, h.paybackMonths) : { value: pct(h.coc), sub: "yearly cash flow / cash in", tone: null };
+                    return <Stat label="Cash-on-cash" value={v.value} big sub={v.sub} tone={v.tone || (h.coc >= TARGETS.cocSolid ? "good" : h.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default")} />; })()}
             <Stat label="Cash needed" value={fmt$(a.cashIn)} sub="to buy, set up and fill it" />
-            <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />
+            {finalRefi && <Stat label="Cash left in the deal" value={fmt$(Math.max(0, h.cashIn))} sub={h.cashIn <= 0 ? (finalRefi.cashLeftIn <= -1 ? `all your cash is back out, plus ${fmt$(Math.abs(finalRefi.cashLeftIn))}` : "all your cash is back out") : "after the hard money is paid off"} />}
+            {finalRefi && finalRefi.payment > 0 && <Stat label="New loan payment" value={fmt$(finalRefi.payment)} sub={`${finalRefi.io ? "per month, interest only" : `per month, ${finalRefi.years} years`}. ${fmt$(finalRefi.pitia)} with taxes and insurance`} />}
+            {!finalRefi && <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />}
             {a.hard ? (() => {
               // Hard money lenders do not use DSCR. The DSCR that matters is the long-term DSCR loan, sized on the after-repair value.
               const rentWord = model === "private" ? "traditional" : "whole-house";
@@ -736,14 +754,16 @@ function Analyzer({ onLock }) {
             })() : <Stat label="Lender DSCR" value={!(arvNum > 0) && bankLoan ? "--" : a.dscr ? a.dscr.toFixed(2) : "--"}
               sub={!(arvNum > 0) && bankLoan ? "Enter the after-repair value in step 6. Lenders size the loan on what the house is worth." : a.dscr ? `${model === "private" ? "traditional" : "whole-house"} rent / loan payment with taxes and insurance. Most want ${TARGETS.dscrMin}+${a.dscrRoom ? `. Using your furnished rents: ${a.dscrRoom.toFixed(2)}` : ""}` : `Enter the ${model === "private" ? "traditional" : "whole-house"} rent in step 3. Most lenders use that, not room rents.`}
               tone={loanTooBig || (!(arvNum > 0) && bankLoan) ? "bad" : a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
+            {finalRefi && <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />}
             {loanTooBig && <div className="col-span-2 -mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] leading-snug text-rose-900">The DSCR only compares rent to the payment. It does not check value. At the after-repair value you entered, a lender would not make this loan. See step 6.</div>}
-            <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
+            <Stat label="Break-even occupancy" value={h.breakEvenOcc != null ? pct(h.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={h.breakEvenOcc == null ? "default" : h.breakEvenOcc <= 80 ? "good" : h.breakEvenOcc <= 92 ? "warn" : "bad"} />
             {type === "hack" && (() => { const v = a.rentedCount ? cocView(a.coc, a.cashIn, a.cashFlow, a.paybackMonths) : { value: pct(a.coc), sub: "yearly cash flow / cash in" }; return <Stat label="Cash-on-cash" value={v.value} sub={v.sub} />; })()}
             {type !== "hack" && <Stat label="Cap rate" value={pct(a.capRate)} sub="yearly NOI / price + renovation" />}
+            {a.hard && <Stat label="Hard money payment" value={fmt$(a.pAndI)} sub={`interest only, ${pct(a.hard.rate)} on ${fmt$(a.loan)} for ${a.hard.termMonths} months${a.setupLoan ? `. Plus ${fmt$(a.setupLoan.payment)} on the furnishing and holding loan` : ""}`} />}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">Monthly breakdown</div>
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">Monthly breakdown{finalRefi ? ` (${finalRefi.type === "cash" ? "after you pay it off" : finalRefi.type === "private" ? "after the private loan" : finalRefi.kind === "rateterm" ? "after the rate and term refinance" : "after the cash-out refinance"})` : ""}</div>
             <Row label={`Rent (${a.rentedCount} ${a.rentedCount === 1 ? "rental" : "rentals"} at 100%)`} value={fmt$(a.grossRent)} />
             <Row label={`At ${pct(a.occ * 100)} occupancy${a.otherIncome ? " + other income" : ""}`} value={fmt$(a.effectiveIncome)} strong />
             {a.taxesMo > 0 && <Row label="Property taxes" value={`-${fmt$(a.taxesMo)}`} />}
@@ -751,11 +771,20 @@ function Analyzer({ onLock }) {
             <Row label="Operating costs" value={`-${fmt$(a.opex - a.mgmt)}`} />
             {a.mgmt > 0 && <Row label="Management" value={`-${fmt$(a.mgmt)}`} />}
             <Row label="Net operating income" value={fmt$(a.noi)} strong />
+            {finalRefi ? (<>
+              {/* Hard money deal with a long-term plan: show the final numbers, after the hard money is paid off. */}
+              {finalRefi.type === "cash"
+                ? <Row label="Loan payment (paid off in cash)" value="$0" />
+                : <Row label={finalRefi.type === "dscr" ? "DSCR loan payment (P&I)" : finalRefi.io ? "Private loan interest (interest only)" : "Private loan payment (P&I)"} value={`-${fmt$(finalRefi.payment)}`} />}
+              {a.setupLoan && !a.setupLoan.payAtRefi && <Row label="Furnishing and holding loan" value={`-${fmt$(a.setupLoan.payment)}`} />}
+              <Row label="Cash flow" value={fmt$(finalRefi.cashFlow)} strong />
+            </>) : (<>
             {a.pAndI > 0 && <Row label={type === "creative" && d.creativeMode === "subto" ? "Their loan payment" : a.hard ? "Hard money interest (interest only)" : "Loan payment (P&I)"} value={`-${fmt$(a.pAndI)}`} />}
             {a.mi > 0 && <Row label="Mortgage insurance" value={`-${fmt$(a.mi)}`} />}
             {a.notePay > 0 && <Row label="Seller carry note" value={`-${fmt$(a.notePay)}`} />}
             {a.setupLoan && <Row label="Furnishing and holding loan" value={`-${fmt$(a.setupLoan.payment)}`} />}
             <Row label="Cash flow" value={fmt$(a.cashFlow)} strong />
+            </>)}
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -763,19 +792,6 @@ function Analyzer({ onLock }) {
             {a.cashInLines.length ? a.cashInLines.map((l) => <Row key={l.label} label={l.label} value={fmt$(l.amt)} />) : <div className="text-[12px] text-slate-500">Fill in the deal to see it.</div>}
             <Row label="Total" value={fmt$(a.cashIn)} strong />
           </div>
-
-          {refi && !refi.missingValue && (
-            <div>
-              <div className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">After the hard money ({refi.type === "dscr" ? (refi.kind === "rateterm" ? "rate and term refinance" : "cash-out refinance") : { private: "private lender", cash: "paid off in cash" }[refi.type]})</div>
-              <div className="grid grid-cols-2 gap-2">
-                <Stat label="Monthly cash flow" big value={fmt$(refi.cashFlow)} sub={a.rentedCount ? `${fmt$(refi.cashFlow / a.rentedCount)} per room` : "after the payoff"} tone={refi.cashFlow > 0 ? "good" : "bad"} />
-                <RefiCocStat refi={refi} big />
-                <Stat label={refi.type === "cash" ? "Cash to pay it off" : refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.type === "cash" ? "your cash, no new loan" : refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
-                <Stat label="Cash left in the deal" value={fmt$(Math.max(0, refi.cashLeftIn))} sub={refi.cashLeftIn <= 0 ? "all your cash is back out" : "your cash still in the house"} />
-                {refi.payment > 0 && <Stat label="New loan payment" value={fmt$(refi.payment)} sub={refi.io ? "per month, interest only" : `per month, ${refi.years} years`} />}
-              </div>
-            </div>
-          )}
 
           {a.premium && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -1023,6 +1039,7 @@ function downloadReport(d, a, wit) {
     ...(["private", "hybrid"].includes(d.model) ? d.units.map((u, i) => `Unit ${i + 1}: ${fmt$(num(u.rent))}${u.owner && d.dealType === "hack" ? " (owner)" : ""}`) : [])].join(", ");
   // Hard money lenders do not use DSCR. On those deals the report shows the DSCR of the long-term DSCR refinance, sized on the after-repair value.
   const rf = a.hard ? refiPlan(d, a) : null;
+  const hl = a.headline;   // the final numbers once the hard money is paid off
   const dscrRows = a.hard
     ? (rf && rf.type === "dscr" && !rf.missingValue && rf.dscr != null ? row(`Lender DSCR on the ${fmt$(rf.newLoan)} refinance (traditional rent)`, rf.dscr.toFixed(2)) : "")
     : `${a.dscr ? row("Lender DSCR (traditional rent)", a.dscr.toFixed(2)) : ""}${a.dscrRoom ? row("DSCR using furnished rents (few lenders count this)", a.dscrRoom.toFixed(2)) : ""}`;
@@ -1035,15 +1052,15 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:5px 4px;bord
 <h1>${esc(name)}</h1><div>${esc(d.address)} · ${esc(DEAL_TYPES[d.dealType])} · ${esc({ coliving: "Co-Living", private: "Private units", hybrid: "Hybrid" }[d.model])}</div>
 <div class="v"><b>${esc(a.verdict.label)}</b><br>${esc(a.verdict.note)}</div>
 <h2>Results</h2><table>
-${row("Monthly cash flow", fmt$(a.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${row("Cash-on-cash", a.cashIn <= 0 && a.cashFlow > 0 ? "\u221E (no cash left in the deal)" : pct(a.coc))}
+${row(hl.isFinal ? "Monthly cash flow (after the hard money is paid off)" : "Monthly cash flow", fmt$(hl.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${hl.isFinal ? row("Cash left in the deal", fmt$(Math.max(0, hl.cashIn))) : ""}${hl.isFinal && hl.refi.payment > 0 ? row("New loan payment", fmt$(hl.refi.payment)) : ""}${row("Cash-on-cash", hl.cashIn <= 0 && hl.cashFlow > 0 ? "\u221E (no cash left in the deal)" : pct(hl.coc))}
 ${row("Cost per rentable room", fmt$(a.costPerRoom))}
-${dscrRows}${a.breakEvenOcc != null ? row("Break-even occupancy", pct(a.breakEvenOcc)) : ""}
+${dscrRows}${hl.breakEvenOcc != null ? row("Break-even occupancy", pct(hl.breakEvenOcc)) : ""}
 ${a.hack ? row("Your monthly housing cost", fmt$(Math.max(0, a.hack.yourCost))) : ""}</table>
 <h2>Monthly</h2><table>
 ${row("Rent at 100%", fmt$(a.grossRent))}${row(`Income at ${pct(a.occ * 100)} occupancy`, fmt$(a.effectiveIncome))}
 ${a.taxesMo ? row("Taxes", `-${fmt$(a.taxesMo)}`) : ""}${a.insMo ? row("Insurance", `-${fmt$(a.insMo)}`) : ""}
 ${a.opexLines.filter((l) => l.amt).map((l) => row(l.label, `-${fmt$(l.amt)}`)).join("")}${a.mgmt ? row("Management", `-${fmt$(a.mgmt)}`) : ""}
-${row("Net operating income", fmt$(a.noi))}${a.debtService ? row("Debt payments", `-${fmt$(a.debtService)}`) : ""}${row("Cash flow", fmt$(a.cashFlow))}</table>
+${row("Net operating income", fmt$(a.noi))}${hl.isFinal ? `${hl.refi.payment > 0 ? row("New loan payment", `-${fmt$(hl.refi.payment)}`) : ""}${a.setupLoan && !a.setupLoan.payAtRefi ? row("Furnishing and holding loan", `-${fmt$(a.setupLoan.payment)}`) : ""}${row("Cash flow", fmt$(hl.cashFlow))}${row("Cash flow while on the hard money loan", fmt$(a.cashFlow))}` : `${a.debtService ? row("Debt payments", `-${fmt$(a.debtService)}`) : ""}${row("Cash flow", fmt$(a.cashFlow))}`}</table>
 <h2>Cash needed</h2><table>${a.cashInLines.map((l) => row(l.label, fmt$(l.amt))).join("")}${row("Total", fmt$(a.cashIn))}</table>
 <h2>Rents</h2><div style="font-size:13px">${esc(rents || "none entered")}</div>
 ${a.five ? `<h2>5-year return</h2><table>${row("Cash flow", fmt$(a.five.cashflow5))}${row("Loan paid down", fmt$(a.five.paydown))}${row("Appreciation", fmt$(a.five.appreciation))}${row("Depreciation tax savings", fmt$(a.five.depreciationSavings))}${row("Total", fmt$(a.five.total))}</table>` : ""}
