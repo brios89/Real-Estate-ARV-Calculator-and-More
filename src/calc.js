@@ -264,6 +264,9 @@ function analyzeCore(d, setupAmount, setupMode) {
   if (rentedCount === 0 || grossRent <= 0) verdict = { tone: "none", label: "Add your rooms and rents", note: "Enter the rentable bedrooms (or units) and what each one rents for." };
   // Buy & Convert and House Hack need a value: lenders lend on what the house is worth (Brian, Nov 2026).
   else if ((type === "buy" || type === "hack") && !(num(d.arv) > 0)) verdict = { tone: "none", label: "Add the after-repair value", note: "Lenders lend based on what the house is worth once it is done. Enter it in step 4 to see the verdict." };
+  // A hard money loan bigger than the house is worth will not get funded.
+  else if (hard && loan > num(d.arv))
+    verdict = { tone: "pass", label: "Loan is bigger than the house is worth", note: `The hard money loan (${fmt$(loan)}) is more than the ${fmt$(num(d.arv))} after-repair value. Most hard money lenders stop at 70% to 75% of it.` };
   // A bank, DSCR or FHA loan bigger than lenders allow for the value is not a real loan.
   else if (!hard && (type === "buy" || type === "hack") && loan > (num(d.arv) * (type === "hack" ? 96.5 : 80)) / 100)
     verdict = { tone: "pass", label: "Loan is bigger than the value allows", note: `Lenders lend up to about ${type === "hack" ? "96.5%" : "75% to 80%"} of what the house is worth. At ${fmt$(num(d.arv))}, this loan would not happen. Check the after-repair value or plan to bring more cash.` };
@@ -302,7 +305,8 @@ export function refiPlan(d, a) {
   if (!a || !a.hard) return null;
   const sl = a.setupLoan;
   const payoff = a.hard.balloon + (sl && sl.payAtRefi ? sl.balanceAtRefi : 0);
-  const value = num(d.arv) > 0 ? num(d.arv) : a.price + a.reno;
+  // The refinance is sized on the after-repair value only. No value, no refinance number.
+  const value = num(d.arv) > 0 ? num(d.arv) : 0;
   const type = d.refiType || "dscr";
   let newLoan = 0, costs = 0, payment = 0, rate = 0, years = 0, io = false;
   let kind = "cashout", capped = false;
@@ -332,6 +336,7 @@ export function refiPlan(d, a) {
   const pitia = payment + a.taxesMo + a.insMo + num((d.expenses || {}).hoa);
   const tradRent = num(d.wholeHouseRent);
   return {
+    missingValue: type === "dscr" && !(value > 0),
     type, kind, capped, payoff, value, newLoan, costs, payment, rate, years, io, cashToClose, cashFlow, cashLeftIn,
     coc: cashLeftIn > 0 ? (cashFlow * 12 / cashLeftIn) * 100 : null,
     dscr: type === "dscr" && pitia > 0 && tradRent > 0 ? tradRent / pitia : null,

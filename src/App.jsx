@@ -519,6 +519,9 @@ function Analyzer({ onLock }) {
                     )}
                     {refi.type === "cash" && <p className="mt-3 text-[12px] text-slate-700">You pay off the {fmt$(refi.payoff)} you owe with your own cash. No loan payment after that.</p>}
                     {a.setupLoan && <p className="mt-2 text-[11.5px] text-slate-600">{a.setupLoan.payAtRefi ? `The payoff includes about ${fmt$(a.setupLoan.balanceAtRefi)} left on the furnishing and holding loan.` : `The furnishing and holding loan keeps going, so its ${fmt$(a.setupLoan.payment)} payment is taken out of the cash flow below.`}</p>}
+                    {refi.missingValue ? (
+                      <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] leading-snug text-rose-900">Enter the after-repair value above. A DSCR lender sizes the new loan on what the house appraises for, so there is no refinance number without it.</div>
+                    ) : (
                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {refi.type !== "cash" && <Stat label="New loan" value={fmt$(refi.newLoan)} sub={refi.type === "dscr" ? (num(d.arv) > 0 ? `${pct(refi.ltv)} of the ${fmt$(refi.value)} value` : "enter the after-repair value") : refi.ltv != null ? `${pct(refi.ltv)} of the value` : null} />}
                       <Stat label={refi.cashToClose >= 0 ? "Cash to close" : "Cash back to you"} value={fmt$(Math.abs(refi.cashToClose))} sub={refi.cashToClose >= 0 ? "to pay off the hard money" : "after paying off the hard money"} tone={refi.cashToClose < 0 ? "good" : "default"} />
@@ -529,12 +532,12 @@ function Analyzer({ onLock }) {
                           : refi.coc >= 100 ? `Yes, over 100% is possible. On ${fmt$(refi.cashLeftIn)} left in, the cash flow pays it back within ${Math.max(1, Math.ceil(refi.cashLeftIn / refi.cashFlow))} months.` : `on ${fmt$(refi.cashLeftIn)} left in the deal`}
                         tone={refi.cashFlow <= 0 ? "bad" : refi.cashLeftIn <= 0 || refi.coc >= TARGETS.cocSolid ? "good" : refi.coc > 0 ? "warn" : "bad"} />
                     </div>
-                    {refi.type === "dscr" && (
+                    )}
+                    {refi.type === "dscr" && !refi.missingValue && (
                       <div className="mt-2 space-y-1.5 text-[12px] leading-snug">
                         {refi.kind === "rateterm" && refi.capped && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">The payoff is more than {pct(num(d.rtLtv))} of the value, so the new loan is capped at {fmt$(refi.newLoan)}. You would bring {fmt$(refi.cashToClose)} to close.</div>}
                         {refi.dscr == null && <div className="text-slate-600">Enter the whole-house rent in step 3 to see the DSCR this lender will check.</div>}
                         {refi.dscr != null && <div className={refi.dscr >= TARGETS.dscrMin ? "text-emerald-700" : "rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900"}>Lender DSCR on the new loan: <b>{refi.dscr.toFixed(2)}</b>{refi.dscr >= TARGETS.dscrMin ? "." : `. Most DSCR lenders want 1.0 to 1.25. Below that they may lend less or charge more, so the new loan could be smaller.`}</div>}
-                        {num(d.arv) <= 0 && <div className="text-slate-600">Enter the after-repair value above. The new loan is based on what the house appraises for.</div>}
                         {a.hard.termMonths < 6 && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">Many DSCR lenders only use the new appraised value after you have owned the house 3 to 6 months. Before that, they lend on what you paid plus documented rehab, so you may get less.</div>}
                       </div>
                     )}
@@ -715,9 +718,18 @@ function Analyzer({ onLock }) {
                     return <Stat label="Cash-on-cash" value={v.value} big sub={v.sub} tone={v.tone || (a.coc >= TARGETS.cocSolid ? "good" : a.coc > 0 ? "warn" : a.rentedCount ? "bad" : "default")} />; })()}
             <Stat label="Cash needed" value={fmt$(a.cashIn)} sub="to buy, set up and fill it" />
             <Stat label="Cost per rentable room" value={fmt$(a.costPerRoom)} sub="price + renovation / rooms" />
-            {<Stat label="Lender DSCR" value={a.dscr ? a.dscr.toFixed(2) : "--"}
-              sub={a.dscr ? `${model === "private" ? "traditional" : "whole-house"} rent / loan payment with taxes and insurance. Most want ${TARGETS.dscrMin}+${a.dscrRoom ? `. Using your furnished rents: ${a.dscrRoom.toFixed(2)}` : ""}` : `Enter the ${model === "private" ? "traditional" : "whole-house"} rent in step 3. Most lenders use that, not room rents.`}
-              tone={loanTooBig ? "bad" : a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
+            {a.hard ? (() => {
+              // Hard money lenders do not use DSCR. The DSCR that matters is the long-term DSCR loan, sized on the after-repair value.
+              const rentWord = model === "private" ? "traditional" : "whole-house";
+              const v = !(arvNum > 0) ? { value: "--", sub: "Enter the after-repair value in step 4. The refinance loan, and its DSCR, are based on it.", tone: "bad" }
+                : !refi || refi.type !== "dscr" ? { value: "--", sub: "Hard money lenders do not use DSCR. It only applies if your long-term plan is a DSCR loan.", tone: "default" }
+                : refi.dscr == null ? { value: "--", sub: `Enter the ${rentWord} rent in step 3 to see the DSCR on your refinance.`, tone: "default" }
+                : refi.cashToClose >= 1 ? { value: refi.dscr.toFixed(2), sub: `On a ${fmt$(refi.newLoan)} DSCR refinance, which does not pay off the ${fmt$(refi.payoff)} you owe. You would bring ${fmt$(refi.cashToClose)} to close. A smaller loan makes the DSCR look better than the deal is.`, tone: "bad" }
+                : { value: refi.dscr.toFixed(2), sub: `On the ${fmt$(refi.newLoan)} DSCR refinance: ${rentWord} rent / new payment with taxes and insurance. Most want ${TARGETS.dscrMin}+.`, tone: refi.dscr >= TARGETS.dscrMin ? "good" : "warn" };
+              return <Stat label="Lender DSCR (refinance)" value={v.value} sub={v.sub} tone={v.tone} />;
+            })() : <Stat label="Lender DSCR" value={!(arvNum > 0) && bankLoan ? "--" : a.dscr ? a.dscr.toFixed(2) : "--"}
+              sub={!(arvNum > 0) && bankLoan ? "Enter the after-repair value in step 4. Lenders size the loan on what the house is worth." : a.dscr ? `${model === "private" ? "traditional" : "whole-house"} rent / loan payment with taxes and insurance. Most want ${TARGETS.dscrMin}+${a.dscrRoom ? `. Using your furnished rents: ${a.dscrRoom.toFixed(2)}` : ""}` : `Enter the ${model === "private" ? "traditional" : "whole-house"} rent in step 3. Most lenders use that, not room rents.`}
+              tone={loanTooBig || (!(arvNum > 0) && bankLoan) ? "bad" : a.dscr == null ? "default" : a.dscr >= TARGETS.dscrMin ? "good" : "warn"} />}
             {loanTooBig && <div className="col-span-2 -mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] leading-snug text-rose-900">The DSCR only compares rent to the payment. It does not check value. At the after-repair value you entered, a lender would not make this loan. See step 4.</div>}
             <Stat label="Break-even occupancy" value={a.breakEvenOcc != null ? pct(a.breakEvenOcc) : "--"} sub="rented share needed to cover every cost" tone={a.breakEvenOcc == null ? "default" : a.breakEvenOcc <= 80 ? "good" : a.breakEvenOcc <= 92 ? "warn" : "bad"} />
             {type === "hack" && (() => { const v = a.rentedCount ? cocView(a.coc, a.cashIn, a.cashFlow, a.paybackMonths) : { value: pct(a.coc), sub: "yearly cash flow / cash in" }; return <Stat label="Cash-on-cash" value={v.value} sub={v.sub} />; })()}
@@ -746,7 +758,7 @@ function Analyzer({ onLock }) {
             <Row label="Total" value={fmt$(a.cashIn)} strong />
           </div>
 
-          {refi && (
+          {refi && !refi.missingValue && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">After the hard money ({refi.type === "dscr" ? (refi.kind === "rateterm" ? "rate and term refinance" : "cash-out refinance") : { private: "private lender", cash: "paid off in cash" }[refi.type]})</div>
               <Row label={refi.type === "cash" ? "Cash to pay off the loan" : refi.cashToClose >= 0 ? "Cash to close the refinance" : "Cash back at refinance"} value={fmt$(Math.abs(refi.cashToClose))} />
@@ -1001,6 +1013,11 @@ function downloadReport(d, a, wit) {
   const name = d.name || d.address || "Co-living deal";
   const rents = [...(["coliving", "hybrid"].includes(d.model) ? d.rooms.map((r, i) => `Room ${i + 1}: ${fmt$(num(r.rent))}${r.owner && d.dealType === "hack" ? " (owner)" : ""}`) : []),
     ...(["private", "hybrid"].includes(d.model) ? d.units.map((u, i) => `Unit ${i + 1}: ${fmt$(num(u.rent))}${u.owner && d.dealType === "hack" ? " (owner)" : ""}`) : [])].join(", ");
+  // Hard money lenders do not use DSCR. On those deals the report shows the DSCR of the long-term DSCR refinance, sized on the after-repair value.
+  const rf = a.hard ? refiPlan(d, a) : null;
+  const dscrRows = a.hard
+    ? (rf && rf.type === "dscr" && !rf.missingValue && rf.dscr != null ? row(`Lender DSCR on the ${fmt$(rf.newLoan)} refinance (traditional rent)`, rf.dscr.toFixed(2)) : "")
+    : `${a.dscr ? row("Lender DSCR (traditional rent)", a.dscr.toFixed(2)) : ""}${a.dscrRoom ? row("DSCR using furnished rents (few lenders count this)", a.dscrRoom.toFixed(2)) : ""}`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} | Co-Living Deal Analysis</title>
 <style>body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#0f172a;max-width:760px;margin:24px auto;padding:0 16px}
 h1{font-size:22px;margin:8px 0 2px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#475569;margin:22px 0 6px;border-bottom:2px solid #6cbb4a;padding-bottom:4px}
@@ -1012,7 +1029,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:5px 4px;bord
 <h2>Results</h2><table>
 ${row("Monthly cash flow", fmt$(a.cashFlow))}${row("Cash needed", fmt$(a.cashIn))}${row("Cash-on-cash", a.cashIn <= 0 && a.cashFlow > 0 ? "\u221E (no cash left in the deal)" : pct(a.coc))}
 ${row("Cost per rentable room", fmt$(a.costPerRoom))}
-${a.dscr ? row("Lender DSCR (traditional rent)", a.dscr.toFixed(2)) : ""}${a.dscrRoom ? row("DSCR using furnished rents (few lenders count this)", a.dscrRoom.toFixed(2)) : ""}${a.breakEvenOcc != null ? row("Break-even occupancy", pct(a.breakEvenOcc)) : ""}
+${dscrRows}${a.breakEvenOcc != null ? row("Break-even occupancy", pct(a.breakEvenOcc)) : ""}
 ${a.hack ? row("Your monthly housing cost", fmt$(Math.max(0, a.hack.yourCost))) : ""}</table>
 <h2>Monthly</h2><table>
 ${row("Rent at 100%", fmt$(a.grossRent))}${row(`Income at ${pct(a.occ * 100)} occupancy`, fmt$(a.effectiveIncome))}
