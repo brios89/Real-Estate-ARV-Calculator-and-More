@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Home, Handshake, BedDouble, Info, Save, FilePlus2, FolderOpen, Download, Lock, Trash2,
   CheckCircle2, AlertTriangle, XCircle, Lightbulb, ChevronDown, ChevronUp, Users, Layers, FileText, ClipboardList, Calculator, MapPin, Search, ExternalLink, Loader2,
@@ -647,16 +647,55 @@ function AddressBar({ d, set }) {
   const [err, setErr] = useState("");
   const addr = (d.address || "").trim();
   const lk = d.lookup && d.lookup.q === addr ? d.lookup : null;
-  const lookUp = async () => {
-    if (!addr) return;
+  const lookUp = async (which) => {
+    const q = (typeof which === "string" ? which : addr).trim();
+    if (!q) return;
     setBusy(true); setErr("");
     try {
-      const r = await fetch(`/api/address?q=${encodeURIComponent(addr)}`);
+      const r = await fetch(`/api/address?q=${encodeURIComponent(q)}`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) setErr(j.error || "Address lookup failed. Try again in a minute.");
-      else set("lookup", { q: addr, ...j });
+      else set("lookup", { q, ...j });
     } catch { setErr("Could not reach the address service. Check your connection."); }
     setBusy(false);
+  };
+  // Predictions as they type (like the old calculator). Picking one fills the box and runs the check.
+  const [sugs, setSugs] = useState([]);
+  const [src, setSrc] = useState("");
+  const [open, setOpen] = useState(false);
+  const [hi, setHi] = useState(-1);
+  const boxRef = useRef(null);
+  const timer = useRef(null);
+  const reqId = useRef(0);
+  useEffect(() => {
+    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("touchstart", onDoc); clearTimeout(timer.current); };
+  }, []);
+  const fetchSugs = (q) => {
+    clearTimeout(timer.current);
+    if (!q || q.trim().length < 4) { setSugs([]); setOpen(false); return; }
+    timer.current = setTimeout(async () => {
+      const id = ++reqId.current;
+      try {
+        const r = await fetch(`/api/autocomplete?q=${encodeURIComponent(q.trim())}`);
+        const j = r.ok ? await r.json() : {};
+        if (id !== reqId.current) return; // an older answer arrived late, ignore it
+        const list = j.suggestions || [];
+        setSugs(list); setSrc(j.source || ""); setOpen(list.length > 0); setHi(-1);
+      } catch { if (id === reqId.current) setSugs([]); }
+    }, 300);
+  };
+  const pick = (s) => { clearTimeout(timer.current); reqId.current++; set("address", s); setOpen(false); setSugs([]); lookUp(s); };
+  const onKey = (e) => {
+    if (open && sugs.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, sugs.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); return; }
+      if (e.key === "Escape") { setOpen(false); return; }
+      if (e.key === "Enter" && hi >= 0) { e.preventDefault(); pick(sugs[hi]); return; }
+    }
+    if (e.key === "Enter") { e.preventDefault(); setOpen(false); lookUp(); }
   };
   const links = addr ? [
     ["Zillow", gsearch(`${addr} zillow`)],
@@ -671,9 +710,25 @@ function AddressBar({ d, set }) {
       <label className="block">
         <span className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700"><MapPin className="h-3.5 w-3.5" />Property address</span>
         <div className="flex gap-2">
-          <input className={`${inputCls} flex-1`} value={d.address ?? ""} placeholder="123 Main St, Louisville, KY 40203"
-            onChange={(e) => set("address", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookUp(); } }} />
-          <button type="button" onClick={lookUp} disabled={!addr || busy}
+          <div ref={boxRef} className="relative flex-1">
+            <input className={inputCls} value={d.address ?? ""} placeholder="123 Main St, Louisville, KY 40203" autoComplete="off"
+              onChange={(e) => { set("address", e.target.value); fetchSugs(e.target.value); }}
+              onFocus={() => sugs.length && setOpen(true)} onKeyDown={onKey} />
+            {open && sugs.length > 0 && (
+              <ul className="absolute left-0 right-0 z-30 mt-1 max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                {sugs.map((s, i) => (
+                  <li key={s}>
+                    <button type="button" onMouseEnter={() => setHi(i)} onClick={() => pick(s)}
+                      className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm ${i === hi ? "bg-emerald-50 text-emerald-800" : "text-slate-700 hover:bg-slate-50"}`}>
+                      <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" /><span>{s}</span>
+                    </button>
+                  </li>
+                ))}
+                <li className="border-t border-slate-100 px-3 py-1 text-right text-[10px] text-slate-400">{src === "google" ? "powered by Google" : src === "osm" ? "© OpenStreetMap contributors" : ""}</li>
+              </ul>
+            )}
+          </div>
+          <button type="button" onClick={() => { setOpen(false); lookUp(); }} disabled={!addr || busy}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold text-white disabled:opacity-50" style={{ background: BRAND }}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}Look up
           </button>
