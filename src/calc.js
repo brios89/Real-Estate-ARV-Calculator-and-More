@@ -394,7 +394,14 @@ const solve = (lo, hi, f, increasing = true) => {
 export function whatItTakes(d, targetCoc) {
   const base = analyze(d);
   if (base.rentedCount === 0) return null;
-  const hits = (a) => (targetCoc == null ? a.headline.cashFlow >= 0 : a.headline.coc != null && a.headline.coc >= targetCoc);
+  // With none of your cash left in, any positive cash flow is an infinite return, so it beats any target.
+  const hits = (a) => {
+    const h = a.headline;
+    if (targetCoc == null) return h.cashFlow >= 0;
+    if (h.cashFlow > 0 && h.cashIn <= 0) return true;
+    return h.coc != null && h.coc >= targetCoc;
+  };
+  const noCashLeft = base.headline.cashFlow > 0 && base.headline.cashIn <= 0;
   // 1) Average rent per room/unit needed (scales every rent by the same factor).
   const scale = solve(0, 10, (k) => hits(analyze({ ...d, rooms: (d.rooms || []).map((r) => ({ ...r, rent: num(r.rent) * k })), units: (d.units || []).map((u) => ({ ...u, rent: num(u.rent) * k })) })));
   const avgNow = base.rentedCount > 0 ? base.grossRent / base.rentedCount : 0;
@@ -405,7 +412,7 @@ export function whatItTakes(d, targetCoc) {
     const p = solve(0, Math.max(1, base.price) * 4 + 500000, (x) => !hits(analyze({ ...d, price: x })));
     maxPrice = hits(analyze({ ...d, price: 0 })) ? p : null;
   }
-  return { rentNeeded, avgNow, maxPrice };
+  return { rentNeeded, avgNow, maxPrice, noCashLeft };
 }
 
 export const fmt$ = (n) => (n == null || !isFinite(n) ? "--" : `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString("en-US")}`);

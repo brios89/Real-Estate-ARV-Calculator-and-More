@@ -815,8 +815,10 @@ function Analyzer({ onLock }) {
                 <>
                   <div className="mb-2 flex items-center gap-2 text-[12px] text-emerald-900">Target cash-on-cash <div className="w-20"><Num value={d.targetCoc} onChange={(v) => set("targetCoc", v)} suffix="%" /></div></div>
                   <div className="space-y-1 text-[12.5px] text-emerald-950">
-                    {wit.rentNeeded != null && <div>Average rent per {showRooms && !showUnits ? "room" : "rental"}: <b>{fmt$(wit.rentNeeded)}</b> (now {fmt$(wit.avgNow)}).</div>}
+                    {wit.noCashLeft && <div>None of your cash is left in the deal, so any positive cash flow beats your target. The rent only has to cover every cost.</div>}
+                    {!wit.noCashLeft && wit.rentNeeded != null && <div>Average rent per {showRooms && !showUnits ? "room" : "rental"}: <b>{fmt$(wit.rentNeeded)}</b> (now {fmt$(wit.avgNow)}).</div>}
                     {wit.maxPrice != null && <div>Most you can pay: <b>{fmt$(wit.maxPrice)}</b>{a.price > 0 ? ` (now ${fmt$(a.price)})` : ""}.</div>}
+                    {!wit.noCashLeft && wit.rentNeeded == null && wit.maxPrice == null && <div>This target is out of reach by changing the rent or the price alone. Look at the financing in step 6 or lower the target.</div>}
                     {witBreakeven && witBreakeven.rentNeeded != null && <div className="text-[11.5px] text-emerald-900">Break-even rent: {fmt$(witBreakeven.rentNeeded)} average.</div>}
                   </div>
                 </>
@@ -1040,6 +1042,13 @@ function downloadReport(d, a, wit) {
   // Hard money lenders do not use DSCR. On those deals the report shows the DSCR of the long-term DSCR refinance, sized on the after-repair value.
   const rf = a.hard ? refiPlan(d, a) : null;
   const hl = a.headline;   // the final numbers once the hard money is paid off
+  // What it takes, in words. Left out of the report when there is nothing to say.
+  const witText = !wit ? "" : d.dealType === "hack"
+    ? [wit.rentNeeded != null ? `To live for free, the other rooms need to average ${fmt$(wit.rentNeeded)} (now ${fmt$(wit.avgNow)}).` : "", wit.maxPrice != null ? `Or buy at ${fmt$(wit.maxPrice)} or less.` : ""].filter(Boolean).join(" ")
+    : [`Target cash-on-cash: ${pct(num(d.targetCoc) || 15)}.`,
+      wit.noCashLeft ? "None of your cash is left in the deal, so any positive cash flow beats the target." : wit.rentNeeded != null ? `Average rent needed: ${fmt$(wit.rentNeeded)} (now ${fmt$(wit.avgNow)}).` : "",
+      wit.maxPrice != null ? `Most you can pay: ${fmt$(wit.maxPrice)}${a.price > 0 ? ` (now ${fmt$(a.price)})` : ""}.` : "",
+      !wit.noCashLeft && wit.rentNeeded == null && wit.maxPrice == null ? "The target is out of reach by changing the rent or the price alone." : ""].filter(Boolean).join(" ");
   const dscrRows = a.hard
     ? (rf && rf.type === "dscr" && !rf.missingValue && rf.dscr != null ? row(`Lender DSCR on the ${fmt$(rf.newLoan)} refinance (traditional rent)`, rf.dscr.toFixed(2)) : "")
     : `${a.dscr ? row("Lender DSCR (traditional rent)", a.dscr.toFixed(2)) : ""}${a.dscrRoom ? row("DSCR using furnished rents (few lenders count this)", a.dscrRoom.toFixed(2)) : ""}`;
@@ -1060,11 +1069,11 @@ ${a.hack ? row("Your monthly housing cost", fmt$(Math.max(0, a.hack.yourCost))) 
 ${row("Rent at 100%", fmt$(a.grossRent))}${row(`Income at ${pct(a.occ * 100)} occupancy`, fmt$(a.effectiveIncome))}
 ${a.taxesMo ? row("Taxes", `-${fmt$(a.taxesMo)}`) : ""}${a.insMo ? row("Insurance", `-${fmt$(a.insMo)}`) : ""}
 ${a.opexLines.filter((l) => l.amt).map((l) => row(l.label, `-${fmt$(l.amt)}`)).join("")}${a.mgmt ? row("Management", `-${fmt$(a.mgmt)}`) : ""}
-${row("Net operating income", fmt$(a.noi))}${hl.isFinal ? `${hl.refi.payment > 0 ? row("New loan payment", `-${fmt$(hl.refi.payment)}`) : ""}${a.setupLoan && !a.setupLoan.payAtRefi ? row("Furnishing and holding loan", `-${fmt$(a.setupLoan.payment)}`) : ""}${row("Cash flow", fmt$(hl.cashFlow))}${row("Cash flow while on the hard money loan", fmt$(a.cashFlow))}` : `${a.debtService ? row("Debt payments", `-${fmt$(a.debtService)}`) : ""}${row("Cash flow", fmt$(a.cashFlow))}`}</table>
+${row("Net operating income", fmt$(a.noi))}${hl.isFinal ? `${hl.refi.payment > 0 ? row("New loan payment", `-${fmt$(hl.refi.payment)}`) : ""}${a.setupLoan && !a.setupLoan.payAtRefi ? row("Furnishing and holding loan", `-${fmt$(a.setupLoan.payment)}`) : ""}${row("Cash flow", fmt$(hl.cashFlow))}` : `${a.debtService ? row("Debt payments", `-${fmt$(a.debtService)}`) : ""}${row("Cash flow", fmt$(a.cashFlow))}`}</table>
 <h2>Cash needed</h2><table>${a.cashInLines.map((l) => row(l.label, fmt$(l.amt))).join("")}${row("Total", fmt$(a.cashIn))}</table>
 <h2>Rents</h2><div style="font-size:13px">${esc(rents || "none entered")}</div>
 ${a.five ? `<h2>5-year return</h2><table>${row("Cash flow", fmt$(a.five.cashflow5))}${row("Loan paid down", fmt$(a.five.paydown))}${row("Appreciation", fmt$(a.five.appreciation))}${row("Depreciation tax savings", fmt$(a.five.depreciationSavings))}${row("Total", fmt$(a.five.total))}</table>` : ""}
-${wit ? `<h2>What it takes</h2><div style="font-size:13px">${wit.rentNeeded != null ? `Average rent needed: ${fmt$(wit.rentNeeded)}. ` : ""}${wit.maxPrice != null ? `Most you can pay: ${fmt$(wit.maxPrice)}. ` : ""}</div>` : ""}
+${witText ? `<h2>What it takes</h2><div style="font-size:13px">${esc(witText)}</div>` : ""}
 ${d.notes ? `<h2>Notes</h2><div style="font-size:13px;white-space:pre-wrap">${esc(d.notes)}</div>` : ""}
 <p class="muted">Prepared with the Hobknob Co-Living Academy Deal Analyzer on ${new Date().toLocaleDateString()}. For education only. These are estimates, not guarantees, and real results vary. Not financial, legal or tax advice. Verify every number before you commit.</p>
 </body></html>`;
